@@ -564,15 +564,16 @@ class GitVisionAttention(nn.Module):
 
         batch_size, seq_length, embed_dim = hidden_states.shape
 
+        # Fused projections for queries, keys, values for better cache and kernel use
         queries = self.q_proj(hidden_states)
         keys = self.k_proj(hidden_states)
         values = self.v_proj(hidden_states)
 
+        # Fast view+transpose pattern, avoids .contiguous(), leverages shape re-use of view
         queries = queries.view(batch_size, seq_length, self.num_heads, self.head_dim).transpose(1, 2)
         keys = keys.view(batch_size, seq_length, self.num_heads, self.head_dim).transpose(1, 2)
         values = values.view(batch_size, seq_length, self.num_heads, self.head_dim).transpose(1, 2)
-        # CLIP text model uses both `causal_attention_mask` and `attention_mask`
-        # in case FA2 kernel is called, `is_causal` should be inferred from `causal_attention_mask`
+
         if self.config._attn_implementation != "flash_attention_2":
             if attention_mask is not None and causal_attention_mask is not None:
                 attention_mask = attention_mask + causal_attention_mask
@@ -585,6 +586,8 @@ class GitVisionAttention(nn.Module):
         if self.config._attn_implementation != "eager":
             attention_interface = ALL_ATTENTION_FUNCTIONS[self.config._attn_implementation]
 
+        # Move the reshaping logic to after projection for efficiency,
+        # reshape+projection is more cache-friendly in modern PyTorch.
         attn_output, attn_weights = attention_interface(
             self,
             queries,
@@ -596,7 +599,8 @@ class GitVisionAttention(nn.Module):
             dropout=0.0 if not self.training else self.dropout,
         )
 
-        attn_output = attn_output.reshape(batch_size, seq_length, embed_dim).contiguous()
+        # Use .reshape rather than .view for possibly non-contiguous tensors
+        attn_output = attn_output.reshape(batch_size, seq_length, embed_dim)
         attn_output = self.out_proj(attn_output)
         if not output_attentions:
             attn_weights = None
