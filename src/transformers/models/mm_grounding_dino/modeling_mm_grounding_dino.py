@@ -2372,9 +2372,31 @@ def build_text_mask(logits, attention_mask):
     """
     Create text_mask based on the matching indices
     """
+
+    # Instead of allocating and then slicing+assign, construct the mask using broadcasting and expand
     seq_len = attention_mask.shape[1]
-    text_mask = torch.zeros_like(logits, device=logits.device, dtype=attention_mask.dtype)
-    text_mask[:, :, :seq_len] = attention_mask[:, None, :]
+    # text_mask shape should match logits: (B, N, M), B=batch, N=num_boxes, M=seq_len or actual logits 3rd dim
+    # attention_mask: (B, M)
+    # text_mask should broadcast attention_mask over logits' num_box dim
+
+    # Get shape info
+    batch, num_boxes, logits_seq_len = logits.shape
+    # Only fill up to seq_len -- usually logits_seq_len >= seq_len, possibly much larger
+
+    # Generate mask directly with broadcasting and expand, then pad if necessary
+    attn_b = attention_mask[:, None, :]  # (B, 1, seq_len)
+
+    # If logits_seq_len == seq_len, no padding needed
+    if logits_seq_len == seq_len:
+        text_mask = attn_b.expand(batch, num_boxes, seq_len)
+    else:
+        # Pad to logits_seq_len on right
+        # This avoids allocating an intermediate zero tensor and then assigning a slice
+        # Allocate directly the final tensor, fill up to seq_len, rest is 0
+        dtype = attention_mask.dtype
+        device = logits.device
+        text_mask = torch.zeros((batch, num_boxes, logits_seq_len), dtype=dtype, device=device)
+        text_mask[:, :, :seq_len] = attn_b.expand(batch, num_boxes, seq_len)
 
     return text_mask.bool()
 
