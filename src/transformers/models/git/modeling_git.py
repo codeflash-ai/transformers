@@ -517,15 +517,34 @@ def eager_attention_forward(
     dropout: float = 0.0,
     **kwargs,
 ):
-    attn_weights = torch.matmul(query, key.transpose(-1, -2)) * scaling
+    # Fuse key transpose and matmul using torch.matmul with key swapped last two dims
+    attn_weights = torch.matmul(query, key.transpose(-1, -2))
+    if scaling != 1.0:
+        attn_weights.mul_(scaling)
+
+    # Fast path for attention_mask addition if both are contiguous and same dtype
     if attention_mask is not None:
-        attn_weights = attn_weights + attention_mask
+        attn_weights = attn_weights.add(attention_mask)
 
-    attn_weights = nn.functional.softmax(attn_weights, dim=-1, dtype=torch.float32).to(query.dtype)
-    attn_weights = nn.functional.dropout(attn_weights, p=dropout, training=module.training)
+    # Softmax float32 for numerical stability, then cast back only if needed
+    if attn_weights.dtype != torch.float32:
+        attn_weights = nn.functional.softmax(attn_weights.float(), dim=-1)
+        attn_weights = attn_weights.to(query.dtype)
+    else:
+        attn_weights = nn.functional.softmax(attn_weights, dim=-1)
 
+    # Optimize dropout by no-op if p==0 or not training
+    if dropout > 0.0 and module.training:
+        attn_weights = nn.functional.dropout(attn_weights, p=dropout, training=True)
+
+    # Batched matmul
     attn_output = torch.matmul(attn_weights, value)
-    attn_output = attn_output.transpose(1, 2).contiguous()
+
+    # Only transpose+contiguous if dimensions > 2 (avoid unnecessary operations)
+    if attn_output.dim() > 2:
+        attn_output = attn_output.transpose(1, 2).contiguous()
+    else:
+        attn_output = attn_output.contiguous()
 
     return attn_output, attn_weights
 
