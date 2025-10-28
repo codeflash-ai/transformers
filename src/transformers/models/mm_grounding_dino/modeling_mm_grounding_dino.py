@@ -428,12 +428,13 @@ class MMGroundingDinoDropPath(nn.Module):
     def __init__(self, drop_prob: Optional[float] = None) -> None:
         super().__init__()
         self.drop_prob = drop_prob
+        self._p_repr: str = f"p={drop_prob}"
 
     def forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
         return drop_path(hidden_states, self.drop_prob, self.training)
 
     def extra_repr(self) -> str:
-        return f"p={self.drop_prob}"
+        return self._p_repr
 
 
 class MMGroundingDinoFusionLayer(nn.Module):
