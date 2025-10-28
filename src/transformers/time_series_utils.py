@@ -159,7 +159,12 @@ class DistributionOutput:
         Helper to map inputs to the positive orthant by applying the square-plus operation. Reference:
         https://twitter.com/jon_barron/status/1387167648669048833
         """
-        return (x + torch.sqrt(torch.square(x) + 4.0)) / 2.0
+        y = torch.square(x)
+        y.add_(4.0)
+        y.sqrt_()
+        y.add_(x)
+        y.div_(2.0)
+        return y
 
 
 class StudentTOutput(DistributionOutput):
@@ -187,7 +192,10 @@ class NormalOutput(DistributionOutput):
 
     @classmethod
     def domain_map(cls, loc: torch.Tensor, scale: torch.Tensor):
-        scale = cls.squareplus(scale).clamp_min(torch.finfo(scale.dtype).eps)
+        # Use clamp_min_ for in-place, but only if it's not shared elsewhere;
+        # safer stick with clamp_min for correctness, as API does not mandate mutating input.
+        eps = torch.finfo(scale.dtype).eps
+        scale = cls.squareplus(scale).clamp_min(eps)
         return loc.squeeze(-1), scale.squeeze(-1)
 
 
