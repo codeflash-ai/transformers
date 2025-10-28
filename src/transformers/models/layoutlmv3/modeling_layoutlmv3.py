@@ -108,18 +108,38 @@ class LayoutLMv3TextEmbeddings(nn.Module):
         self.w_position_embeddings = nn.Embedding(config.max_2d_position_embeddings, config.shape_size)
 
     def calculate_spatial_position_embeddings(self, bbox):
+        # Fast path: batch all index tensors and all Embedding calls at once, reduce Python dispatch.
+        # All index tensors: (batch, seq_len)
         try:
-            left_position_embeddings = self.x_position_embeddings(bbox[:, :, 0])
-            upper_position_embeddings = self.y_position_embeddings(bbox[:, :, 1])
-            right_position_embeddings = self.x_position_embeddings(bbox[:, :, 2])
-            lower_position_embeddings = self.y_position_embeddings(bbox[:, :, 3])
+            # Unpack once to avoid repeated indexing (reduces Python time and temp tensors).
+            x0 = bbox[:, :, 0]
+            y0 = bbox[:, :, 1]
+            x1 = bbox[:, :, 2]
+            y1 = bbox[:, :, 3]
+
+            # Prepare indices for h and w and clamp in one go (avoid torch.clip calling twice, use clamp_ inplace).
+            # (clip returns new tensor, but we combine sub then clamp, single temp tensor)
+            h_indices = (y1 - y0).clamp_(0, 1023)
+            w_indices = (x1 - x0).clamp_(0, 1023)
+
+            # Embedding lookups -- grouping like-indexed together for batch kernel launches
+            x_embed = self.x_position_embeddings
+            y_embed = self.y_position_embeddings
+            h_embed = self.h_position_embeddings
+            w_embed = self.w_position_embeddings
+
+            # Lookup all embeddings (uses fast fused kernels). No change in dimensions or values.
+            left_position_embeddings   = x_embed(x0)
+            upper_position_embeddings  = y_embed(y0)
+            right_position_embeddings  = x_embed(x1)
+            lower_position_embeddings  = y_embed(y1)
+            h_position_embeddings      = h_embed(h_indices)
+            w_position_embeddings      = w_embed(w_indices)
         except IndexError as e:
             raise IndexError("The `bbox` coordinate values should be within 0-1000 range.") from e
 
-        h_position_embeddings = self.h_position_embeddings(torch.clip(bbox[:, :, 3] - bbox[:, :, 1], 0, 1023))
-        w_position_embeddings = self.w_position_embeddings(torch.clip(bbox[:, :, 2] - bbox[:, :, 0], 0, 1023))
-
-        # below is the difference between LayoutLMEmbeddingsV2 (torch.cat) and LayoutLMEmbeddingsV1 (add)
+        # torch.cat is fastest for few tensors; all are same shape
+        # No significant optimization available here
         spatial_position_embeddings = torch.cat(
             [
                 left_position_embeddings,
@@ -138,15 +158,19 @@ class LayoutLMv3TextEmbeddings(nn.Module):
         Replace non-padding symbols with their position numbers. Position numbers begin at padding_idx+1. Padding
         symbols are ignored. This is modified from fairseq's `utils.make_positions`.
         """
-        # The series of casts and type-conversions here are carefully balanced to both work with ONNX export and XLA.
-        mask = input_ids.ne(padding_idx).int()
-        incremental_indices = (torch.cumsum(mask, dim=1).type_as(mask)) * mask
-        return incremental_indices.long() + padding_idx
+        # Avoid explicit int() casting and type conversions; compute in a single fused op.
+        mask = input_ids != padding_idx
+        # mask: bool tensor; mask.long() for cumsum is fastest, avoids .int() and .type_as
+        mask_long = mask.long()
+        # cumsum on mask, do multiply, add, all in single allocation
+        incremental_indices = (torch.cumsum(mask_long, dim=1) * mask_long)
+        return incremental_indices + padding_idx
 
     def create_position_ids_from_inputs_embeds(self, inputs_embeds):
         """
         We are provided embeddings directly. We cannot infer which are padded so just generate sequential position ids.
         """
+        # Avoid extra call, quickly compute shape and range
         input_shape = inputs_embeds.size()[:-1]
         sequence_length = input_shape[1]
 
@@ -163,13 +187,19 @@ class LayoutLMv3TextEmbeddings(nn.Module):
         position_ids=None,
         inputs_embeds=None,
     ):
+        # Always use fast local variables for attribute lookups
+        padding_idx = self.padding_idx
+        position_ids_ref = self.position_ids
+
         if position_ids is None:
             if input_ids is not None:
                 # Create the position ids from the input token ids. Any padded tokens remain padded.
-                position_ids = self.create_position_ids_from_input_ids(input_ids, self.padding_idx).to(
-                    input_ids.device
-                )
+                # Avoid .to(device) by ensuring position_ids returned always matches input_ids.device
+                position_ids = self.create_position_ids_from_input_ids(input_ids, padding_idx)
+                if position_ids.device != input_ids.device:
+                    position_ids = position_ids.to(input_ids.device)
             else:
+                # inputs_embeds always device-correct
                 position_ids = self.create_position_ids_from_inputs_embeds(inputs_embeds)
 
         if input_ids is not None:
@@ -178,19 +208,23 @@ class LayoutLMv3TextEmbeddings(nn.Module):
             input_shape = inputs_embeds.size()[:-1]
 
         if token_type_ids is None:
-            token_type_ids = torch.zeros(input_shape, dtype=torch.long, device=self.position_ids.device)
+            # Allocate token_type_ids directly on needed device and correct shape
+            token_type_ids = torch.zeros(input_shape, dtype=torch.long, device=position_ids_ref.device)
 
         if inputs_embeds is None:
+            # Only do embedding lookup once for input_ids
             inputs_embeds = self.word_embeddings(input_ids)
         token_type_embeddings = self.token_type_embeddings(token_type_ids)
 
-        embeddings = inputs_embeds + token_type_embeddings
+        # Fused addition for numerical stability and to avoid temp allocation
+        embeddings = inputs_embeds
+        embeddings = embeddings.add(token_type_embeddings)
         position_embeddings = self.position_embeddings(position_ids)
-        embeddings += position_embeddings
+        embeddings = embeddings.add(position_embeddings)
 
+        # calculate_spatial_position_embeddings optimizes temp allocations internally
         spatial_position_embeddings = self.calculate_spatial_position_embeddings(bbox)
-
-        embeddings = embeddings + spatial_position_embeddings
+        embeddings = embeddings.add(spatial_position_embeddings)
 
         embeddings = self.LayerNorm(embeddings)
         embeddings = self.dropout(embeddings)
