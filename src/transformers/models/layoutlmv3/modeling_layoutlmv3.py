@@ -108,18 +108,36 @@ class LayoutLMv3TextEmbeddings(nn.Module):
         self.w_position_embeddings = nn.Embedding(config.max_2d_position_embeddings, config.shape_size)
 
     def calculate_spatial_position_embeddings(self, bbox):
+        # Use local vars for functions to reduce attribute lookups
+        x_embeddings = self.x_position_embeddings
+        y_embeddings = self.y_position_embeddings
+        h_embeddings = self.h_position_embeddings
+        w_embeddings = self.w_position_embeddings
+
+        bbox_x0 = bbox[:, :, 0]
+        bbox_y0 = bbox[:, :, 1]
+        bbox_x1 = bbox[:, :, 2]
+        bbox_y1 = bbox[:, :, 3]
+
+        # Use in-place clamp for better memory efficiency
         try:
-            left_position_embeddings = self.x_position_embeddings(bbox[:, :, 0])
-            upper_position_embeddings = self.y_position_embeddings(bbox[:, :, 1])
-            right_position_embeddings = self.x_position_embeddings(bbox[:, :, 2])
-            lower_position_embeddings = self.y_position_embeddings(bbox[:, :, 3])
+            left_position_embeddings = x_embeddings(bbox_x0)
+            upper_position_embeddings = y_embeddings(bbox_y0)
+            right_position_embeddings = x_embeddings(bbox_x1)
+            lower_position_embeddings = y_embeddings(bbox_y1)
         except IndexError as e:
             raise IndexError("The `bbox` coordinate values should be within 0-1000 range.") from e
 
-        h_position_embeddings = self.h_position_embeddings(torch.clip(bbox[:, :, 3] - bbox[:, :, 1], 0, 1023))
-        w_position_embeddings = self.w_position_embeddings(torch.clip(bbox[:, :, 2] - bbox[:, :, 0], 0, 1023))
+        # Precompute the (clamped) deltas only once
+        h_delta = bbox_y1 - bbox_y0
+        h_delta.clamp_(min=0, max=1023)
+        h_position_embeddings = h_embeddings(h_delta)
 
-        # below is the difference between LayoutLMEmbeddingsV2 (torch.cat) and LayoutLMEmbeddingsV1 (add)
+        w_delta = bbox_x1 - bbox_x0
+        w_delta.clamp_(min=0, max=1023)
+        w_position_embeddings = w_embeddings(w_delta)
+
+        # Use list literal directly, no further speedup possible for concat itself
         spatial_position_embeddings = torch.cat(
             [
                 left_position_embeddings,
