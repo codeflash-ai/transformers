@@ -287,7 +287,7 @@ class MMGroundingDinoBiMultiHeadAttention(nn.Module):
         self.out_text_proj = nn.Linear(self.embed_dim, self.text_dim)
 
     def _reshape(self, tensor: torch.Tensor, seq_len: int, batch_size: int):
-        return tensor.view(batch_size, seq_len, self.num_heads, self.head_dim).transpose(1, 2).contiguous()
+        return tensor.view(batch_size, seq_len, self.num_heads, self.head_dim).permute(0, 2, 1, 3)
 
     def forward(
         self,
