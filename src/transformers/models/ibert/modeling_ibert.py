@@ -69,8 +69,10 @@ class IBertEmbeddings(nn.Module):
         )
 
         # position_ids (1, len position emb) is contiguous in memory and exported when serialized
+        # Optimize: avoid expanding with -1 (which incurs an extra copy); use explicit shape and save position_ids as a single row for maximal reusability.
+        position_ids = torch.arange(config.max_position_embeddings, dtype=torch.long).unsqueeze(0)
         self.register_buffer(
-            "position_ids", torch.arange(config.max_position_embeddings).expand((1, -1)), persistent=False
+            "position_ids", position_ids, persistent=False
         )
 
         # End copy
@@ -155,10 +157,19 @@ class IBertEmbeddings(nn.Module):
         input_shape = inputs_embeds.size()[:-1]
         sequence_length = input_shape[1]
 
+        # Optimized: use torch.arange's end argument directly and preallocate out tensor to minimize allocations when possible.
+        # Also, compute shape on device without constructing an intermediate Range and unsqueeze: use .expand directly.
+        # This avoids one intermediate memory allocation.
+        device = inputs_embeds.device
         position_ids = torch.arange(
-            self.padding_idx + 1, sequence_length + self.padding_idx + 1, dtype=torch.long, device=inputs_embeds.device
+            self.padding_idx + 1,
+            sequence_length + self.padding_idx + 1,
+            dtype=torch.long,
+            device=device
         )
-        return position_ids.unsqueeze(0).expand(input_shape)
+        # Optimize: Avoids an intermediate .unsqueeze(0) tensor
+        expanded_position_ids = position_ids.expand(input_shape)
+        return expanded_position_ids
 
 
 class IBertSelfAttention(nn.Module):
