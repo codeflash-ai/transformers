@@ -188,13 +188,26 @@ class AutoformerStdScaler(nn.Module):
                 (`(batch_size, sequence_length, num_input_channels)`,`(batch_size, 1, num_input_channels)`,
                 `(batch_size, 1, num_input_channels)`)
         """
-        denominator = observed_indicator.sum(self.dim, keepdim=self.keepdim)
-        denominator = denominator.clamp_min(1.0)
-        loc = (data * observed_indicator).sum(self.dim, keepdim=self.keepdim) / denominator
+        # Convert BoolTensor to float in-place for better performance and memory usage
+        if observed_indicator.dtype != torch.float32:
+            observed_indicator = observed_indicator.to(dtype=data.dtype)
 
-        variance = (((data - loc) * observed_indicator) ** 2).sum(self.dim, keepdim=self.keepdim) / denominator
-        scale = torch.sqrt(variance + self.minimum_scale)
-        return (data - loc) / scale, loc, scale
+        # Pre-compute the masked data to minimize redundant computation
+        masked_data = data * observed_indicator
+
+        denominator = observed_indicator.sum(self.dim, keepdim=self.keepdim)
+        denominator = denominator.clamp_min_(1.0)  # Use in-place clamp_min to reduce memory allocations
+
+        loc = masked_data.sum(self.dim, keepdim=self.keepdim) / denominator
+
+        diff = data - loc
+        masked_diff = diff * observed_indicator
+        variance = masked_diff.pow_(2).sum(self.dim, keepdim=self.keepdim) / denominator
+
+        scale = torch.sqrt(variance.add_(self.minimum_scale))  # add_ for inplace addition
+
+        normalized = (data - loc) / scale
+        return normalized, loc, scale
 
 
 # Copied from transformers.models.time_series_transformer.modeling_time_series_transformer.TimeSeriesMeanScaler with TimeSeriesTransformer->Autoformer,TimeSeries->Autoformer
