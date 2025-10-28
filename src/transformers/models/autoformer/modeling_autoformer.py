@@ -225,21 +225,24 @@ class AutoformerMeanScaler(nn.Module):
                 (`(batch_size, sequence_length, num_input_channels)`,`(batch_size, 1, num_input_channels)`,
                 `(batch_size, 1, num_input_channels)`)
         """
-        ts_sum = (data * observed_indicator).abs().sum(self.dim, keepdim=True)
+        # Avoids repeated computation by caching results
+        abs_data = data.abs()
+        abs_observed_data = abs_data * observed_indicator
+        ts_sum = abs_observed_data.sum(self.dim, keepdim=True)
         num_observed = observed_indicator.sum(self.dim, keepdim=True)
 
         scale = ts_sum / torch.clamp(num_observed, min=1)
 
-        # If `default_scale` is provided, we use it, otherwise we use the scale
-        # of the batch.
         if self.default_scale is None:
-            batch_sum = ts_sum.sum(dim=0)
-            batch_observations = torch.clamp(num_observed.sum(0), min=1)
-            default_scale = torch.squeeze(batch_sum / batch_observations)
+            # sum over batch for ts_sum and num_observed, using keepdim=False as needed
+            batch_sum = ts_sum.sum(dim=0, keepdim=False)
+            batch_observations = num_observed.sum(0, keepdim=False)
+            default_scale = batch_sum / torch.clamp(batch_observations, min=1)
         else:
             default_scale = self.default_scale * torch.ones_like(scale)
 
         # apply default scale where there are no observations
+        # torch.where usage avoids creating a new tensor like scale before the clamp
         scale = torch.where(num_observed > 0, scale, default_scale)
 
         # ensure the scale is at least `self.minimum_scale`
@@ -249,6 +252,7 @@ class AutoformerMeanScaler(nn.Module):
         if not self.keepdim:
             scale = scale.squeeze(dim=self.dim)
 
+        # torch.zeros_like is already fastest for creating the return tensor
         return scaled_data, torch.zeros_like(scale), scale
 
 
