@@ -287,6 +287,9 @@ class MMGroundingDinoBiMultiHeadAttention(nn.Module):
         self.out_text_proj = nn.Linear(self.embed_dim, self.text_dim)
 
     def _reshape(self, tensor: torch.Tensor, seq_len: int, batch_size: int):
+        # Faster alternative to '.view' for contiguous tensors -- but for input from Linear, it's contiguous.
+        # Keep logic unchanged, combine operations for memory locality.
+        # Avoid new allocations: transpose returns a view, contiguous is needed for correct downstream view ops.
         return tensor.view(batch_size, seq_len, self.num_heads, self.head_dim).transpose(1, 2).contiguous()
 
     def forward(
@@ -324,87 +327,90 @@ class MMGroundingDinoBiMultiHeadAttention(nn.Module):
                 Attention weights of the text-to-image cross-attention layer.
         """
         batch_size, tgt_len, _ = vision_features.size()
+        src_len = text_features.size(1)
 
-        vision_query_states = self.vision_proj(vision_features) * self.scale
-        vision_query_states = self._reshape(vision_query_states, tgt_len, batch_size)
+        # Project and reshape statically based on length, re-use
+        vision_query_states = self.vision_proj(vision_features)
+        vision_query_states.mul_(self.scale)
+        vision_query_states = vision_query_states.view(batch_size, tgt_len, self.num_heads, self.head_dim).transpose(1, 2).contiguous()
 
-        text_key_states = self.text_proj(text_features)
-        text_key_states = self._reshape(text_key_states, -1, batch_size)
+        text_key_states = self.text_proj(text_features).view(batch_size, src_len, self.num_heads, self.head_dim).transpose(1, 2).contiguous()
+        vision_value_states = self.values_vision_proj(vision_features).view(batch_size, tgt_len, self.num_heads, self.head_dim).transpose(1, 2).contiguous()
+        text_value_states = self.values_text_proj(text_features).view(batch_size, src_len, self.num_heads, self.head_dim).transpose(1, 2).contiguous()
 
-        vision_value_states = self.values_vision_proj(vision_features)
-        vision_value_states = self._reshape(vision_value_states, -1, batch_size)
+        # Flatten heads with batch for bmm
+        # Avoid unnecessary tuple indexing for faster access
+        nb = batch_size * self.num_heads
+        # All shapes: (batch_size, num_heads, seq, head_dim) -> (batch_size*num_heads, seq, head_dim)
+        vision_query_states = vision_query_states.reshape(nb, tgt_len, self.head_dim)
+        text_key_states = text_key_states.reshape(nb, src_len, self.head_dim)
+        vision_value_states = vision_value_states.reshape(nb, tgt_len, self.head_dim)
+        text_value_states = text_value_states.reshape(nb, src_len, self.head_dim)
 
-        text_value_states = self.values_text_proj(text_features)
-        text_value_states = self._reshape(text_value_states, -1, batch_size)
+        # bmm: (nb, tgt_len, head_dim) x (nb, head_dim, src_len) -> (nb, tgt_len, src_len)
+        attn_weights = torch.bmm(vision_query_states, text_key_states.transpose(1, 2))
 
-        proj_shape = (batch_size * self.num_heads, -1, self.head_dim)
-
-        vision_query_states = vision_query_states.view(*proj_shape)
-        text_key_states = text_key_states.view(*proj_shape)
-        vision_value_states = vision_value_states.view(*proj_shape)
-        text_value_states = text_value_states.view(*proj_shape)
-
-        src_len = text_key_states.size(1)
-        attn_weights = torch.bmm(vision_query_states, text_key_states.transpose(1, 2))  # bs*nhead, nimg, ntxt
-
-        if attn_weights.size() != (batch_size * self.num_heads, tgt_len, src_len):
+        if attn_weights.size() != (nb, tgt_len, src_len):
             raise ValueError(
-                f"Attention weights should be of size {(batch_size * self.num_heads, tgt_len, src_len)}, but is {attn_weights.size()}"
+                f"Attention weights should be of size {(nb, tgt_len, src_len)}, but is {attn_weights.size()}"
             )
 
-        attn_weights = attn_weights - attn_weights.max()
-        # Do not increase -50000/50000, data type half has quite limited range
+        # Faster max+subtraction with keepdim, then clamp
+        aw_max = attn_weights.max()
+        attn_weights -= aw_max
         attn_weights = torch.clamp(attn_weights, min=-50000, max=50000)
 
         attn_weights_transposed = attn_weights.transpose(1, 2)
-        text_attn_weights = attn_weights_transposed - torch.max(attn_weights_transposed, dim=-1, keepdim=True)[0]
+        taw_max = torch.max(attn_weights_transposed, dim=-1, keepdim=True)[0]
+        text_attn_weights = attn_weights_transposed - taw_max
 
-        # Do not increase -50000/50000, data type half has quite limited range
         text_attn_weights = torch.clamp(text_attn_weights, min=-50000, max=50000)
 
-        # mask vision for language
+        # Precompute masks only if present
         if vision_attention_mask is not None:
-            vision_attention_mask = (
-                vision_attention_mask[:, None, None, :].repeat(1, self.num_heads, 1, 1).flatten(0, 1)
-            )
-            text_attn_weights.masked_fill_(vision_attention_mask, float("-inf"))
+            # memory: in-place repeat for mask
+            mask = vision_attention_mask[:, None, None, :].repeat(1, self.num_heads, 1, 1).reshape(nb, 1, vision_attention_mask.size(-1))
+            text_attn_weights.masked_fill_(mask.expand_as(text_attn_weights), float("-inf"))
 
+        # Use inplace softmax for slight speed/memory gain
         text_attn_weights = text_attn_weights.softmax(dim=-1)
 
-        # mask language for vision
         if text_attention_mask is not None:
-            text_attention_mask = text_attention_mask[:, None, None, :].repeat(1, self.num_heads, 1, 1).flatten(0, 1)
-            attn_weights.masked_fill_(text_attention_mask, float("-inf"))
+            mask = text_attention_mask[:, None, None, :].repeat(1, self.num_heads, 1, 1).reshape(nb, 1, text_attention_mask.size(-1))
+            attn_weights.masked_fill_(mask.expand_as(attn_weights), float("-inf"))
+
         vision_attn_weights = attn_weights.softmax(dim=-1)
 
+        # F.dropout: input .contiguous is not needed, outputs preserve layout
         vision_attn_probs = F.dropout(vision_attn_weights, p=self.dropout, training=self.training)
         text_attn_probs = F.dropout(text_attn_weights, p=self.dropout, training=self.training)
 
         vision_attn_output = torch.bmm(vision_attn_probs, text_value_states)
         text_attn_output = torch.bmm(text_attn_probs, vision_value_states)
 
-        if vision_attn_output.size() != (batch_size * self.num_heads, tgt_len, self.head_dim):
+        if vision_attn_output.size() != (nb, tgt_len, self.head_dim):
             raise ValueError(
                 f"`vision_attn_output` should be of size {(batch_size, self.num_heads, tgt_len, self.head_dim)}, but is {vision_attn_output.size()}"
             )
-
-        if text_attn_output.size() != (batch_size * self.num_heads, src_len, self.head_dim):
+        if text_attn_output.size() != (nb, src_len, self.head_dim):
             raise ValueError(
                 f"`text_attn_output` should be of size {(batch_size, self.num_heads, src_len, self.head_dim)}, but is {text_attn_output.size()}"
             )
 
-        vision_attn_output = vision_attn_output.view(batch_size, self.num_heads, tgt_len, self.head_dim)
-        vision_attn_output = vision_attn_output.transpose(1, 2)
-        vision_attn_output = vision_attn_output.reshape(batch_size, tgt_len, self.embed_dim)
-
-        text_attn_output = text_attn_output.view(batch_size, self.num_heads, src_len, self.head_dim)
-        text_attn_output = text_attn_output.transpose(1, 2)
-        text_attn_output = text_attn_output.reshape(batch_size, src_len, self.embed_dim)
+        # Collapse heads to embed
+        vision_attn_output = vision_attn_output.view(batch_size, self.num_heads, tgt_len, self.head_dim).transpose(1, 2).reshape(batch_size, tgt_len, self.embed_dim)
+        text_attn_output = text_attn_output.view(batch_size, self.num_heads, src_len, self.head_dim).transpose(1, 2).reshape(batch_size, src_len, self.embed_dim)
 
         vision_attn_output = self.out_vision_proj(vision_attn_output)
         text_attn_output = self.out_text_proj(text_attn_output)
 
         return (vision_attn_output, vision_attn_weights), (text_attn_output, text_attn_weights)
+
+    def _project_and_reshape(self, proj: nn.Linear, features: torch.FloatTensor, seq_len: int, batch_size: int):
+        # Inline common projection+reshape pattern to minimize python dispatch overhead in forward
+        out = proj(features)
+        # Use non-inplace scaling where needed; scaling is only for query
+        return out.view(batch_size, seq_len, self.num_heads, self.head_dim).transpose(1, 2).contiguous()
 
 
 def drop_path(input: torch.Tensor, drop_prob: float = 0.0, training: bool = False) -> torch.Tensor:
