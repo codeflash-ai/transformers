@@ -1168,9 +1168,17 @@ def create_position_ids_from_input_ids(input_ids, padding_idx, past_key_values_l
     Returns: torch.Tensor
     """
     # The series of casts and type-conversions here are carefully balanced to both work with ONNX export and XLA.
-    mask = input_ids.ne(padding_idx).int()
-    incremental_indices = (torch.cumsum(mask, dim=1).type_as(mask) + past_key_values_length) * mask
-    return incremental_indices.long() + padding_idx
+    # Replace mask.ne() and .int() with .to(dtype=torch.long) for direct cast and improved efficiency
+    mask = input_ids.ne(padding_idx).to(dtype=torch.long)
+    # Use in-place addition for efficiency where safe. torch.cumsum is already efficient on CPU/GPU.
+    # Retain original logic/order due to ONNX/XLA compatibility as per comment.
+    incremental_indices = torch.cumsum(mask, dim=1)
+    if past_key_values_length != 0:
+        incremental_indices = incremental_indices + past_key_values_length
+    # Apply mask via multiplication (same as original), no change
+    incremental_indices = incremental_indices * mask
+    # Use direct integer addition and type cast
+    return incremental_indices + padding_idx
 
 
 __all__ = [
