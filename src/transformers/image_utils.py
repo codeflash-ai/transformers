@@ -67,6 +67,8 @@ if is_vision_available():
 if is_torch_available():
     import torch
 
+_infer_channel_dim_cache = {}
+
 
 logger = logging.get_logger(__name__)
 
@@ -361,7 +363,11 @@ def get_image_size(image: np.ndarray, channel_dim: Optional[ChannelDimension] = 
         A tuple of the image's height and width.
     """
     if channel_dim is None:
-        channel_dim = infer_channel_dimension_format(image)
+        shape = image.shape
+        channel_dim = _infer_channel_dim_cache.get(shape)
+        if channel_dim is None:
+            channel_dim = infer_channel_dimension_format(image)
+            _infer_channel_dim_cache[shape] = channel_dim
 
     if channel_dim == ChannelDimension.FIRST:
         return image.shape[-2], image.shape[-1]
