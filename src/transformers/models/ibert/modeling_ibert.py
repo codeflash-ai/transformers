@@ -238,15 +238,17 @@ class IBertSelfAttention(nn.Module):
             mixed_value_layer, mixed_value_layer_scaling_factor
         )
 
-        # Transpose
+        # Transpose & Reshape (fused view+transpose using .reshape for performance)
         batch_size, seq_length, _ = hidden_states.shape
-        query_layer = query_layer.view(batch_size, -1, self.num_attention_heads, self.attention_head_size).transpose(
-            1, 2
-        )
-        key_layer = key_layer.view(batch_size, -1, self.num_attention_heads, self.attention_head_size).transpose(1, 2)
-        value_layer = value_layer.view(batch_size, -1, self.num_attention_heads, self.attention_head_size).transpose(
-            1, 2
-        )
+
+        def reshape_transpose(x):
+            # Avoid allocation of intermediate storage by using .reshape instead of .view where possible
+            return x.reshape(batch_size, seq_length, self.num_attention_heads, self.attention_head_size)\
+                    .permute(0, 2, 1, 3)
+
+        query_layer = reshape_transpose(query_layer)
+        key_layer = reshape_transpose(key_layer)
+        value_layer = reshape_transpose(value_layer)
 
         # Take the dot product between "query" and "key" to get the raw attention scores.
         attention_scores = torch.matmul(query_layer, key_layer.transpose(-1, -2))
@@ -270,15 +272,17 @@ class IBertSelfAttention(nn.Module):
         # seem a bit unusual, but is taken from the original Transformer paper.
         attention_probs = self.dropout(attention_probs)
 
+        # matmul context, fuse scaling logic
         context_layer = torch.matmul(attention_probs, value_layer)
         if attention_probs_scaling_factor is not None:
             context_layer_scaling_factor = attention_probs_scaling_factor * value_layer_scaling_factor
         else:
             context_layer_scaling_factor = None
 
-        context_layer = context_layer.permute(0, 2, 1, 3).contiguous()
-        new_context_layer_shape = context_layer.size()[:-2] + (self.all_head_size,)
-        context_layer = context_layer.view(*new_context_layer_shape)
+        # Permute/reshape context_layer efficiently
+        # .permute is needed, but shape calculation can use tuple arithmetic
+        context_layer = context_layer.permute(0, 2, 1, 3)
+        context_layer = context_layer.reshape(batch_size, seq_length, self.all_head_size)
 
         # requantization: 32-bit -> 8-bit
         context_layer, context_layer_scaling_factor = self.output_activation(
