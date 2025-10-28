@@ -994,10 +994,14 @@ def distance2bbox(points, distance: torch.Tensor, reg_scale: float) -> torch.Ten
         `torch.Tensor`: Bounding boxes in (batch_size, num_boxes, 4) or (num_boxes, 4) format, representing [x_center, y_center, width, height]
     """
     reg_scale = abs(reg_scale)
-    top_left_x = points[..., 0] - (0.5 * reg_scale + distance[..., 0]) * (points[..., 2] / reg_scale)
-    top_left_y = points[..., 1] - (0.5 * reg_scale + distance[..., 1]) * (points[..., 3] / reg_scale)
-    bottom_right_x = points[..., 0] + (0.5 * reg_scale + distance[..., 2]) * (points[..., 2] / reg_scale)
-    bottom_right_y = points[..., 1] + (0.5 * reg_scale + distance[..., 3]) * (points[..., 3] / reg_scale)
+    half_reg_scale = 0.5 * reg_scale
+    width_scale = points[..., 2] / reg_scale
+    height_scale = points[..., 3] / reg_scale
+    
+    top_left_x = points[..., 0] - (half_reg_scale + distance[..., 0]) * width_scale
+    top_left_y = points[..., 1] - (half_reg_scale + distance[..., 1]) * height_scale
+    bottom_right_x = points[..., 0] + (half_reg_scale + distance[..., 2]) * width_scale
+    bottom_right_y = points[..., 1] + (half_reg_scale + distance[..., 3]) * height_scale
 
     bboxes = torch.stack([top_left_x, top_left_y, bottom_right_x, bottom_right_y], -1)
 

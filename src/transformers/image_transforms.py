@@ -600,7 +600,7 @@ def corners_to_center_format(bboxes_corners: TensorType) -> TensorType:
         (center_x, center_y, width, height)
     """
     # Inverse function accepts different input types so implemented here too
-    if is_torch_tensor(bboxes_corners):
+    if isinstance(bboxes_corners, torch.Tensor):
         return _corners_to_center_format_torch(bboxes_corners)
     elif isinstance(bboxes_corners, np.ndarray):
         return _corners_to_center_format_numpy(bboxes_corners)
