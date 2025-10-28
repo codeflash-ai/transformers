@@ -355,7 +355,7 @@ class AutoformerValueEmbedding(nn.Module):
         self.value_projection = nn.Linear(in_features=feature_size, out_features=d_model, bias=False)
 
     def forward(self, x):
-        return self.value_projection(x)
+        return torch.matmul(x, self.value_projection.weight.T)
 
 
 # Class based on
