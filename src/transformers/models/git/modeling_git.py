@@ -141,6 +141,7 @@ class GitSelfAttention(nn.Module):
         self.value = nn.Linear(config.hidden_size, self.all_head_size)
 
         self.dropout = nn.Dropout(config.attention_probs_dropout_prob)
+        self._sqrt_attention_head_size = math.sqrt(self.attention_head_size)
 
     def forward(
         self,
@@ -151,48 +152,51 @@ class GitSelfAttention(nn.Module):
         pixel_values_present: Optional[bool] = False,
     ) -> tuple[torch.Tensor]:
         batch_size, seq_length, _ = hidden_states.shape
-        query_layer = (
-            self.query(hidden_states)
-            .view(batch_size, -1, self.num_attention_heads, self.attention_head_size)
-            .transpose(1, 2)
-        )
+
+        # Pre-calculate shape components for efficiency
+        num_attention_heads = self.num_attention_heads
+        attention_head_size = self.attention_head_size
+
+        # Fused linear + shape operations per projection
+        hidden_states_q = self.query(hidden_states)
+        hidden_states_k = self.key(hidden_states)
+        hidden_states_v = self.value(hidden_states)
+
+        # Fused view + transpose for each projection output
+        q = hidden_states_q.view(batch_size, seq_length, num_attention_heads, attention_head_size).transpose(1, 2)
+        k = hidden_states_k.view(batch_size, seq_length, num_attention_heads, attention_head_size).transpose(1, 2)
+        v = hidden_states_v.view(batch_size, seq_length, num_attention_heads, attention_head_size).transpose(1, 2)
 
         cutoff = self.image_patch_tokens if pixel_values_present else 0
-        key_layer = (
-            self.key(hidden_states)
-            .view(batch_size, -1, self.num_attention_heads, self.attention_head_size)
-            .transpose(1, 2)
-        )
-        value_layer = (
-            self.value(hidden_states)
-            .view(batch_size, -1, self.num_attention_heads, self.attention_head_size)
-            .transpose(1, 2)
-        )
+
         if past_key_values is not None:
-            # NOTE: like in other caches, we store the text component. In GIT it means we discard the image component.
-            key_layer_past, value_layer_past = past_key_values.update(
-                key_layer[:, :, cutoff:, :], value_layer[:, :, cutoff:, :], self.layer_idx
-            )
-            key_layer = torch.cat([key_layer[:, :, :cutoff, :], key_layer_past], dim=2)
-            value_layer = torch.cat([value_layer[:, :, :cutoff, :], value_layer_past], dim=2)
+            # Avoid unneeded slicing and concatenation when cutoff is zero
+            if cutoff == 0:
+                k_past, v_past = past_key_values.update(k, v, self.layer_idx)
+                # If cutoff is 0, cat is unnecessary; just take k_past/v_past as the full sequence
+                k = k_past
+                v = v_past
+            else:
+                k_past, v_past = past_key_values.update(
+                    k[:, :, cutoff:, :], v[:, :, cutoff:, :], self.layer_idx
+                )
+                # Only do slicing/concat if cutoff is not zero
+                k = torch.cat([k[:, :, :cutoff, :], k_past], dim=2)
+                v = torch.cat([v[:, :, :cutoff, :], v_past], dim=2)
 
-        # Take the dot product between "query" and "key" to get the raw attention scores.
-        attention_scores = torch.matmul(query_layer, key_layer.transpose(-1, -2))
+        # Compute attention scores and apply scaling in-place
+        attention_scores = torch.matmul(q, k.transpose(-1, -2))
+        attention_scores /= self._sqrt_attention_head_size
 
-        attention_scores = attention_scores / math.sqrt(self.attention_head_size)
         if attention_mask is not None:
-            # Apply the attention mask is (precomputed for all layers in GitModel forward() function)
             attention_scores = attention_scores + attention_mask
 
-        # Normalize the attention scores to probabilities.
+        # Use softmax directly on the scores
         attention_probs = nn.functional.softmax(attention_scores, dim=-1)
-
-        # This is actually dropping out entire tokens to attend to, which might
-        # seem a bit unusual, but is taken from the original Transformer paper.
         attention_probs = self.dropout(attention_probs)
 
-        context_layer = torch.matmul(attention_probs, value_layer)
-
+        # Compute context layer using batched matmul, permute, and view as before
+        context_layer = torch.matmul(attention_probs, v)
         context_layer = context_layer.permute(0, 2, 1, 3).contiguous()
         new_context_layer_shape = context_layer.size()[:-2] + (self.all_head_size,)
         context_layer = context_layer.view(new_context_layer_shape)

@@ -690,8 +690,8 @@ class Cache:
 
     def __init__(
         self,
-        layers: Optional[list[CacheLayerMixin]] = None,
-        layer_class_to_replicate: Optional[type[CacheLayerMixin]] = None,
+        layers: Optional[list["CacheLayerMixin"]] = None,
+        layer_class_to_replicate: Optional[type["CacheLayerMixin"]] = None,
         offloading: bool = False,
         offload_only_non_sliding: bool = True,
     ):
