@@ -250,10 +250,10 @@ class LayoutLMv3SelfAttention(nn.Module):
         will result in a slower speed and a little bias. Can use torch.allclose(standard_attention_probs,
         cogview_attention_probs, atol=1e-08) for comparison. The smaller atol (e.g., 1e-08), the better.
         """
-        scaled_attention_scores = attention_scores / alpha
-        max_value = scaled_attention_scores.amax(dim=(-1)).unsqueeze(-1)
-        new_attention_scores = (scaled_attention_scores - max_value) * alpha
-        return nn.Softmax(dim=-1)(new_attention_scores)
+        scaled_attention_scores = attention_scores.div(alpha)
+        max_value = scaled_attention_scores.amax(dim=-1, keepdim=True)
+        new_attention_scores = scaled_attention_scores.sub_(max_value).mul_(alpha)
+        return nn.functional.softmax(new_attention_scores, dim=-1)
 
     def forward(
         self,
