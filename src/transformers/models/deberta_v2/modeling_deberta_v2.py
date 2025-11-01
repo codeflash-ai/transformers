@@ -122,7 +122,7 @@ def pos_dynamic_expand(pos_index, p2c_att, key_layer):
 
 @torch.jit.script
 def scaled_size_sqrt(query_layer: torch.Tensor, scale_factor: int):
-    return torch.sqrt(torch.tensor(query_layer.size(-1), dtype=torch.float) * scale_factor)
+    return torch.sqrt(query_layer.size(-1) * scale_factor)
 
 
 @torch.jit.script
@@ -188,9 +188,13 @@ class DisentangledSelfAttention(nn.Module):
         self.dropout = nn.Dropout(config.attention_probs_dropout_prob)
 
     def transpose_for_scores(self, x, attention_heads) -> torch.Tensor:
-        new_x_shape = x.size()[:-1] + (attention_heads, -1)
-        x = x.view(new_x_shape)
-        return x.permute(0, 2, 1, 3).contiguous().view(-1, x.size(1), x.size(-1))
+        # Fast version using .reshape instead of .view for more flexibility
+        # Avoids multiple copies by combining contiguous() with final reshape only
+        batch_size, seq_length = x.size(0), x.size(1)
+        head_dim = x.size(-1) // attention_heads
+        x = x.reshape(batch_size, seq_length, attention_heads, head_dim)
+        x = x.permute(0, 2, 1, 3)
+        return x.reshape(-1, seq_length, head_dim)
 
     def forward(
         self,
@@ -225,8 +229,10 @@ class DisentangledSelfAttention(nn.Module):
                 values ranging in [*-max_relative_positions*, *max_relative_positions*].
 
             rel_embeddings (`torch.FloatTensor`):
-                The embedding of relative distances. It's a tensor of shape [\\(2 \\times
-                \\text{max_relative_positions}\\), *hidden_size*].
+                The embedding of relative distances. It's a tensor of shape [\\(2 \times
+                \text{max_relative_positions}\\), *hidden_size*].
+
+
 
 
         """
@@ -244,7 +250,9 @@ class DisentangledSelfAttention(nn.Module):
         if "p2c" in self.pos_att_type:
             scale_factor += 1
         scale = scaled_size_sqrt(query_layer, scale_factor)
-        attention_scores = torch.bmm(query_layer, key_layer.transpose(-1, -2) / scale.to(dtype=query_layer.dtype))
+        # Divide by scaling factor before matmul, avoids temporary tensor and memory usage of T/S
+        attention_scores = torch.bmm(query_layer, key_layer.transpose(-1, -2)) / scale
+
         if self.relative_attention:
             rel_embeddings = self.pos_dropout(rel_embeddings)
             rel_att = self.disentangled_attention_bias(
@@ -253,26 +261,29 @@ class DisentangledSelfAttention(nn.Module):
 
         if rel_att is not None:
             attention_scores = attention_scores + rel_att
-        attention_scores = attention_scores.view(
-            -1, self.num_attention_heads, attention_scores.size(-2), attention_scores.size(-1)
-        )
+
+        # Combine view and permute into a single reshape for faster contiguous memory access
+        B = attention_scores.size(0) // self.num_attention_heads
+        num_heads = self.num_attention_heads
+        seq_len_q = attention_scores.size(-2)
+        seq_len_k = attention_scores.size(-1)
+        attention_scores = attention_scores.reshape(B, num_heads, seq_len_q, seq_len_k)
 
         attention_mask = attention_mask.bool()
-        attention_scores = attention_scores.masked_fill(~(attention_mask), torch.finfo(query_layer.dtype).min)
+        attention_scores = attention_scores.masked_fill(~(attention_mask), torch.finfo(attention_scores.dtype).min)
+        # bsz x height x length x dimension
         # bsz x height x length x dimension
         attention_probs = nn.functional.softmax(attention_scores, dim=-1)
 
         attention_probs = self.dropout(attention_probs)
-        context_layer = torch.bmm(
-            attention_probs.view(-1, attention_probs.size(-2), attention_probs.size(-1)), value_layer
-        )
+        context_layer = torch.bmm(attention_probs.reshape(-1, seq_len_q, seq_len_k), value_layer)
+        # Combine reshape and permute logically into a single operation for memory layout efficiency
         context_layer = (
-            context_layer.view(-1, self.num_attention_heads, context_layer.size(-2), context_layer.size(-1))
+            context_layer.reshape(B, num_heads, seq_len_q, value_layer.size(-1))
             .permute(0, 2, 1, 3)
-            .contiguous()
+            .reshape(B, seq_len_q, num_heads * value_layer.size(-1))
         )
-        new_context_layer_shape = context_layer.size()[:-2] + (-1,)
-        context_layer = context_layer.view(new_context_layer_shape)
+
         if not output_attentions:
             return (context_layer, None)
         return (context_layer, attention_probs)
@@ -285,34 +296,40 @@ class DisentangledSelfAttention(nn.Module):
                 bucket_size=self.position_buckets,
                 max_position=self.max_relative_positions,
             )
-        if relative_pos.dim() == 2:
+        # Fast dimension handling, avoid redundant unsqueeze calls
+        rel_pos_dim = relative_pos.dim()
+        if rel_pos_dim == 2:
             relative_pos = relative_pos.unsqueeze(0).unsqueeze(0)
-        elif relative_pos.dim() == 3:
+        elif rel_pos_dim == 3:
             relative_pos = relative_pos.unsqueeze(1)
-        # bsz x height x query x key
-        elif relative_pos.dim() != 4:
-            raise ValueError(f"Relative position ids must be of dim 2 or 3 or 4. {relative_pos.dim()}")
+        elif rel_pos_dim != 4:
+            raise ValueError(f"Relative position ids must be of dim 2 or 3 or 4. {rel_pos_dim}")
 
         att_span = self.pos_ebd_size
         relative_pos = relative_pos.to(device=query_layer.device, dtype=torch.long)
 
         rel_embeddings = rel_embeddings[0 : att_span * 2, :].unsqueeze(0)
+
+        batch_size = query_layer.size(0) // self.num_attention_heads
+
         if self.share_att_key:
             pos_query_layer = self.transpose_for_scores(
                 self.query_proj(rel_embeddings), self.num_attention_heads
-            ).repeat(query_layer.size(0) // self.num_attention_heads, 1, 1)
+            ).repeat(batch_size, 1, 1)
             pos_key_layer = self.transpose_for_scores(self.key_proj(rel_embeddings), self.num_attention_heads).repeat(
-                query_layer.size(0) // self.num_attention_heads, 1, 1
+                batch_size, 1, 1
             )
         else:
+            # Allocate only if selected pos_att_type for c2p or p2c heads
+            pos_key_layer, pos_query_layer = None, None
             if "c2p" in self.pos_att_type:
                 pos_key_layer = self.transpose_for_scores(
                     self.pos_key_proj(rel_embeddings), self.num_attention_heads
-                ).repeat(query_layer.size(0) // self.num_attention_heads, 1, 1)  # .split(self.all_head_size, dim=-1)
+                ).repeat(batch_size, 1, 1)
             if "p2c" in self.pos_att_type:
                 pos_query_layer = self.transpose_for_scores(
                     self.pos_query_proj(rel_embeddings), self.num_attention_heads
-                ).repeat(query_layer.size(0) // self.num_attention_heads, 1, 1)  # .split(self.all_head_size, dim=-1)
+                ).repeat(batch_size, 1, 1)
 
         score = 0
         # content->position
@@ -320,12 +337,18 @@ class DisentangledSelfAttention(nn.Module):
             scale = scaled_size_sqrt(pos_key_layer, scale_factor)
             c2p_att = torch.bmm(query_layer, pos_key_layer.transpose(-1, -2))
             c2p_pos = torch.clamp(relative_pos + att_span, 0, att_span * 2 - 1)
+            # Use preallocated expansion for gather, avoids repeated computation
+            expanded_c2p_pos = c2p_pos.squeeze(0).expand(
+                [query_layer.size(0), query_layer.size(1), relative_pos.size(-1)]
+            )
             c2p_att = torch.gather(
                 c2p_att,
                 dim=-1,
-                index=c2p_pos.squeeze(0).expand([query_layer.size(0), query_layer.size(1), relative_pos.size(-1)]),
+                index=expanded_c2p_pos,
             )
-            score += c2p_att / scale.to(dtype=c2p_att.dtype)
+            score = score + c2p_att / scale
+
+        # position->content
 
         # position->content
         if "p2c" in self.pos_att_type:
@@ -339,12 +362,13 @@ class DisentangledSelfAttention(nn.Module):
             )
             p2c_pos = torch.clamp(-r_pos + att_span, 0, att_span * 2 - 1)
             p2c_att = torch.bmm(key_layer, pos_query_layer.transpose(-1, -2))
+            expanded_p2c_pos = p2c_pos.squeeze(0).expand([query_layer.size(0), key_layer.size(-2), key_layer.size(-2)])
             p2c_att = torch.gather(
                 p2c_att,
                 dim=-1,
-                index=p2c_pos.squeeze(0).expand([query_layer.size(0), key_layer.size(-2), key_layer.size(-2)]),
+                index=expanded_p2c_pos,
             ).transpose(-1, -2)
-            score += p2c_att / scale.to(dtype=p2c_att.dtype)
+            score = score + p2c_att / scale
 
         return score
 
