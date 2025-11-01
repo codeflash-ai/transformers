@@ -63,9 +63,7 @@ class ImageGPTAttention(nn.Module):
         max_positions = config.max_position_embeddings
         self.register_buffer(
             "bias",
-            torch.tril(torch.ones((max_positions, max_positions), dtype=torch.bool)).view(
-                1, 1, max_positions, max_positions
-            ),
+            torch.tril(torch.ones((max_positions, max_positions), dtype=torch.bool)).unsqueeze(0).unsqueeze(0),
             persistent=False,
         )
         self.register_buffer("masked_bias", torch.tensor(-1e4), persistent=False)
@@ -194,7 +192,7 @@ class ImageGPTAttention(nn.Module):
         """
         tensor = tensor.permute(0, 2, 1, 3).contiguous()
         new_shape = tensor.size()[:-2] + (num_heads * attn_head_size,)
-        return tensor.view(new_shape)
+        return tensor.reshape(new_shape)
 
     def forward(
         self,
