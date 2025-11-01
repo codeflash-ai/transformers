@@ -880,7 +880,10 @@ class SeamlessM4TScaledWordEmbedding(nn.Embedding):
         self.embed_scale = embed_scale
 
     def forward(self, input_ids: torch.Tensor):
-        return super().forward(input_ids) * self.embed_scale
+        embeddings = super().forward(input_ids)
+        if self.embed_scale != 1.0:
+            return embeddings.mul(self.embed_scale)
+        return embeddings
 
 
 # Copied from transformers.models.m2m_100.modeling_m2m_100.M2M100SinusoidalPositionalEmbedding
