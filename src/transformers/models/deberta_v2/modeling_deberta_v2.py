@@ -886,7 +886,7 @@ class DebertaV2LMPredictionHead(nn.Module):
         hidden_states = self.dense(hidden_states)
         hidden_states = self.transform_act_fn(hidden_states)
         hidden_states = self.LayerNorm(hidden_states)
-        hidden_states = torch.matmul(hidden_states, word_embeddings.weight.t()) + self.bias
+        hidden_states = torch.nn.functional.linear(hidden_states, word_embeddings.weight, self.bias)
         return hidden_states
 
 
