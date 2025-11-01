@@ -287,46 +287,65 @@ class SeamlessM4TConformerRelPositionalEmbedding(nn.Module):
         self.max_len = config.max_source_positions
         self.d_model = config.hidden_size
         self.pe = None
+        self._cached_div_term = None
+        self._cached_dim = None
         self.extend_pe(torch.tensor(0.0).expand(1, self.max_len))
 
     def extend_pe(self, x):
         # Reset the positional encodings
+        # Reset the positional encodings
+        seq_len = x.size(1)
+        required_pe_len = seq_len * 2 - 1
         if self.pe is not None:
             # self.pe contains both positive and negative parts
             # the length of self.pe is 2 * input_len - 1
-            if self.pe.size(1) >= x.size(1) * 2 - 1:
+            if self.pe.size(1) >= required_pe_len:
                 if self.pe.dtype != x.dtype or self.pe.device != x.device:
                     self.pe = self.pe.to(dtype=x.dtype, device=x.device)
                 return
-        # Suppose `i` is the position of query vector and `j` is the
-        # position of key vector. We use positive relative positions when keys
-        # are to the left (i>j) and negative relative positions otherwise (i<j).
-        pe_positive = torch.zeros(x.size(1), self.d_model)
-        pe_negative = torch.zeros(x.size(1), self.d_model)
-        position = torch.arange(0, x.size(1), dtype=torch.int64).float().unsqueeze(1)
-        div_term = torch.exp(
-            torch.arange(0, self.d_model, 2, dtype=torch.int64).float() * -(math.log(10000.0) / self.d_model)
-        )
+
+        position = torch.arange(0, seq_len, device=x.device, dtype=x.dtype).unsqueeze(1)
+        div_term = self._get_div_term(x.device, x.dtype)
+
+        # Use one buffer and in-place operations for memory efficiency
+        pe_positive = torch.empty(seq_len, self.d_model, device=x.device, dtype=x.dtype)
         pe_positive[:, 0::2] = torch.sin(position * div_term)
         pe_positive[:, 1::2] = torch.cos(position * div_term)
-        pe_negative[:, 0::2] = torch.sin(-1 * position * div_term)
-        pe_negative[:, 1::2] = torch.cos(-1 * position * div_term)
+
+        pe_negative = torch.empty(seq_len, self.d_model, device=x.device, dtype=x.dtype)
+        pe_negative[:, 0::2] = torch.sin(-position * div_term)
+        pe_negative[:, 1::2] = torch.cos(-position * div_term)
 
         # Reverse the order of positive indices and concat both positive and
         # negative indices. This is used to support the shifting trick
         # as in https://huggingface.co/papers/1901.02860
-        pe_positive = torch.flip(pe_positive, [0]).unsqueeze(0)
-        pe_negative = pe_negative[1:].unsqueeze(0)
-        pe = torch.cat([pe_positive, pe_negative], dim=1)
-        self.pe = pe.to(device=x.device, dtype=x.dtype)
+        pe_positive_flipped = pe_positive.flip([0]).unsqueeze(0)
+        pe_negative_tail = pe_negative[1:].unsqueeze(0)
+        pe = torch.cat([pe_positive_flipped, pe_negative_tail], dim=1)
+        self.pe = pe
 
     def forward(self, hidden_states: torch.Tensor):
         self.extend_pe(hidden_states)
-        start_idx = self.pe.size(1) // 2 - hidden_states.size(1) + 1
-        end_idx = self.pe.size(1) // 2 + hidden_states.size(1)
+        pe_size = self.pe.size(1)
+        hidden_size = hidden_states.size(1)
+        start_idx = pe_size // 2 - hidden_size + 1
+        end_idx = pe_size // 2 + hidden_size
         relative_position_embeddings = self.pe[:, start_idx:end_idx]
-
         return relative_position_embeddings
+
+    def _get_div_term(self, device, dtype):
+        if (
+            self._cached_div_term is None
+            or self._cached_dim != self.d_model
+            or self._cached_div_term.device != device
+            or self._cached_div_term.dtype != dtype
+        ):
+            div_term = torch.exp(
+                torch.arange(0, self.d_model, 2, device=device, dtype=dtype) * -(math.log(10000.0) / self.d_model)
+            )
+            self._cached_div_term = div_term
+            self._cached_dim = self.d_model
+        return self._cached_div_term
 
 
 # Copied from transformers.models.wav2vec2_conformer.modeling_wav2vec2_conformer.Wav2Vec2ConformerSamePadLayer with Wav2Vec2->SeamlessM4T
