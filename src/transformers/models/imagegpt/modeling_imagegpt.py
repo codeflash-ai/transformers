@@ -51,7 +51,9 @@ class ImageGPTLayerNorm(nn.Module):
 
     def forward(self, tensor: torch.Tensor) -> torch.Tensor:
         # input is not mean centered
-        tensor = tensor / torch.sqrt(torch.mean(torch.square(tensor), axis=-1, keepdim=True) + self.eps)
+        variance = torch.mean(tensor * tensor, axis=-1, keepdim=True)
+        inv_rms = torch.rsqrt(variance + self.eps)
+        tensor = tensor * inv_rms
         tensor = tensor * self.weight
         return tensor
 
