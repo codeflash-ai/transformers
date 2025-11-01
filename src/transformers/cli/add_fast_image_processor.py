@@ -22,6 +22,13 @@ import typer
 from ..utils import logging
 
 
+_HEADER_PATTERN = re.compile(r"^# coding=utf-8\n(#[^\n]*\n)*", re.MULTILINE)
+
+_COPYRIGHT_PATTERN = re.compile(r"# Copyright (\d+)\s")
+
+_IMAGE_PROCESSOR_PATTERN = re.compile(r'^"""Image processor.*$', re.MULTILINE)
+
+
 logger = logging.get_logger(__name__)  # pylint: disable=invalid-name
 
 
@@ -346,8 +353,8 @@ def get_fast_image_processing_content_header(content: str) -> str:
     Get the header of the slow image processor file.
     """
     # get all the commented lines at the beginning of the file
-    content_header = re.search(r"^# coding=utf-8\n(#[^\n]*\n)*", content, re.MULTILINE)
-    if not content_header:
+    content_header_match = _HEADER_PATTERN.search(content)
+    if not content_header_match:
         logger.warning("Couldn't find the content header in the slow image processor file. Using a default header.")
         return (
             f"# coding=utf-8\n"
@@ -366,11 +373,11 @@ def get_fast_image_processing_content_header(content: str) -> str:
             f"# limitations under the License.\n"
             f"\n"
         )
-    content_header = content_header.group(0)
+    content_header = content_header_match.group(0)
     # replace the year in the copyright
-    content_header = re.sub(r"# Copyright (\d+)\s", f"# Copyright {CURRENT_YEAR} ", content_header)
+    content_header = _COPYRIGHT_PATTERN.sub(f"# Copyright {CURRENT_YEAR} ", content_header)
     # get the line starting with """Image processor in content if it exists
-    match = re.search(r'^"""Image processor.*$', content, re.MULTILINE)
+    match = _IMAGE_PROCESSOR_PATTERN.search(content)
     if match:
         content_header += match.group(0).replace("Image processor", "Fast Image processor")
 
