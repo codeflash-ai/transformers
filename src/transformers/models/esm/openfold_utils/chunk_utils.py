@@ -355,19 +355,20 @@ class ChunkSizeTuner:
         return candidates[min_viable_chunk_size_index]
 
     def _compare_arg_caches(self, ac1: Iterable, ac2: Iterable) -> bool:
-        consistent = True
         for a1, a2 in zip(ac1, ac2):
             assert type(ac1) is type(ac2)
             if isinstance(ac1, (list, tuple)):
-                consistent &= self._compare_arg_caches(a1, a2)
+                if not self._compare_arg_caches(a1, a2):
+                    return False
             elif isinstance(ac1, dict):
                 a1_items = [v for _, v in sorted(a1.items(), key=lambda x: x[0])]
                 a2_items = [v for _, v in sorted(a2.items(), key=lambda x: x[0])]
-                consistent &= self._compare_arg_caches(a1_items, a2_items)
+                if not self._compare_arg_caches(a1_items, a2_items):
+                    return False
             else:
-                consistent &= a1 == a2
-
-        return consistent
+                if a1 != a2:
+                    return False
+        return True
 
     def tune_chunk_size(
         self,
