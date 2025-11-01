@@ -161,11 +161,10 @@ class DacVectorQuantize(nn.Module):
         encodings = F.normalize(encodings)
         codebook = F.normalize(codebook)
 
-        # Compute euclidean distance with codebook
-        l2_norm = encodings.pow(2).sum(1, keepdim=True)
-        dist = -(l2_norm - 2 * encodings @ codebook.t()) + codebook.pow(2).sum(1, keepdim=True).t()
+        # Compute cosine similarity with codebook
+        similarity = encodings @ codebook.t()
 
-        indices = dist.max(1)[1]
+        indices = similarity.max(1)[1]
         indices = indices.reshape(hidden_states.size(0), -1)
         quantized_representation = self.codebook(indices).transpose(1, 2)
         return quantized_representation, indices
