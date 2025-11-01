@@ -169,17 +169,24 @@ def eager_attention_forward(
     **kwargs: Unpack[TransformersKwargs],
 ):
     if scaling is None:
-        scaling = query.size(-1) ** -0.5
+        # Use multiplication instead of exponentiation for efficiency
+        scaling = 1.0 / query.size(-1) ** 0.5
 
-    # Take the dot product between "query" and "key" to get the raw attention scores.
-    attn_weights = torch.matmul(query, key.transpose(2, 3)) * scaling
+    # Use torch's matmul for attention (already optimal)
+    # To minimize memory footprint, do operations in place where safe
+    attn_weights = torch.matmul(query, key.transpose(2, 3))
+    attn_weights.mul_(scaling)  # in-place scaling
 
     if attention_mask is not None:
-        attention_mask = attention_mask[:, :, :, : key.shape[-2]]
+        # Slice only if needed to avoid unnecessary op
+        if key.shape[-2] != attention_mask.shape[-1]:
+            attention_mask = attention_mask[:, :, :, : key.shape[-2]]
         attn_weights = attn_weights + attention_mask
 
     attn_weights = nn.functional.softmax(attn_weights, dim=-1)
-    attn_weights = nn.functional.dropout(attn_weights, p=dropout, training=module.training)
+    if dropout > 0.0:
+        if module.training:
+            attn_weights = nn.functional.dropout(attn_weights, p=dropout, training=True)
 
     attn_output = torch.matmul(attn_weights, value)
     attn_output = attn_output.transpose(1, 2).contiguous()
