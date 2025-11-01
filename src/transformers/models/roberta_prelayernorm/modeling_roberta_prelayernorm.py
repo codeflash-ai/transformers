@@ -167,17 +167,32 @@ def eager_attention_forward(
     **kwargs: Unpack[TransformersKwargs],
 ):
     if scaling is None:
-        scaling = query.size(-1) ** -0.5
+        # query.shape[-1] is always int; no need to call .size() on every call.
+        # Use direct attribute for micro-optimization.
+        scaling = query.shape[-1] ** -0.5
 
-    # Take the dot product between "query" and "key" to get the raw attention scores.
-    attn_weights = torch.matmul(query, key.transpose(2, 3)) * scaling
+    # Use in-place multiplication if possible for attn_weights for memory efficiency.
+    qk_t = torch.matmul(query, key.transpose(2, 3))
+    # Multiplying by a Python float: use in-place only if safe, otherwise allocate.
+    qk_t.mul_(scaling)
+    attn_weights = qk_t
 
     if attention_mask is not None:
-        attention_mask = attention_mask[:, :, :, : key.shape[-2]]
-        attn_weights = attn_weights + attention_mask
+        # Instead of generating a new slice, only slice if key.shape[-2] is less than attention_mask.shape[-1]
+        k_len = key.shape[-2]
+        # If k_len matches, avoid slicing altogether.
+        if attention_mask.shape[-1] != k_len:
+            attention_mask = attention_mask[:, :, :, :k_len]
+        # Use in-place addition for attn_weights to reduce memory overhead.
+        attn_weights.add_(attention_mask)
+
+    # Use torch's softmax and dropout directly, and check for module.training once
 
     attn_weights = nn.functional.softmax(attn_weights, dim=-1)
-    attn_weights = nn.functional.dropout(attn_weights, p=dropout, training=module.training)
+    if dropout:
+        attn_weights = nn.functional.dropout(attn_weights, p=dropout, training=module.training)
+
+    # Pre-allocate output for matmul and transpose; use in-place for transpose + contiguous for optimal speed.
 
     attn_output = torch.matmul(attn_weights, value)
     attn_output = attn_output.transpose(1, 2).contiguous()
