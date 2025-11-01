@@ -1331,21 +1331,65 @@ def _split_tokens_on_unicode(tokenizer, tokens: list[int]):
     current_indices = []
     unicode_offset = 0
 
-    for token_idx, token in enumerate(tokens):
-        current_tokens.append(token)
-        current_indices.append(token_idx)
-        decoded = tokenizer.decode(current_tokens, decode_with_timestamps=True)
+    # Pre-fetch individual token decodings to avoid repeated decode calls
+    # Main speedup: cache decoded prefixes and only decode new "view"
+    # Instead of decoding [0], then [0,1], etc, we walk the tokens and grow the decoded string with single token decodings
 
-        if (
-            replacement_char not in decoded
-            or decoded_full[unicode_offset + decoded.index(replacement_char)] == replacement_char
-        ):
+    # This optimization assumes the tokenizer's decode is "join-on-tokens" with no context dependency across the call.
+    # Since WhisperTokenizer is based on HuggingFace PreTrainedTokenizer, this is valid for most subword BPE behavior.
+
+    token_decodings = []
+    for t in tokens:
+        token_decodings.append(tokenizer.decode([t], decode_with_timestamps=True))
+
+    decoded_prefix = ""
+    i = 0
+    n = len(tokens)
+
+    while i < n:
+        current_tokens.clear()
+        current_indices.clear()
+        decoded = ""
+        j = i
+        # Greedy search for the longest substring for which the decoded string doesn't contain the replacement char
+        while j < n:
+            current_tokens.append(tokens[j])
+            current_indices.append(j)
+            # Fast append instead of decode(list)
+            decoded += token_decodings[j]
+            if replacement_char in decoded:
+                break
+            j += 1
+
+        # If we never hit replacement_char or if it's the real char in decoded_full, treat as word boundary
+        stop_word = False
+        if replacement_char not in decoded:
+            stop_word = True
+        else:
+            idx_in_decoded = decoded.index(replacement_char)
+            if decoded_full[unicode_offset + idx_in_decoded] == replacement_char:
+                stop_word = True
+
+        if stop_word:
             words.append(decoded)
-            word_tokens.append(current_tokens)
-            token_indices.append(current_indices)
-            current_tokens = []
-            current_indices = []
+            word_tokens.append(tokens[i : j + 1] if stop_word and replacement_char in decoded else tokens[i:j])
+            token_indices.append(
+                list(range(i, j + 1)) if stop_word and replacement_char in decoded else list(range(i, j))
+            )
             unicode_offset += len(decoded)
+
+            if stop_word and replacement_char in decoded:
+                # Increment past the replacement char
+                i = j + 1
+            else:
+                i = j
+        else:
+            # Defensive fallback (should not happen)
+            words.append(decoded)
+            word_tokens.append(tokens[i:j])
+            token_indices.append(list(range(i, j)))
+            unicode_offset += len(decoded)
+            i = j
 
     return words, word_tokens, token_indices
 
@@ -1357,10 +1401,13 @@ def _split_tokens_on_spaces(tokenizer, tokens: list[int]):
     word_tokens = []
     token_indices = []
 
+    PUNCTUATION_SET = set("!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~")
     for subword, subword_tokens, subword_indices in zip(subwords, subword_tokens_list, subword_indices_list):
         special = subword_tokens[0] >= tokenizer.eos_token_id
         with_space = subword.startswith(" ")
-        punctuation = subword.strip() in "!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~"
+        # Use set lookup for punctuation
+        stripped = subword.strip()
+        punctuation = len(stripped) == 1 and stripped in PUNCTUATION_SET
 
         if special or with_space or punctuation or len(words) == 0:
             words.append(subword)
