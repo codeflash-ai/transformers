@@ -48,10 +48,13 @@ class DebertaV2SelfOutput(nn.Module):
         self.dropout = nn.Dropout(config.hidden_dropout_prob)
 
     def forward(self, hidden_states, input_tensor):
-        hidden_states = self.dense(hidden_states)
-        hidden_states = self.dropout(hidden_states)
-        hidden_states = self.LayerNorm(hidden_states + input_tensor)
-        return hidden_states
+        # Fused operations to reduce memory usage and speed up computation
+        out = self.dense(hidden_states)
+        out = self.dropout(out)
+        # Use in-place addition to avoid creating extra temporary tensors.
+        out += input_tensor
+        out = self.LayerNorm(out)
+        return out
 
 
 @torch.jit.script
