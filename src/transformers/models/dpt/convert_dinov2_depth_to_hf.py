@@ -113,45 +113,67 @@ def create_rename_keys_dpt(config):
 
 # here we list all backbone keys to be renamed (original name on the left, our name on the right)
 def create_rename_keys_backbone(config):
-    rename_keys = []
+    # Use local variable aliasing to avoid repeated attribute lookups
+    backbone_config = config.backbone_config
+    num_hidden_layers = backbone_config.num_hidden_layers
+    use_swiglu_ffn = backbone_config.use_swiglu_ffn
 
-    # fmt: off
-    # patch embedding layer
-    rename_keys.append(("cls_token", "backbone.embeddings.cls_token"))
-    rename_keys.append(("mask_token", "backbone.embeddings.mask_token"))
-    rename_keys.append(("pos_embed", "backbone.embeddings.position_embeddings"))
-    rename_keys.append(("patch_embed.proj.weight", "backbone.embeddings.patch_embeddings.projection.weight"))
-    rename_keys.append(("patch_embed.proj.bias", "backbone.embeddings.patch_embeddings.projection.bias"))
+    # Preallocate expected list size for faster list operations
+    static_keys = [
+        ("cls_token", "backbone.embeddings.cls_token"),
+        ("mask_token", "backbone.embeddings.mask_token"),
+        ("pos_embed", "backbone.embeddings.position_embeddings"),
+        ("patch_embed.proj.weight", "backbone.embeddings.patch_embeddings.projection.weight"),
+        ("patch_embed.proj.bias", "backbone.embeddings.patch_embeddings.projection.bias"),
+    ]
+    dynamic_keys = []
+    # Estimate number of renames (23 per layer, statically, from profile)
+    # We accumulate in dynamic_keys for bulk extension
 
-    # Transformer encoder
-    for i in range(config.backbone_config.num_hidden_layers):
+    # Transformer encoder (per-layer)
+    for i in range(num_hidden_layers):
         # layernorms
-        rename_keys.append((f"blocks.{i}.norm1.weight", f"backbone.encoder.layer.{i}.norm1.weight"))
-        rename_keys.append((f"blocks.{i}.norm1.bias", f"backbone.encoder.layer.{i}.norm1.bias"))
-        rename_keys.append((f"blocks.{i}.norm2.weight", f"backbone.encoder.layer.{i}.norm2.weight"))
-        rename_keys.append((f"blocks.{i}.norm2.bias", f"backbone.encoder.layer.{i}.norm2.bias"))
+        pre = f"blocks.{i}"
+        post = f"backbone.encoder.layer.{i}"
+        dynamic_keys.extend([
+            (f"{pre}.norm1.weight", f"{post}.norm1.weight"),
+            (f"{pre}.norm1.bias", f"{post}.norm1.bias"),
+            (f"{pre}.norm2.weight", f"{post}.norm2.weight"),
+            (f"{pre}.norm2.bias", f"{post}.norm2.bias"),
+        ])
         # MLP
-        if config.backbone_config.use_swiglu_ffn:
-            rename_keys.append((f"blocks.{i}.mlp.w12.weight", f"backbone.encoder.layer.{i}.mlp.w12.weight"))
-            rename_keys.append((f"blocks.{i}.mlp.w12.bias", f"backbone.encoder.layer.{i}.mlp.w12.bias"))
-            rename_keys.append((f"blocks.{i}.mlp.w3.weight", f"backbone.encoder.layer.{i}.mlp.w3.weight"))
-            rename_keys.append((f"blocks.{i}.mlp.w3.bias", f"backbone.encoder.layer.{i}.mlp.w3.bias"))
+        if use_swiglu_ffn:
+            dynamic_keys.extend([
+                (f"{pre}.mlp.w12.weight", f"{post}.mlp.w12.weight"),
+                (f"{pre}.mlp.w12.bias", f"{post}.mlp.w12.bias"),
+                (f"{pre}.mlp.w3.weight", f"{post}.mlp.w3.weight"),
+                (f"{pre}.mlp.w3.bias", f"{post}.mlp.w3.bias"),
+            ])
         else:
-            rename_keys.append((f"blocks.{i}.mlp.fc1.weight", f"backbone.encoder.layer.{i}.mlp.fc1.weight"))
-            rename_keys.append((f"blocks.{i}.mlp.fc1.bias", f"backbone.encoder.layer.{i}.mlp.fc1.bias"))
-            rename_keys.append((f"blocks.{i}.mlp.fc2.weight", f"backbone.encoder.layer.{i}.mlp.fc2.weight"))
-            rename_keys.append((f"blocks.{i}.mlp.fc2.bias", f"backbone.encoder.layer.{i}.mlp.fc2.bias"))
+            dynamic_keys.extend([
+                (f"{pre}.mlp.fc1.weight", f"{post}.mlp.fc1.weight"),
+                (f"{pre}.mlp.fc1.bias", f"{post}.mlp.fc1.bias"),
+                (f"{pre}.mlp.fc2.weight", f"{post}.mlp.fc2.weight"),
+                (f"{pre}.mlp.fc2.bias", f"{post}.mlp.fc2.bias"),
+            ])
         # layerscale
-        rename_keys.append((f"blocks.{i}.ls1.gamma", f"backbone.encoder.layer.{i}.layer_scale1.lambda1"))
-        rename_keys.append((f"blocks.{i}.ls2.gamma", f"backbone.encoder.layer.{i}.layer_scale2.lambda1"))
+        dynamic_keys.extend([
+            (f"{pre}.ls1.gamma", f"{post}.layer_scale1.lambda1"),
+            (f"{pre}.ls2.gamma", f"{post}.layer_scale2.lambda1"),
+        ])
         # attention projection layer
-        rename_keys.append((f"blocks.{i}.attn.proj.weight", f"backbone.encoder.layer.{i}.attention.output.dense.weight"))
-        rename_keys.append((f"blocks.{i}.attn.proj.bias", f"backbone.encoder.layer.{i}.attention.output.dense.bias"))
-    # fmt: on
+        dynamic_keys.extend([
+            (f"{pre}.attn.proj.weight", f"{post}.attention.output.dense.weight"),
+            (f"{pre}.attn.proj.bias", f"{post}.attention.output.dense.bias"),
+        ])
 
-    rename_keys.append(("norm.weight", "backbone.layernorm.weight"))
-    rename_keys.append(("norm.bias", "backbone.layernorm.bias"))
+    static_keys.extend([
+        ("norm.weight", "backbone.layernorm.weight"),
+        ("norm.bias", "backbone.layernorm.bias"),
+    ])
 
+    # Combine static and dynamic keys in one allocation and return
+    rename_keys = static_keys + dynamic_keys
     return rename_keys
 
 
