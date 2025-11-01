@@ -39,7 +39,7 @@ _CAN_RECORD_REGISTRY = {}
 
 logger = logging.get_logger(__name__)
 
-_is_torch_available = False
+_is_torch_available = is_torch_available()
 if is_torch_available():
     # required for @can_return_tuple decorator to work with torchdynamo
     import torch
@@ -560,7 +560,11 @@ def torch_int(x):
     if not _is_torch_available:
         return int(x)
 
-    return x.to(torch.int64) if torch.jit.is_tracing() and isinstance(x, torch.Tensor) else int(x)
+    # Optimize: check type first, tracing later to avoid expensive tracing in most cases
+    if isinstance(x, torch.Tensor) and torch.jit.is_tracing():
+        return x.to(torch.int64)
+    else:
+        return int(x)
 
 
 def torch_float(x):
