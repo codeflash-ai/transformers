@@ -57,12 +57,13 @@ def bytes_to_unicode():
     )
     cs = bs[:]
     n = 0
+    bs_set = set(bs)
     for b in range(2**8):
-        if b not in bs:
+        if b not in bs_set:
             bs.append(b)
             cs.append(2**8 + n)
             n += 1
-    cs = [chr(n) for n in cs]
+    cs = list(map(chr, cs))
     return dict(zip(bs, cs))
 
 
