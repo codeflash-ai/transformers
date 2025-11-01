@@ -135,8 +135,10 @@ class RobertaPreLayerNormEmbeddings(nn.Module):
 
         position_ids = torch.arange(
             padding_idx + 1, sequence_length + padding_idx + 1, dtype=torch.long, device=inputs_embeds.device
-        )
-        return position_ids.unsqueeze(0).expand(input_shape)
+        ).unsqueeze(0)
+        if input_shape[0] == 1:
+            return position_ids
+        return position_ids.expand(input_shape)
 
     @staticmethod
     def create_position_ids_from_input_ids(input_ids, padding_idx, past_key_values_length=0):
