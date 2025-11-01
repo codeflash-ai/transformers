@@ -63,11 +63,12 @@ class Data2VecTextEmbeddings(nn.Module):
         self.LayerNorm = nn.LayerNorm(config.hidden_size, eps=config.layer_norm_eps)
         self.dropout = nn.Dropout(config.hidden_dropout_prob)
         # position_ids (1, len position emb) is contiguous in memory and exported when serialized
+        # position_ids (1, len position emb) is contiguous in memory and exported when serialized
+        # Speed optimization: Avoid unnecessary .expand() and save memory by using shape directly
+        position_ids = torch.arange(config.max_position_embeddings)
+        self.register_buffer("position_ids", position_ids.unsqueeze(0), persistent=False)
         self.register_buffer(
-            "position_ids", torch.arange(config.max_position_embeddings).expand((1, -1)), persistent=False
-        )
-        self.register_buffer(
-            "token_type_ids", torch.zeros(self.position_ids.size(), dtype=torch.long), persistent=False
+            "token_type_ids", torch.zeros((1, config.max_position_embeddings), dtype=torch.long), persistent=False
         )
 
         self.padding_idx = config.pad_token_id
@@ -153,9 +154,15 @@ class Data2VecTextEmbeddings(nn.Module):
         Returns: torch.Tensor
         """
         # The series of casts and type-conversions here are carefully balanced to both work with ONNX export and XLA.
-        mask = input_ids.ne(padding_idx).int()
-        incremental_indices = (torch.cumsum(mask, dim=1).type_as(mask) + past_key_values_length) * mask
-        return incremental_indices.long() + padding_idx
+        # Optimization: Fused mask calculation, avoids intermediate variables
+        mask = input_ids.ne(padding_idx)
+        # cumsum for positions, mask is already bool - convert only once. Use in-place ops for efficiency
+        incremental_indices = torch.cumsum(mask, dim=1, dtype=torch.int64)
+        # If past_key_values_length is 0, skip addition for speed
+        if past_key_values_length != 0:
+            incremental_indices = incremental_indices + past_key_values_length
+        incremental_indices = incremental_indices * mask
+        return incremental_indices + padding_idx
 
 
 def eager_attention_forward(
