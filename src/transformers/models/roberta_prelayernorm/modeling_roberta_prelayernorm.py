@@ -61,7 +61,9 @@ class RobertaPreLayerNormEmbeddings(nn.Module):
         self.dropout = nn.Dropout(config.hidden_dropout_prob)
         # position_ids (1, len position emb) is contiguous in memory and exported when serialized
         self.register_buffer(
-            "position_ids", torch.arange(config.max_position_embeddings).expand((1, -1)), persistent=False
+            "position_ids",
+            torch.arange(config.max_position_embeddings, dtype=torch.long).expand((1, -1)),
+            persistent=False,
         )
         self.register_buffer(
             "token_type_ids", torch.zeros(self.position_ids.size(), dtype=torch.long), persistent=False
@@ -150,9 +152,15 @@ class RobertaPreLayerNormEmbeddings(nn.Module):
         Returns: torch.Tensor
         """
         # The series of casts and type-conversions here are carefully balanced to both work with ONNX export and XLA.
-        mask = input_ids.ne(padding_idx).int()
-        incremental_indices = (torch.cumsum(mask, dim=1).type_as(mask) + past_key_values_length) * mask
-        return incremental_indices.long() + padding_idx
+        # OPTIMIZATION: avoid redundant .type_as(mask), generate mask directly as long and avoid extra copy
+        # - mask: 1 where not padding, 0 where padding
+        # - cumulative index: increases for each real token (not padding)
+        # - result: zero at paddings, (index+1+padding_idx) for real tokens
+        mask = input_ids.ne(padding_idx)
+        # cast mask to long just once for use in cumsum and multiplication
+        mask_long = mask.long()
+        incremental_indices = (torch.cumsum(mask_long, dim=1) + past_key_values_length) * mask_long
+        return incremental_indices + padding_idx
 
 
 # Copied from transformers.models.bert.modeling_bert.eager_attention_forward
