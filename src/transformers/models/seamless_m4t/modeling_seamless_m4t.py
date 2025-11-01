@@ -177,10 +177,10 @@ def format_speech_generation_kwargs(kwargs):
     kwargs_speech = {}
     for key, value in kwargs.items():
         if key.startswith("text_"):
-            key = key[len("text_") :]
+            key = key[5:]
             kwargs_text[key] = value
         elif key.startswith("speech_"):
-            key = key[len("speech_") :]
+            key = key[7:]
             kwargs_speech[key] = value
         elif key == "generation_config":
             kwargs_text[key] = value
