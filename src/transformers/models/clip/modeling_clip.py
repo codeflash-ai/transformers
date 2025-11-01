@@ -134,7 +134,7 @@ class CLIPOutput(ModelOutput):
 
     def to_tuple(self) -> tuple[Any]:
         return tuple(
-            self[k] if k not in ["text_model_output", "vision_model_output"] else getattr(self, k).to_tuple()
+            getattr(self, k).to_tuple() if k in {"text_model_output", "vision_model_output"} else getattr(self, k)
             for k in self.keys()
         )
 
