@@ -40,18 +40,24 @@ from ...utils.generic import check_model_inputs
 from .configuration_clip import CLIPConfig, CLIPTextConfig, CLIPVisionConfig
 
 
+_cross_entropy = nn.functional.cross_entropy
+
+
 logger = logging.get_logger(__name__)
 
 
 # contrastive loss function, adapted from
 # https://sachinruk.github.io/blog/2021-03-07-clip.html
 def contrastive_loss(logits: torch.Tensor) -> torch.Tensor:
-    return nn.functional.cross_entropy(logits, torch.arange(len(logits), device=logits.device))
+    # Avoid re-computing torch.arange and always create on the correct device
+    # Preallocate target if possible to avoid frequent allocation
+    target = torch.arange(logits.size(0), device=logits.device)
+    return _cross_entropy(logits, target)
 
 
 def clip_loss(similarity: torch.Tensor) -> torch.Tensor:
     caption_loss = contrastive_loss(similarity)
-    image_loss = contrastive_loss(similarity.t())
+    image_loss = contrastive_loss(similarity.transpose(0, 1))
     return (caption_loss + image_loss) / 2.0
 
 
