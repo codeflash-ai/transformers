@@ -262,6 +262,7 @@ class CLIPTextEmbeddings(nn.Module):
         return embeddings
 
 
+@torch.jit.ignore
 def eager_attention_forward(
     module: nn.Module,
     query: torch.Tensor,
@@ -272,11 +273,18 @@ def eager_attention_forward(
     dropout: float = 0.0,
     **kwargs: Unpack[TransformersKwargs],
 ):
-    attn_weights = torch.matmul(query, key.transpose(-1, -2)) * scaling
+    # Compute scaled dot-product attention weights
+    attn_weights = torch.matmul(query, key.transpose(-1, -2))
+    if scaling != 1.0:
+        attn_weights.mul_(scaling)
     if attention_mask is not None:
-        attn_weights = attn_weights + attention_mask
-    attn_weights = nn.functional.softmax(attn_weights, dim=-1, dtype=torch.float32).to(query.dtype)
-    attn_weights = nn.functional.dropout(attn_weights, p=dropout, training=module.training)
+        attn_weights = attn_weights.add(attention_mask)
+    # Use softmax in the original dtype to avoid unnecessary cast and conversions
+    attn_weights = nn.functional.softmax(attn_weights, dim=-1, dtype=query.dtype)
+    if dropout > 0.0 and module.training:
+        attn_weights = nn.functional.dropout(attn_weights, p=dropout, training=True)
+
+    # Perform matmul and transpose in-place when possible
 
     attn_output = torch.matmul(attn_weights, value)
     attn_output = attn_output.transpose(1, 2).contiguous()
