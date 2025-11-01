@@ -385,10 +385,10 @@ def prepare_img():
 
 
 def preprocess_caption(caption: str) -> str:
-    result = caption.lower().strip()
-    if result.endswith("."):
-        return result
-    return result + "."
+    caption = caption.lower().strip()
+    if caption and caption[-1] == ".":
+        return caption
+    return f"{caption}."
 
 
 @torch.no_grad()
