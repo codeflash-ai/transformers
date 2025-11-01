@@ -144,13 +144,15 @@ def _compute_new_attention_mask(hidden_states: torch.Tensor, seq_lens: torch.Ten
     """
     batch_size, mask_seq_len = hidden_states.shape[:2]
 
-    indices = torch.arange(mask_seq_len, device=seq_lens.device).expand(batch_size, -1)
-
-    bool_mask = indices >= seq_lens.unsqueeze(1).expand(-1, mask_seq_len)
-
     mask = hidden_states.new_ones((batch_size, mask_seq_len))
 
-    mask = mask.masked_fill(bool_mask, 0)
+    # Compute the indices for masking in a memory-efficient way
+    # Avoid .expand by relying on broadcasting for comparison
+    indices = torch.arange(mask_seq_len, device=seq_lens.device)
+    bool_mask = indices.unsqueeze(0) >= seq_lens.unsqueeze(1)
+
+    # Use masking in-place for speed/memory
+    mask.masked_fill_(bool_mask, 0)
 
     return mask
 
