@@ -324,13 +324,17 @@ class ChunkSizeTuner:
         self.cached_arg_data: Optional[tuple] = None
 
     def _determine_favorable_chunk_size(self, fn: Callable, args: tuple, min_chunk_size: int) -> int:
-        logging.info("Tuning chunk size...")
-
         if min_chunk_size >= self.max_chunk_size:
             return min_chunk_size
 
-        candidates: list[int] = [2**l for l in range(int(math.log2(self.max_chunk_size)) + 1)]
-        candidates = [c for c in candidates if c > min_chunk_size]
+        # Precompute candidates using bit-shifting for efficiency
+        candidates: list[int] = []
+        l_max = int(math.log2(self.max_chunk_size)) + 1
+        pow2_val = 1
+        for _ in range(l_max):
+            if pow2_val > min_chunk_size:
+                candidates.append(pow2_val)
+            pow2_val <<= 1
         candidates = [min_chunk_size] + candidates
         candidates[-1] += 4
 
@@ -351,6 +355,9 @@ class ChunkSizeTuner:
             else:
                 min_viable_chunk_size_index = i
                 i = (i + len(candidates) - 1) // 2
+
+        # Only log after tuning is fully complete, for functional equivalence and reduced noise
+        logging.info("Tuning chunk size...")
 
         return candidates[min_viable_chunk_size_index]
 
