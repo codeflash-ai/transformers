@@ -40,13 +40,24 @@ from ...utils.generic import check_model_inputs
 from .configuration_clip import CLIPConfig, CLIPTextConfig, CLIPVisionConfig
 
 
+_CONTRASTIVE_LABELS_CACHE = {}
+
+
 logger = logging.get_logger(__name__)
 
 
 # contrastive loss function, adapted from
 # https://sachinruk.github.io/blog/2021-03-07-clip.html
 def contrastive_loss(logits: torch.Tensor) -> torch.Tensor:
-    return nn.functional.cross_entropy(logits, torch.arange(len(logits), device=logits.device))
+    batch_size = logits.size(0)
+    device = logits.device
+    key = (batch_size, device)
+
+    labels = _CONTRASTIVE_LABELS_CACHE.get(key)
+    if labels is None:
+        labels = torch.arange(batch_size, device=device)
+        _CONTRASTIVE_LABELS_CACHE[key] = labels
+    return nn.functional.cross_entropy(logits, labels)
 
 
 def clip_loss(similarity: torch.Tensor) -> torch.Tensor:
