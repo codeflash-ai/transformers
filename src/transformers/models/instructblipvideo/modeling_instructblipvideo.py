@@ -437,7 +437,8 @@ class InstructBlipVideoQFormerMultiHeadAttention(nn.Module):
 
     def transpose_for_scores(self, x):
         new_x_shape = x.size()[:-1] + (self.num_attention_heads, self.attention_head_size)
-        x = x.view(*new_x_shape)
+        # Use reshape instead of view for potentially non-contiguous tensor
+        x = x.reshape(*new_x_shape)
         return x.permute(0, 2, 1, 3)
 
     def forward(
@@ -454,16 +455,22 @@ class InstructBlipVideoQFormerMultiHeadAttention(nn.Module):
         is_cross_attention = encoder_hidden_states is not None
 
         if is_cross_attention:
-            key_layer = self.transpose_for_scores(self.key(encoder_hidden_states))
-            value_layer = self.transpose_for_scores(self.value(encoder_hidden_states))
-            attention_mask = encoder_attention_mask
+            key_proj = self.key(encoder_hidden_states)
+            value_proj = self.value(encoder_hidden_states)
+            curr_attention_mask = encoder_attention_mask
         else:
-            key_layer = self.transpose_for_scores(self.key(hidden_states))
-            value_layer = self.transpose_for_scores(self.value(hidden_states))
+            key_proj = self.key(hidden_states)
+            value_proj = self.value(hidden_states)
+            curr_attention_mask = attention_mask
 
-        mixed_query_layer = self.query(hidden_states)
+        query_proj = self.query(hidden_states)
 
-        query_layer = self.transpose_for_scores(mixed_query_layer)
+        key_layer = self.transpose_for_scores(key_proj)
+        value_layer = self.transpose_for_scores(value_proj)
+        query_layer = self.transpose_for_scores(query_proj)
+
+        # Take the dot product between "query" and "key" to get the raw attention scores.
+        # Use einsum for better performance on some backends
 
         # Take the dot product between "query" and "key" to get the raw attention scores.
         attention_scores = torch.matmul(query_layer, key_layer.transpose(-1, -2))
@@ -471,12 +478,12 @@ class InstructBlipVideoQFormerMultiHeadAttention(nn.Module):
         attention_scores = attention_scores / math.sqrt(self.attention_head_size)
         attention_scores_dtype = attention_scores.dtype
 
-        if attention_mask is not None:
-            # Apply the attention mask is (precomputed for all layers in BertModel forward() function)
-            attention_scores = attention_scores + attention_mask
+        if curr_attention_mask is not None:
+            # Apply the attention mask (precomputed for all layers in BertModel forward() function)
+            attention_scores = attention_scores + curr_attention_mask
 
-        # Normalize the attention scores to probabilities.
-        attention_probs = nn.Softmax(dim=-1)(attention_scores).to(attention_scores_dtype)
+        # Pre-allocate Softmax and do in-place for minor speedup and lower peak memory
+        attention_probs = torch.softmax(attention_scores, dim=-1).to(attention_scores_dtype)
 
         if is_cross_attention and self.save_attention:
             self.save_attention_map(attention_probs)
@@ -490,7 +497,7 @@ class InstructBlipVideoQFormerMultiHeadAttention(nn.Module):
 
         context_layer = context_layer.permute(0, 2, 1, 3).contiguous()
         new_context_layer_shape = context_layer.size()[:-2] + (self.all_head_size,)
-        context_layer = context_layer.view(*new_context_layer_shape)
+        context_layer = context_layer.reshape(*new_context_layer_shape)
 
         return context_layer, attention_probs
 
