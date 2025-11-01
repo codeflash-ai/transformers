@@ -16,7 +16,6 @@
 https://github.com/facebookresearch/dinov2/tree/main"""
 
 import argparse
-import itertools
 import math
 from pathlib import Path
 
@@ -213,7 +212,8 @@ def get_original_pixel_values(image):
             return pad_size_left, pad_size_right
 
         def __call__(self, img):
-            pads = list(itertools.chain.from_iterable(self._get_pad(m) for m in img.shape[-2:][::-1]))
+            # Avoids creating and iterating temporary lists with a tight for loop
+            pads = [pad for m in img.shape[-2:][::-1] for pad in self._get_pad(m)]
             output = torch.nn.functional.pad(img, pads)
             return output
 
@@ -221,14 +221,26 @@ def get_original_pixel_values(image):
             return self.__class__.__name__ + "()"
 
     def make_depth_transform() -> transforms.Compose:
+        # Precompute the mean/std arrays, avoiding tuple unpacking/computation for each call
+        _mean = torch.tensor([123.675, 116.28, 103.53])
+        _std = torch.tensor([58.395, 57.12, 57.375])
+
+        # Lambda for normalization, uses in-place math for speed and memory
+        def _normalize(x):
+            # x is CxHxW, expects 3 channels
+            x.sub_(_mean[:, None, None]).div_(_std[:, None, None])
+            return x
+
+        # Avoid lambdas and nested transformations where possible for runtime
+        def _to_tensor_and_scale(x):
+            x = transforms.functional.to_tensor(x)
+            x = x[:3].mul_(255.0)  # Discard alpha and scale by 255, use inplace
+            return x
+
         return transforms.Compose(
             [
-                transforms.ToTensor(),
-                lambda x: 255.0 * x[:3],  # Discard alpha component and scale by 255
-                transforms.Normalize(
-                    mean=(123.675, 116.28, 103.53),
-                    std=(58.395, 57.12, 57.375),
-                ),
+                _to_tensor_and_scale,
+                _normalize,
                 CenterPadding(multiple=14),
             ]
         )
