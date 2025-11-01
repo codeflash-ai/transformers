@@ -228,16 +228,22 @@ def chunk_layer(
     if not (len(inputs) > 0):
         raise ValueError("Must provide at least one input")
 
-    initial_dims = [shape[:no_batch_dims] for shape in _fetch_dims(inputs)]
+    # Hoist local var
+    _fetch_dims_ref = _fetch_dims
+
+    # Precompute shapes efficiently
+    initial_dims = [shape[:no_batch_dims] for shape in _fetch_dims_ref(inputs)]
     orig_batch_dims = tuple(max(s) for s in zip(*initial_dims))
 
     def _prep_inputs(t: torch.Tensor) -> torch.Tensor:
         if not low_mem:
-            if sum(t.shape[:no_batch_dims]) != no_batch_dims:
+            needs_expand = t.shape[:no_batch_dims] != orig_batch_dims
+            if needs_expand:
                 t = t.expand(orig_batch_dims + t.shape[no_batch_dims:])
             t = t.reshape(-1, *t.shape[no_batch_dims:])
         else:
-            t = t.expand(orig_batch_dims + t.shape[no_batch_dims:])
+            if t.shape[:no_batch_dims] != orig_batch_dims:
+                t = t.expand(orig_batch_dims + t.shape[no_batch_dims:])
         return t
 
     prepped_inputs: dict[str, Any] = tensor_tree_map(_prep_inputs, inputs)
@@ -245,11 +251,13 @@ def chunk_layer(
     if _out is not None:
         prepped_outputs = tensor_tree_map(lambda t: t.view([-1] + list(t.shape[no_batch_dims:])), _out)
 
+    # Fast product computation for flat_batch_dim
+
     flat_batch_dim = 1
     for d in orig_batch_dims:
         flat_batch_dim *= d
 
-    no_chunks = flat_batch_dim // chunk_size + (flat_batch_dim % chunk_size != 0)
+    no_chunks = (flat_batch_dim + chunk_size - 1) // chunk_size
 
     def _select_chunk(t: torch.Tensor) -> torch.Tensor:
         return t[i : i + chunk_size] if t.shape[0] != 1 else t
@@ -275,20 +283,26 @@ def chunk_layer(
 
         # Allocate space for the output
         if out is None:
+            # Perf: Only allocate the output structure on first run
             out = tensor_tree_map(lambda t: t.new_zeros((flat_batch_dim,) + t.shape[1:]), output_chunk)
+
+        # Put the chunk in its pre-allocated space
 
         # Put the chunk in its pre-allocated space
         if isinstance(output_chunk, dict):
 
             def assign(d1: dict, d2: dict) -> None:
-                for k, v in d1.items():
-                    if isinstance(v, dict):
-                        assign(v, d2[k])
-                    else:
-                        if _add_into_out:
-                            v[i : i + chunk_size] += d2[k]
+                stack = [(d1, d2)]
+                while stack:
+                    curr_d1, curr_d2 = stack.pop()
+                    for k, v in curr_d1.items():
+                        if isinstance(v, dict):
+                            stack.append((v, curr_d2[k]))
                         else:
-                            v[i : i + chunk_size] = d2[k]
+                            if _add_into_out:
+                                v[i : i + chunk_size] += curr_d2[k]
+                            else:
+                                v[i : i + chunk_size] = curr_d2[k]
 
             assign(out, output_chunk)
         elif isinstance(output_chunk, tuple):
@@ -307,6 +321,7 @@ def chunk_layer(
 
         i += chunk_size
 
+    # Postprocess output, ensure contiguous shape
     out = tensor_tree_map(lambda t: t.view(orig_batch_dims + t.shape[1:]), out)
 
     return out
