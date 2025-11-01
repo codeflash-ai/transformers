@@ -173,22 +173,24 @@ class CLIPVisionEmbeddings(nn.Module):
         """
 
         num_patches = embeddings.shape[1] - 1
-        position_embedding = self.position_embedding.weight.unsqueeze(0)
-        num_positions = position_embedding.shape[1] - 1
-
-        # always interpolate when tracing to ensure the exported model works for dynamic input shapes
-        if not torch.jit.is_tracing() and num_patches == num_positions and height == width:
+        # Only perform unsqueeze if interpolation might occur
+        if not torch.jit.is_tracing() and num_patches == self.num_positions - 1 and height == width:
             return self.position_embedding(self.position_ids)
 
-        class_pos_embed = position_embedding[:, :1]
-        patch_pos_embed = position_embedding[:, 1:]
+        # proceed with interpolation
+        position_embedding = self.position_embedding.weight
+        class_pos_embed = position_embedding[:1].unsqueeze(0)
+        patch_pos_embed = position_embedding[1:].unsqueeze(0)
 
         dim = embeddings.shape[-1]
 
-        new_height = height // self.patch_size
-        new_width = width // self.patch_size
+        patch_size = self.patch_size  # Avoid repeated attribute lookups
+        new_height = height // patch_size
+        new_width = width // patch_size
 
-        sqrt_num_positions = torch_int(num_positions**0.5)
+        sqrt_num_positions = torch_int((self.num_positions - 1) ** 0.5)
+
+        # Efficient shape manipulation
         patch_pos_embed = patch_pos_embed.reshape(1, sqrt_num_positions, sqrt_num_positions, dim)
         patch_pos_embed = patch_pos_embed.permute(0, 3, 1, 2)
 
@@ -199,7 +201,8 @@ class CLIPVisionEmbeddings(nn.Module):
             align_corners=False,
         )
 
-        patch_pos_embed = patch_pos_embed.permute(0, 2, 3, 1).view(1, -1, dim)
+        patch_pos_embed = patch_pos_embed.permute(0, 2, 3, 1).reshape(1, -1, dim)
+        # Note: Updated 'view' to 'reshape' for guaranteed contiguous output
 
         return torch.cat((class_pos_embed, patch_pos_embed), dim=1)
 
