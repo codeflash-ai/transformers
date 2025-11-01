@@ -69,64 +69,66 @@ def get_grounding_dino_config(model_name):
 
 def create_rename_keys(state_dict, config):
     rename_keys = []
+    append = rename_keys.append
+
     # fmt: off
     ########################################## VISION BACKBONE - START
     # patch embedding layer
-    rename_keys.append(("backbone.0.patch_embed.proj.weight",
-                        "model.backbone.conv_encoder.model.embeddings.patch_embeddings.projection.weight"))
-    rename_keys.append(("backbone.0.patch_embed.proj.bias",
-                        "model.backbone.conv_encoder.model.embeddings.patch_embeddings.projection.bias"))
-    rename_keys.append(("backbone.0.patch_embed.norm.weight",
-                        "model.backbone.conv_encoder.model.embeddings.norm.weight"))
-    rename_keys.append(("backbone.0.patch_embed.norm.bias",
-                        "model.backbone.conv_encoder.model.embeddings.norm.bias"))
+    append(("backbone.0.patch_embed.proj.weight",
+            "model.backbone.conv_encoder.model.embeddings.patch_embeddings.projection.weight"))
+    append(("backbone.0.patch_embed.proj.bias",
+            "model.backbone.conv_encoder.model.embeddings.patch_embeddings.projection.bias"))
+    append(("backbone.0.patch_embed.norm.weight",
+            "model.backbone.conv_encoder.model.embeddings.norm.weight"))
+    append(("backbone.0.patch_embed.norm.bias",
+            "model.backbone.conv_encoder.model.embeddings.norm.bias"))
 
-    for layer, depth in enumerate(config.backbone_config.depths):
+    depths = config.backbone_config.depths
+    encoder_layers = config.encoder_layers
+    decoder_layers = config.decoder_layers
+    out_indices = config.backbone_config.out_indices
+
+    # Cache repeated attr access
+    backbone_base = "backbone.0.layers"
+    encoder_base = "model.backbone.conv_encoder.model.encoder.layers"
+    norm_base = "backbone.0.norm"
+    hidden_norm_base = "model.backbone.conv_encoder.model.hidden_states_norms.stage"
+
+    for layer, depth in enumerate(depths):
+        # Precompute static prefixes for this layer
+        backbone_layer = f"{backbone_base}.{layer}.blocks"
+        encoder_layer = f"{encoder_base}.{layer}.blocks"
         for block in range(depth):
+            # Precompute static compound prefixes for this block
+            backbone_block = f"{backbone_layer}.{block}"
+            encoder_block = f"{encoder_layer}.{block}"
+
             # layernorms
-            rename_keys.append((f"backbone.0.layers.{layer}.blocks.{block}.norm1.weight",
-                                f"model.backbone.conv_encoder.model.encoder.layers.{layer}.blocks.{block}.layernorm_before.weight"))
-            rename_keys.append((f"backbone.0.layers.{layer}.blocks.{block}.norm1.bias",
-                                f"model.backbone.conv_encoder.model.encoder.layers.{layer}.blocks.{block}.layernorm_before.bias"))
-
-            rename_keys.append((f"backbone.0.layers.{layer}.blocks.{block}.norm2.weight",
-                                f"model.backbone.conv_encoder.model.encoder.layers.{layer}.blocks.{block}.layernorm_after.weight"))
-            rename_keys.append((f"backbone.0.layers.{layer}.blocks.{block}.norm2.bias",
-                                f"model.backbone.conv_encoder.model.encoder.layers.{layer}.blocks.{block}.layernorm_after.bias"))
+            append((f"{backbone_block}.norm1.weight", f"{encoder_block}.layernorm_before.weight"))
+            append((f"{backbone_block}.norm1.bias", f"{encoder_block}.layernorm_before.bias"))
+            append((f"{backbone_block}.norm2.weight", f"{encoder_block}.layernorm_after.weight"))
+            append((f"{backbone_block}.norm2.bias", f"{encoder_block}.layernorm_after.bias"))
             # attention
-            rename_keys.append((f"backbone.0.layers.{layer}.blocks.{block}.attn.relative_position_bias_table",
-                                f"model.backbone.conv_encoder.model.encoder.layers.{layer}.blocks.{block}.attention.self.relative_position_bias_table"))
-            rename_keys.append((f"backbone.0.layers.{layer}.blocks.{block}.attn.proj.weight",
-                            f"model.backbone.conv_encoder.model.encoder.layers.{layer}.blocks.{block}.attention.output.dense.weight"))
-            rename_keys.append((f"backbone.0.layers.{layer}.blocks.{block}.attn.proj.bias",
-                            f"model.backbone.conv_encoder.model.encoder.layers.{layer}.blocks.{block}.attention.output.dense.bias"))
+            append((f"{backbone_block}.attn.relative_position_bias_table", f"{encoder_block}.attention.self.relative_position_bias_table"))
+            append((f"{backbone_block}.attn.proj.weight", f"{encoder_block}.attention.output.dense.weight"))
+            append((f"{backbone_block}.attn.proj.bias", f"{encoder_block}.attention.output.dense.bias"))
             # intermediate
-            rename_keys.append((f"backbone.0.layers.{layer}.blocks.{block}.mlp.fc1.weight",
-                            f"model.backbone.conv_encoder.model.encoder.layers.{layer}.blocks.{block}.intermediate.dense.weight"))
-            rename_keys.append((f"backbone.0.layers.{layer}.blocks.{block}.mlp.fc1.bias",
-                            f"model.backbone.conv_encoder.model.encoder.layers.{layer}.blocks.{block}.intermediate.dense.bias"))
-
+            append((f"{backbone_block}.mlp.fc1.weight", f"{encoder_block}.intermediate.dense.weight"))
+            append((f"{backbone_block}.mlp.fc1.bias", f"{encoder_block}.intermediate.dense.bias"))
             # output
-            rename_keys.append((f"backbone.0.layers.{layer}.blocks.{block}.mlp.fc2.weight",
-                            f"model.backbone.conv_encoder.model.encoder.layers.{layer}.blocks.{block}.output.dense.weight"))
-            rename_keys.append((f"backbone.0.layers.{layer}.blocks.{block}.mlp.fc2.bias",
-                            f"model.backbone.conv_encoder.model.encoder.layers.{layer}.blocks.{block}.output.dense.bias"))
+            append((f"{backbone_block}.mlp.fc2.weight", f"{encoder_block}.output.dense.weight"))
+            append((f"{backbone_block}.mlp.fc2.bias", f"{encoder_block}.output.dense.bias"))
 
         # downsample
-        if layer!=len(config.backbone_config.depths)-1:
-            rename_keys.append((f"backbone.0.layers.{layer}.downsample.reduction.weight",
-                                f"model.backbone.conv_encoder.model.encoder.layers.{layer}.downsample.reduction.weight"))
-            rename_keys.append((f"backbone.0.layers.{layer}.downsample.norm.weight",
-                                f"model.backbone.conv_encoder.model.encoder.layers.{layer}.downsample.norm.weight"))
-            rename_keys.append((f"backbone.0.layers.{layer}.downsample.norm.bias",
-                                f"model.backbone.conv_encoder.model.encoder.layers.{layer}.downsample.norm.bias"))
+        if layer != len(depths) - 1:
+            layer_prefix = f"{backbone_base}.{layer}.downsample"
+            append((f"{layer_prefix}.reduction.weight", f"{encoder_base}.{layer}.downsample.reduction.weight"))
+            append((f"{layer_prefix}.norm.weight", f"{encoder_base}.{layer}.downsample.norm.weight"))
+            append((f"{layer_prefix}.norm.bias", f"{encoder_base}.{layer}.downsample.norm.bias"))
 
-    for out_indice in config.backbone_config.out_indices:
-        # Grounding DINO implementation of out_indices isn't aligned with transformers
-        rename_keys.append((f"backbone.0.norm{out_indice-1}.weight",
-                        f"model.backbone.conv_encoder.model.hidden_states_norms.stage{out_indice}.weight"))
-        rename_keys.append((f"backbone.0.norm{out_indice-1}.bias",
-                        f"model.backbone.conv_encoder.model.hidden_states_norms.stage{out_indice}.bias"))
+    for out_indice in out_indices:
+        append((f"{norm_base}{out_indice-1}.weight", f"{hidden_norm_base}{out_indice}.weight"))
+        append((f"{norm_base}{out_indice-1}.bias", f"{hidden_norm_base}{out_indice}.bias"))
 
     ########################################## VISION BACKBONE - END
 
@@ -183,19 +185,33 @@ def create_rename_keys(state_dict, config):
         'attn.out_l_proj.weight': 'fusion_layer.attn.out_text_proj.weight',
         'attn.out_l_proj.bias': 'fusion_layer.attn.out_text_proj.bias',
     }
-    for layer in range(config.encoder_layers):
+    encoder_layer_base = "transformer.encoder.layers"
+    encoder_text_layer_base = "transformer.encoder.text_layers"
+    encoder_fusion_layer_base = "transformer.encoder.fusion_layers"
+    model_encoder_layer_base = "model.encoder.layers"
+
+    # Use local variables and .items() list to avoid repeated dict lookups
+    deformable_items = list(deformable_key_mappings.items())
+    text_enhancer_items = list(text_enhancer_key_mappings.items())
+    fusion_items = list(fusion_key_mappings.items())
+
+    for layer in range(encoder_layers):
         # deformable
-        for src, dest in deformable_key_mappings.items():
-            rename_keys.append((f"transformer.encoder.layers.{layer}.{src}",
-                                f"model.encoder.layers.{layer}.{dest}"))
+        enc_layer_prefix = f"{encoder_layer_base}.{layer}."
+        target_layer_prefix = f"{model_encoder_layer_base}.{layer}."
+        for src, dest in deformable_items:
+            append((enc_layer_prefix + src, target_layer_prefix + dest))
         # text enhance
-        for src, dest in text_enhancer_key_mappings.items():
-            rename_keys.append((f"transformer.encoder.text_layers.{layer}.{src}",
-                                f"model.encoder.layers.{layer}.{dest}"))
+        enc_text_prefix = f"{encoder_text_layer_base}.{layer}."
+        for src, dest in text_enhancer_items:
+            append((enc_text_prefix + src, target_layer_prefix + dest))
         # fusion layers
-        for src, dest in fusion_key_mappings.items():
-            rename_keys.append((f"transformer.encoder.fusion_layers.{layer}.{src}",
-                                f"model.encoder.layers.{layer}.{dest}"))
+        enc_fusion_prefix = f"{encoder_fusion_layer_base}.{layer}."
+        for src, dest in fusion_items:
+            append((enc_fusion_prefix + src, target_layer_prefix + dest))
+    ########################################## ENCODER - END
+
+    ########################################## DECODER - START
     ########################################## ENCODER - END
 
     ########################################## DECODER - START
@@ -229,45 +245,46 @@ def create_rename_keys(state_dict, config):
         'norm3.weight': 'final_layer_norm.weight',
         'norm3.bias': 'final_layer_norm.bias',
     }
-    for layer_num in range(config.decoder_layers):
+    decoder_items = list(key_mappings_decoder.items())
+    for layer_num in range(decoder_layers):
         source_prefix_decoder = f'transformer.decoder.layers.{layer_num}.'
         target_prefix_decoder = f'model.decoder.layers.{layer_num}.'
 
-        for source_name, target_name in key_mappings_decoder.items():
-            rename_keys.append((source_prefix_decoder + source_name,
-                               target_prefix_decoder + target_name))
+        for source_name, target_name in decoder_items:
+            append((source_prefix_decoder + source_name, target_prefix_decoder + target_name))
     ########################################## DECODER - END
 
     ########################################## Additional - START
-    for layer_name in state_dict:
-        #### TEXT BACKBONE
-        if "bert" in layer_name:
-            rename_keys.append((layer_name, layer_name.replace("bert", "model.text_backbone")))
-        #### INPUT PROJ - PROJECT OUTPUT FEATURES FROM VISION BACKBONE
-        if "input_proj" in layer_name:
-            rename_keys.append((layer_name, layer_name.replace("input_proj", "model.input_proj_vision")))
-        #### INPUT PROJ - PROJECT OUTPUT FEATURES FROM TEXT BACKBONE
-        if "feat_map" in layer_name:
-            rename_keys.append((layer_name, layer_name.replace("feat_map", "model.text_projection")))
-        #### DECODER REFERENCE POINT HEAD
-        if "transformer.decoder.ref_point_head" in layer_name:
-            rename_keys.append((layer_name, layer_name.replace("transformer.decoder.ref_point_head",
-                                                               "model.decoder.reference_points_head")))
-        #### DECODER BBOX EMBED
-        if "transformer.decoder.bbox_embed" in layer_name:
-            rename_keys.append((layer_name, layer_name.replace("transformer.decoder.bbox_embed",
-                                                               "model.decoder.bbox_embed")))
+    # Precompute list of (substr, replacement) for usage in fast substring search/update.
+    additional_patterns = [
+        ("bert", "model.text_backbone"),
+        ("input_proj", "model.input_proj_vision"),
+        ("feat_map", "model.text_projection"),
+        ("transformer.decoder.ref_point_head", "model.decoder.reference_points_head"),
+        ("transformer.decoder.bbox_embed", "model.decoder.bbox_embed"),
+        ("transformer.enc_output", "model.enc_output"),
+        ("transformer.enc_out_bbox_embed", "model.encoder_output_bbox_embed"),
+    ]
+    # Use a local variable for items so repeated lookups are reduced
+    items_view = state_dict.keys() if hasattr(state_dict, "keys") else state_dict
+
+    for layer_name in items_view:
+        for old, new in additional_patterns:
+            if old in layer_name:
+                append((layer_name, layer_name.replace(old, new)))
+        # This entry is preserved as in original
         if "transformer.enc_output" in layer_name:
-            rename_keys.append((layer_name, layer_name.replace("transformer", "model")))
+            append((layer_name, layer_name.replace("transformer", "model")))
 
         if "transformer.enc_out_bbox_embed" in layer_name:
-            rename_keys.append((layer_name, layer_name.replace("transformer.enc_out_bbox_embed",
-                                                               "model.encoder_output_bbox_embed")))
+            append((layer_name, layer_name.replace("transformer.enc_out_bbox_embed",
+                                                   "model.encoder_output_bbox_embed")))
 
-    rename_keys.append(("transformer.level_embed", "model.level_embed"))
-    rename_keys.append(("transformer.decoder.norm.weight", "model.decoder.layer_norm.weight"))
-    rename_keys.append(("transformer.decoder.norm.bias", "model.decoder.layer_norm.bias"))
-    rename_keys.append(("transformer.tgt_embed.weight", "model.query_position_embeddings.weight"))
+    # Single keys
+    append(("transformer.level_embed", "model.level_embed"))
+    append(("transformer.decoder.norm.weight", "model.decoder.layer_norm.weight"))
+    append(("transformer.decoder.norm.bias", "model.decoder.layer_norm.bias"))
+    append(("transformer.tgt_embed.weight", "model.query_position_embeddings.weight"))
     ########################################## Additional - END
 
     # fmt: on
