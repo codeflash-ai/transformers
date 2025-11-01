@@ -895,10 +895,11 @@ class SeamlessM4TSinusoidalPositionalEmbedding(nn.Module):
         self.make_weights(num_positions + self.offset, embedding_dim, padding_idx)
 
     def make_weights(self, num_embeddings: int, embedding_dim: int, padding_idx: Optional[int] = None):
+        # Move dtype/device resolution outside hot path
+        prev_weights = getattr(self, "weights", None)
         emb_weights = self.get_embedding(num_embeddings, embedding_dim, padding_idx)
-        if hasattr(self, "weights"):
-            # in forward put the weights on the correct dtype and device of the param
-            emb_weights = emb_weights.to(dtype=self.weights.dtype, device=self.weights.device)
+        if prev_weights is not None:
+            emb_weights = emb_weights.to(dtype=prev_weights.dtype, device=prev_weights.device)
 
         self.register_buffer("weights", emb_weights, persistent=False)
 
@@ -959,13 +960,20 @@ class SeamlessM4TSinusoidalPositionalEmbedding(nn.Module):
 
         Returns: torch.Tensor
         """
-        input_shape = inputs_embeds.size()[:-1]
+        input_shape = inputs_embeds.shape[:-1]
         sequence_length = input_shape[1]
 
-        position_ids = torch.arange(
-            padding_idx + 1, sequence_length + padding_idx + 1, dtype=torch.long, device=inputs_embeds.device
-        )
-        return position_ids.unsqueeze(0).expand(input_shape).contiguous() + past_key_values_length
+        # Optimize torch.arange and broadcasting for better performance
+        # Single call to arange, then add offset, and expand efficiently
+        start = padding_idx + 1 + past_key_values_length
+        end = sequence_length + padding_idx + 1 + past_key_values_length
+        # Create only 1D and expand with .repeat, cheaper than .expand sometimes for small dims
+        position_ids = torch.arange(start, end, dtype=torch.long, device=inputs_embeds.device)
+        if input_shape[0] > 1:
+            position_ids = position_ids.unsqueeze(0).repeat(input_shape[0], 1)
+        else:
+            position_ids = position_ids.unsqueeze(0)
+        return position_ids.contiguous()
 
     @staticmethod
     # Copied from transformers.models.roberta.modeling_roberta.RobertaEmbeddings.create_position_ids_from_input_ids
@@ -980,9 +988,13 @@ class SeamlessM4TSinusoidalPositionalEmbedding(nn.Module):
         Returns: torch.Tensor
         """
         # The series of casts and type-conversions here are carefully balanced to both work with ONNX export and XLA.
-        mask = input_ids.ne(padding_idx).int()
-        incremental_indices = (torch.cumsum(mask, dim=1).type_as(mask) + past_key_values_length) * mask
-        return incremental_indices.long() + padding_idx
+        # Small optimization: use .long() up front
+        mask = input_ids.ne(padding_idx).long()
+        incremental_indices = torch.cumsum(mask, dim=1)
+        if past_key_values_length != 0:
+            incremental_indices += past_key_values_length
+        incremental_indices *= mask
+        return incremental_indices + padding_idx
 
 
 class SeamlessM4TAttention(nn.Module):
