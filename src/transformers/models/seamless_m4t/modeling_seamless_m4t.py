@@ -960,12 +960,18 @@ class SeamlessM4TSinusoidalPositionalEmbedding(nn.Module):
         Returns: torch.Tensor
         """
         input_shape = inputs_embeds.size()[:-1]
-        sequence_length = input_shape[1]
+        batch_size, seq_len = input_shape
 
-        position_ids = torch.arange(
-            padding_idx + 1, sequence_length + padding_idx + 1, dtype=torch.long, device=inputs_embeds.device
-        )
-        return position_ids.unsqueeze(0).expand(input_shape).contiguous() + past_key_values_length
+        # Precompute start and end for arange
+        start = padding_idx + 1 + past_key_values_length
+        end = seq_len + padding_idx + 1 + past_key_values_length
+
+        # Precompute 2D position_ids using broadcasting for greater efficiency.
+        # Use torch.arange with shape (seq_len,), then use .expand to batch_size for faster expand than unsqueeze+expand
+        position_ids_row = torch.arange(start, end, dtype=torch.long, device=inputs_embeds.device)
+        # Direct .expand or .repeat is faster than unsqueeze + expand + contiguous + addition
+        position_ids = position_ids_row.expand(batch_size, seq_len)
+        return position_ids
 
     @staticmethod
     # Copied from transformers.models.roberta.modeling_roberta.RobertaEmbeddings.create_position_ids_from_input_ids
