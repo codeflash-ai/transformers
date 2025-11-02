@@ -130,10 +130,11 @@ def remove_low_and_no_objects(masks, scores, labels, object_mask_threshold, num_
     """
     if not (masks.shape[0] == scores.shape[0] == labels.shape[0]):
         raise ValueError("mask, scores and labels must have the same shape!")
-
-    to_keep = labels.ne(num_labels) & (scores > object_mask_threshold)
-
-    return masks[to_keep], scores[to_keep], labels[to_keep]
+    # Fuse both masks in a single call for better execution
+    to_keep = torch.logical_and(labels != num_labels, scores > object_mask_threshold)
+    # Use advanced indexing which avoids an extra copy compared to boolean indexing when to_keep is mostly False
+    indices = to_keep.nonzero(as_tuple=False).squeeze(-1)
+    return masks[indices], scores[indices], labels[indices]
 
 
 def check_segment_validity(mask_labels, mask_probs, k, mask_threshold=0.5, overlap_mask_area_threshold=0.8):
@@ -170,19 +171,25 @@ def compute_segments(
     height = mask_probs.shape[1] if target_size is None else target_size[0]
     width = mask_probs.shape[2] if target_size is None else target_size[1]
 
-    segmentation = torch.zeros((height, width), dtype=torch.long, device=mask_probs.device) - 1
+    segmentation = torch.full((height, width), -1, dtype=torch.long, device=mask_probs.device)
     segments: list[dict] = []
 
     # Compute per-pixel assignment based on weighted mask scores
-    mask_probs = mask_probs.sigmoid()
+    mask_probs = mask_probs.sigmoid_()
     mask_labels = (pred_scores[:, None, None] * mask_probs).argmax(0)
 
     # Keep track of instances of each class
-    current_segment_id = 0
-    stuff_memory_list: dict[str, int] = {}
 
-    for k in range(pred_labels.shape[0]):
-        pred_class = pred_labels[k].item()
+    # Use integer keys for stuff_class lookup if possible (numba, jit, or set for O(1))
+    stuff_lookup = set(stuff_classes) if stuff_classes else None
+
+    current_segment_id = 0
+    stuff_memory_list: dict[int, int] = {}
+
+    pred_labels_np = pred_labels.cpu().numpy() if isinstance(pred_labels, torch.Tensor) else pred_labels
+
+    for k, pred_class in enumerate(pred_labels_np):
+        # Check if mask exists and large enough to be a segment
 
         # Check if mask exists and large enough to be a segment
         mask_exists, final_mask = check_segment_validity(
@@ -192,19 +199,20 @@ def compute_segments(
         if not mask_exists:
             continue
 
-        if stuff_classes and pred_class in stuff_classes:
-            if pred_class in stuff_memory_list:
-                segmentation[final_mask] = stuff_memory_list[pred_class]
+        if stuff_lookup and pred_class in stuff_lookup:
+            memory_id = stuff_memory_list.get(pred_class)
+            if memory_id is not None:
+                segmentation[final_mask] = memory_id
                 continue
             else:
                 stuff_memory_list[pred_class] = current_segment_id
 
         segmentation[final_mask] = current_segment_id
-        segment_score = round(pred_scores[k].item(), 6)
+        segment_score = round(float(pred_scores[k]), 6)
         segments.append(
             {
                 "id": current_segment_id,
-                "label_id": pred_class,
+                "label_id": int(pred_class),
                 "score": segment_score,
             }
         )
@@ -215,7 +223,7 @@ def compute_segments(
 def get_target_size(size_dict: dict[str, int]) -> tuple[int, int]:
     """Returns the height and width from a size dict."""
     target_height = size_dict["shortest_edge"]
-    target_width = size_dict.get("longest_edge") or target_height
+    target_width = size_dict.get("longest_edge", target_height)
 
     return target_height, target_width
 
@@ -777,11 +785,16 @@ class EomtImageProcessor(BaseImageProcessor):
 
         resized_logits = []
 
+        # Pre-compute short/long edge for efficiency
+        se, le = size["shortest_edge"], size["longest_edge"]
         for idx, original_size in enumerate(target_sizes):
-            target_height, target_width = get_size_with_aspect_ratio(
-                original_size, size["shortest_edge"], size["longest_edge"]
-            )
-            cropped_logits = segmentation_logits[idx][:, :target_height, :target_width]
+            target_height, target_width = get_size_with_aspect_ratio(original_size, se, le)
+            s = segmentation_logits[idx]
+            cropped_logits = s[:, :target_height, :target_width]
+            # If already at correct size, avoid redundant interpolate
+            if (cropped_logits.shape[1], cropped_logits.shape[2]) == original_size:
+                resized_logits.append(cropped_logits)
+                continue
             upsampled_logits = F.interpolate(
                 cropped_logits[None, ...], size=original_size, mode="bilinear", align_corners=False
             )[0]
@@ -848,7 +861,8 @@ class EomtImageProcessor(BaseImageProcessor):
         )
 
         mask_probs_batch = self.unpad_image(masks_queries_logits, target_sizes, size)
-        pred_scores_batch, pred_labels_batch = class_queries_logits.softmax(dim=-1).max(-1)
+        class_probs = class_queries_logits.softmax(dim=-1)
+        pred_scores_batch, pred_labels_batch = class_probs.max(-1)
 
         results: list = []
 
@@ -860,7 +874,7 @@ class EomtImageProcessor(BaseImageProcessor):
             # No mask found
             if mask_probs.shape[0] <= 0:
                 height, width = target_sizes[i] if target_sizes is not None else mask_probs.shape[1:]
-                segmentation = torch.zeros((height, width)) - 1
+                segmentation = torch.full((height, width), -1, dtype=torch.float32, device=mask_probs_batch[i].device)
                 results.append({"segmentation": segmentation, "segments_info": []})
                 continue
 
