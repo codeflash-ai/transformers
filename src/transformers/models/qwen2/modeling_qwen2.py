@@ -99,17 +99,20 @@ class Qwen2RotaryEmbedding(nn.Module):
     @torch.no_grad()
     @dynamic_rope_update  # power user: used with advanced RoPE types (e.g. dynamic rope)
     def forward(self, x, position_ids):
-        inv_freq_expanded = self.inv_freq[None, :, None].float().expand(position_ids.shape[0], -1, 1).to(x.device)
-        position_ids_expanded = position_ids[:, None, :].float()
+        # Use torch.outer for frequency matrix for efficiency
+        inv_freq = self.inv_freq.float().to(x.device)
+        position_ids = position_ids.float().to(x.device)
+        # freq: (batch, seq, head_size/2)
+        freqs = torch.outer(position_ids.view(-1), inv_freq)  # shape: (batch_size * seq_len, head_dim//2)
+        freqs = freqs.view(position_ids.shape[0], position_ids.shape[1], inv_freq.shape[0])
+        # emb: (batch, seq, head_dim)
+        emb = torch.cat([freqs, freqs], dim=2)
+        # cos,sin: (batch, seq, head_dim)
+        emb = emb * self.attention_scaling
 
-        device_type = x.device.type if isinstance(x.device.type, str) and x.device.type != "mps" else "cpu"
-        with torch.autocast(device_type=device_type, enabled=False):  # Force float32
-            freqs = (inv_freq_expanded.float() @ position_ids_expanded.float()).transpose(1, 2)
-            emb = torch.cat((freqs, freqs), dim=-1)
-            cos = emb.cos() * self.attention_scaling
-            sin = emb.sin() * self.attention_scaling
-
-        return cos.to(dtype=x.dtype), sin.to(dtype=x.dtype)
+        cos = emb.cos().to(dtype=x.dtype)
+        sin = emb.sin().to(dtype=x.dtype)
+        return cos, sin
 
 
 def rotate_half(x):
