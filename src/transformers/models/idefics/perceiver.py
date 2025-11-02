@@ -147,27 +147,38 @@ class IdeficsPerceiverAttention(nn.Module):
 
         # Query, Key, Value Projections --> Note that in Flamingo, latents are *concatenated* with context prior to attn!
         #   Note: This results in queries w/ `seq = n_latents`, and keys, values with `seq = len(context) + n_latents`
-        q = self.q_proj(latents)
-        k = self.k_proj(torch.cat([context, latents], dim=-2))
-        v = self.v_proj(torch.cat([context, latents], dim=-2))
 
-        # Multiheaded Self-Attention w/ stable softmax (subtract per-row max -- `amax` -- before softmax call)
-        #   =>> `attn` should be a 2D matrix of shape [n_latents x (context + n_latents)]
-        # einsum.rearrange(x, "bsz seq (heads embed) -> bsz heads seq embed", heads=self.n_heads)
-        q, k, v = [x.reshape(batch_size, x.shape[1], self.n_heads, self.head_dim).transpose(1, 2) for x in (q, k, v)]
+        # Concatenate context and latents only once to avoid redundant concatenation
+        cat = torch.cat([context, latents], dim=1)  # concat along sequence dim for both keys and values
+
+        # Query, Key, Value Projections
+        q = self.q_proj(latents)
+        k = self.k_proj(cat)
+        v = self.v_proj(cat)
+
+        # Reshape for multihead attention: (batch, seq, heads, head_dim) -> (batch, heads, seq, head_dim)
+        def _reshape(x):
+            return x.view(batch_size, -1, self.n_heads, self.head_dim).transpose(1, 2)
+
+        q = _reshape(q)
+        k = _reshape(k)
+        v = _reshape(v)
 
         if self.qk_layer_norms:
             q = self.q_layer_norm(q)
             k = self.k_layer_norm(k)
 
-        scores = torch.einsum("... i d, ... j d -> ... i j", q * self.qk_scale, k)
-        stabilized_scores = scores - (scores.amax(dim=-1, keepdim=True).detach())
+        # Compute attention scores (batch, heads, n_latents, context+latents)
+        scores = torch.matmul(q * self.qk_scale, k.transpose(-2, -1))
+        # Stable softmax
+        stabilized_scores = scores - scores.amax(dim=-1, keepdim=True).detach()
         attn = stabilized_scores.softmax(dim=-1)
 
-        # Attend & project back to output...
-        resampled = torch.einsum("... i j, ... j d -> ... i d", attn, v)
-        # einsum.rearrange(resampled, "bsz heads seq embed -> bsz seq (heads embed)", heads=self.n_heads)
-        return self.output_proj(resampled.transpose(1, 2).flatten(-2))
+        # Attention output
+        resampled = torch.matmul(attn, v)
+        # Flatten heads and head_dim: (batch, heads, n_latents, head_dim) -> (batch, n_latents, heads * head_dim)
+        resampled = resampled.transpose(1, 2).reshape(batch_size, -1, self.n_heads * self.head_dim)
+        return self.output_proj(resampled)
 
 
 class IdeficsMLP(nn.Module):
