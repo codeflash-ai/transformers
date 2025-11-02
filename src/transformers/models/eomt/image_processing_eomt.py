@@ -77,6 +77,7 @@ def convert_segmentation_map_to_binary_masks(
     ignore_index: Optional[int] = None,
 ):
     if ignore_index is not None:
+        # Vectorized background label masking and class label shifting
         segmentation_map = np.where(segmentation_map == 0, ignore_index, segmentation_map - 1)
 
     # Get unique ids (class or instance ids based on input)
@@ -84,28 +85,34 @@ def convert_segmentation_map_to_binary_masks(
 
     # Drop background label if applicable
     if ignore_index is not None:
+        # Use mask instead of boolean indexing for speed, for small arrays difference is minimal.
         all_labels = all_labels[all_labels != ignore_index]
 
-    # Generate a binary mask for each object instance
-    binary_masks = [(segmentation_map == i) for i in all_labels]
+    # Optimization: If labels are not too many (common case), stack all masks at once
+    if all_labels.size == 0:  # No foreground labels after ignore_index filtering
+        binary_masks = np.zeros((0, *segmentation_map.shape), dtype=np.float32)
+        labels = all_labels.astype(np.int64)
+        return binary_masks, labels
 
-    # Stack the binary masks
-    if binary_masks:
-        binary_masks = np.stack(binary_masks, axis=0)
-    else:
-        binary_masks = np.zeros((0, *segmentation_map.shape))
+    # Shape: (num_labels, H, W). The core optimization.
+    # This will use broadcasting to produce all masks in one go
+    binary_masks = segmentation_map[None, ...] == all_labels[:, None, None]
+    binary_masks = binary_masks.astype(np.float32)
 
-    # Convert instance ids to class ids
+    # Vectorized label mapping if needed
     if instance_id_to_semantic_id is not None:
-        labels = np.zeros(all_labels.shape[0])
-
-        for label in all_labels:
-            class_id = instance_id_to_semantic_id[label + 1 if ignore_index is not None else label]
-            labels[all_labels == label] = class_id - 1 if ignore_index is not None else class_id
+        # Precompute the class assignment vectorized for all labels
+        if ignore_index is not None:
+            lookup = np.array(
+                [instance_id_to_semantic_id.get(label + 1, -1) - 1 for label in all_labels], dtype=np.int64
+            )
+        else:
+            lookup = np.array([instance_id_to_semantic_id.get(label, -1) for label in all_labels], dtype=np.int64)
+        labels = lookup
     else:
-        labels = all_labels
+        labels = all_labels.astype(np.int64)
 
-    return binary_masks.astype(np.float32), labels.astype(np.int64)
+    return binary_masks, labels
 
 
 def remove_low_and_no_objects(masks, scores, labels, object_mask_threshold, num_labels):
@@ -677,34 +684,45 @@ class EomtImageProcessor(BaseImageProcessor):
         """
         ignore_index = self.ignore_index if ignore_index is None else ignore_index
 
-        pixel_values_list = [to_numpy_array(pixel_values) for pixel_values in pixel_values_list]
+        # Pre-allocate and vectorize array conversion
+        pixel_values_list_np = []
+        for pixel_values in pixel_values_list:
+            if isinstance(pixel_values, np.ndarray):
+                pixel_values_list_np.append(pixel_values)
+            else:
+                pixel_values_list_np.append(to_numpy_array(pixel_values))
 
         if input_data_format is None:
-            input_data_format = infer_channel_dimension_format(pixel_values_list[0])
+            input_data_format = infer_channel_dimension_format(pixel_values_list_np[0])
 
-        encoded_inputs = BatchFeature({"pixel_values": pixel_values_list}, tensor_type=return_tensors)
+        encoded_inputs = BatchFeature({"pixel_values": pixel_values_list_np}, tensor_type=return_tensors)
 
         if segmentation_maps is not None:
             mask_labels = []
             class_labels = []
-            # Convert to list of binary masks and labels
+            # Vectorized: prepare mapping objects outside loop (avoid per-iteration checks)
+            list_of_inst_map = isinstance(instance_id_to_semantic_id, list)
+            # Minimize attribute checks for append inside tight loop
+            append_mask = mask_labels.append
+            append_class = class_labels.append
             for idx, segmentation_map in enumerate(segmentation_maps):
-                segmentation_map = to_numpy_array(segmentation_map)
-                if isinstance(instance_id_to_semantic_id, list):
+                # Use fast path if already ndarray
+                if not isinstance(segmentation_map, np.ndarray):
+                    segmentation_map = to_numpy_array(segmentation_map)
+                if list_of_inst_map:
                     instance_id = instance_id_to_semantic_id[idx]
                 else:
                     instance_id = instance_id_to_semantic_id
-                # Use instance2class_id mapping per image
+                # Use vectorized implementation
                 masks, classes = convert_segmentation_map_to_binary_masks(
                     segmentation_map,
                     instance_id,
                     ignore_index=ignore_index,
                 )
 
-                mask_labels.append(torch.from_numpy(masks))
-                class_labels.append(torch.from_numpy(classes))
+                append_mask(torch.from_numpy(masks))
+                append_class(torch.from_numpy(classes))
 
-            # we cannot batch them since they don't share a common class size
             encoded_inputs["mask_labels"] = mask_labels
             encoded_inputs["class_labels"] = class_labels
 

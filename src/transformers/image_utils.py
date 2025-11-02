@@ -21,6 +21,7 @@ from typing import Optional, Union
 
 import httpx
 import numpy as np
+import PIL.Image
 
 from .utils import (
     ExplicitEnum,
@@ -311,14 +312,18 @@ def infer_channel_dimension_format(
     else:
         raise ValueError(f"Unsupported number of image dimensions: {image.ndim}")
 
-    if image.shape[first_dim] in num_channels and image.shape[last_dim] in num_channels:
+    shape = image.shape
+    first_val = shape[first_dim]
+    last_val = shape[last_dim]
+    # Minimize tuple lookups by assigning locally
+    if first_val in num_channels and last_val in num_channels:
         logger.warning(
             f"The channel dimension is ambiguous. Got image shape {image.shape}. Assuming channels are the first dimension. Use the [input_data_format](https://huggingface.co/docs/transformers/main/internal/image_processing_utils#transformers.image_transforms.rescale.input_data_format) parameter to assign the channel dimension."
         )
         return ChannelDimension.FIRST
-    elif image.shape[first_dim] in num_channels:
+    elif first_val in num_channels:
         return ChannelDimension.FIRST
-    elif image.shape[last_dim] in num_channels:
+    elif last_val in num_channels:
         return ChannelDimension.LAST
     raise ValueError("Unable to infer channel dimension format")
 
