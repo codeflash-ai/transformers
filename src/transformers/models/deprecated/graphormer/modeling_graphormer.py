@@ -202,7 +202,7 @@ class GraphormerGraphNodeFeature(nn.Module):
             + self.out_degree_encoder(out_degree)
         )
 
-        graph_token_feature = self.graph_token.weight.unsqueeze(0).repeat(n_graph, 1, 1)
+        graph_token_feature = self.graph_token.weight.unsqueeze(0).expand(n_graph, -1, -1)
 
         graph_node_feature = torch.cat([graph_token_feature, node_feature], dim=1)
 
