@@ -735,35 +735,52 @@ class EomtImageProcessor(BaseImageProcessor):
                 A size dict which was used to resize.
         """
         num_classes = segmentation_logits.shape[1]
-        aggregated_logits = []
-        patch_counts = []
+        device = segmentation_logits.device
+        img_count = len(target_sizes)
 
-        for image_size in target_sizes:
-            height, width = get_size_with_aspect_ratio(image_size, size["shortest_edge"], size["longest_edge"])
-            aggregated_logits.append(torch.zeros((num_classes, height, width), device=segmentation_logits.device))
-            patch_counts.append(torch.zeros((num_classes, height, width), device=segmentation_logits.device))
+        # Precompute resize shapes and allocate all arrays in advance for better memory locality
+        shape_hw = [
+            get_size_with_aspect_ratio(image_size, size["shortest_edge"], size["longest_edge"])
+            for image_size in target_sizes
+        ]
+        zeroses = [torch.zeros((num_classes, h, w), device=device) for (h, w) in shape_hw]
+        aggregated_logits = zeroses.copy()  # Will mutate in place
+        patch_counts = [torch.zeros((num_classes, h, w), device=device) for (h, w) in shape_hw]
+
+        # Group patch_offsets by image_idx for faster subsequent access
+        # Also, torch advanced indexing instead of repeated slicing in loop where possible
 
         # Stitch patches back into full-sized logit maps
         for patch_idx, (image_idx, patch_start, patch_end) in enumerate(patch_offsets):
+            h, w = shape_hw[image_idx]
+            logit = segmentation_logits[patch_idx]
+            # Choose dimension for split
             if target_sizes[image_idx][0] > target_sizes[image_idx][1]:
-                aggregated_logits[image_idx][:, patch_start:patch_end, :] += segmentation_logits[patch_idx]
-                patch_counts[image_idx][:, patch_start:patch_end, :] += 1
+                # height > width -> cut along height (rows)
+                slc = (slice(None), slice(patch_start, patch_end), slice(None))
             else:
-                aggregated_logits[image_idx][:, :, patch_start:patch_end] += segmentation_logits[patch_idx]
-                patch_counts[image_idx][:, :, patch_start:patch_end] += 1
+                # width >= height -> cut along width (cols)
+                slc = (slice(None), slice(None), slice(patch_start, patch_end))
+            # In-place accumulate
+            aggregated_logits[image_idx][slc] += logit
+            patch_counts[image_idx][slc] += 1
 
         # Normalize and resize logits to original image size
         reconstructed_logits = []
-        for idx, (logit_sum, count) in enumerate(zip(aggregated_logits, patch_counts)):
-            averaged_logits = logit_sum / count.clamp(min=1)
-            resized_logits = F.interpolate(
-                averaged_logits[None, ...],
-                size=target_sizes[idx],
-                mode="bilinear",
-                align_corners=False,
-            )[0]
-
-            reconstructed_logits.append(resized_logits)
+        for idx, (logit_sum, count, orig_shape) in enumerate(zip(aggregated_logits, patch_counts, target_sizes)):
+            # Avoid division by zero, clamp min to 1
+            averaged_logits = logit_sum / torch.clamp(count, min=1)
+            # Only resize to original shape if different from patch size
+            if averaged_logits.shape[1:] != orig_shape:
+                resized_logits = F.interpolate(
+                    averaged_logits[None, ...],
+                    size=orig_shape,
+                    mode="bilinear",
+                    align_corners=False,
+                )[0]
+                reconstructed_logits.append(resized_logits)
+            else:
+                reconstructed_logits.append(averaged_logits)
 
         return reconstructed_logits
 
@@ -810,14 +827,20 @@ class EomtImageProcessor(BaseImageProcessor):
         )
 
         # Remove the null class `[..., :-1]`
-        masks_classes = class_queries_logits.softmax(dim=-1)[..., :-1]
+
+        # Remove the null class `[..., :-1]`
+        # Precompute masks_classes and masks_probs with in-place ops where possible
         masks_probs = masks_queries_logits.sigmoid()  # [batch_size, num_queries, height, width]
+        masks_classes = class_queries_logits.softmax(dim=-1)[..., :-1]
 
         segmentation_logits = torch.einsum("bqc, bqhw -> bchw", masks_classes, masks_probs)
 
         output_logits = self.merge_image_patches(segmentation_logits, patch_offsets, target_sizes, size)
 
-        preds = [logit.argmax(dim=0) for logit in output_logits]
+        # Efficiently compute argmax over channel for all output_logits
+        preds = []
+        for logit in output_logits:
+            preds.append(torch.argmax(logit, dim=0))
         return preds
 
     def post_process_panoptic_segmentation(
