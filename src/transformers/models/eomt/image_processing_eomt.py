@@ -139,20 +139,25 @@ def remove_low_and_no_objects(masks, scores, labels, object_mask_threshold, num_
 def check_segment_validity(mask_labels, mask_probs, k, mask_threshold=0.5, overlap_mask_area_threshold=0.8):
     # Get the mask associated with the k class
     mask_k = mask_labels == k
-    mask_k_area = mask_k.sum()
+
+    # NOTE: torch.count_nonzero is faster than .sum() for boolean masks
+    mask_k_area = torch.count_nonzero(mask_k)
+
+    # Compute the area of all the stuff in query k
 
     # Compute the area of all the stuff in query k
     original_mask = mask_probs[k] >= mask_threshold
-    original_area = original_mask.sum()
+    original_area = torch.count_nonzero(original_mask)
 
     final_mask = mask_k & original_mask
-    final_mask_area = final_mask.sum()
+    final_mask_area = torch.count_nonzero(final_mask)
 
     mask_exists = mask_k_area > 0 and original_area > 0 and final_mask_area > 0
 
     if mask_exists:
-        area_ratio = mask_k_area / original_area
-        if not area_ratio.item() > overlap_mask_area_threshold:
+        # Use float() directly for division (avoid .item()/.numpy())
+        area_ratio = mask_k_area / float(original_area)
+        if not area_ratio > overlap_mask_area_threshold:
             mask_exists = False
 
     return mask_exists, final_mask
@@ -170,19 +175,31 @@ def compute_segments(
     height = mask_probs.shape[1] if target_size is None else target_size[0]
     width = mask_probs.shape[2] if target_size is None else target_size[1]
 
-    segmentation = torch.zeros((height, width), dtype=torch.long, device=mask_probs.device) - 1
+    # Allocate with .fill_(-1) for faster init
+    segmentation = torch.empty((height, width), dtype=torch.long, device=mask_probs.device)
+    segmentation.fill_(-1)
     segments: list[dict] = []
 
     # Compute per-pixel assignment based on weighted mask scores
     mask_probs = mask_probs.sigmoid()
-    mask_labels = (pred_scores[:, None, None] * mask_probs).argmax(0)
+
+    # Precompute pred_scores[:, None, None] as a stride view for broadcasting
+    weighted_masks = pred_scores[:, None, None] * mask_probs
+    # If pred_scores is float and mask_probs is float, this reduces time vs repeated broadcast
+    mask_labels = weighted_masks.argmax(0)
 
     # Keep track of instances of each class
     current_segment_id = 0
     stuff_memory_list: dict[str, int] = {}
 
-    for k in range(pred_labels.shape[0]):
-        pred_class = pred_labels[k].item()
+    # Avoid repeated pred_labels[k].item() allocations by converting once up front
+    pred_labels_items = pred_labels.cpu().tolist() if hasattr(pred_labels, "cpu") else [int(x) for x in pred_labels]
+
+    # Cache stuff_classes as a set for fast "in" operations
+    stuff_classes_set = set(stuff_classes) if stuff_classes else set()
+
+    for k, pred_class in enumerate(pred_labels_items):
+        # Check if mask exists and large enough to be a segment
 
         # Check if mask exists and large enough to be a segment
         mask_exists, final_mask = check_segment_validity(
@@ -192,7 +209,7 @@ def compute_segments(
         if not mask_exists:
             continue
 
-        if stuff_classes and pred_class in stuff_classes:
+        if stuff_classes_set and pred_class in stuff_classes_set:
             if pred_class in stuff_memory_list:
                 segmentation[final_mask] = stuff_memory_list[pred_class]
                 continue
@@ -200,7 +217,7 @@ def compute_segments(
                 stuff_memory_list[pred_class] = current_segment_id
 
         segmentation[final_mask] = current_segment_id
-        segment_score = round(pred_scores[k].item(), 6)
+        segment_score = round(float(pred_scores[k]), 6)
         segments.append(
             {
                 "id": current_segment_id,
