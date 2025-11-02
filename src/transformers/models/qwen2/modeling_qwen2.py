@@ -260,10 +260,18 @@ class Qwen2RMSNorm(nn.Module):
 
     def forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
         input_dtype = hidden_states.dtype
-        hidden_states = hidden_states.to(torch.float32)
-        variance = hidden_states.pow(2).mean(-1, keepdim=True)
-        hidden_states = hidden_states * torch.rsqrt(variance + self.variance_epsilon)
-        return self.weight * hidden_states.to(input_dtype)
+        # Cast only if needed to save runtime
+        if hidden_states.dtype != torch.float32:
+            hidden_states = hidden_states.to(torch.float32)
+            cast_back = True
+        else:
+            cast_back = False
+        # Use fused operations for better memory and runtime (saves temp allocations)
+        variance = torch.mean(hidden_states * hidden_states, dim=-1, keepdim=True)
+        normed = hidden_states * torch.rsqrt(variance + self.variance_epsilon)
+        if cast_back:
+            normed = normed.to(input_dtype)
+        return self.weight * normed
 
     def extra_repr(self):
         return f"{tuple(self.weight.shape)}, eps={self.variance_epsilon}"
