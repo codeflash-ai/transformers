@@ -907,40 +907,53 @@ class EomtImageProcessor(BaseImageProcessor):
 
         results = []
 
+        # PRE-ALLOCATE softmax and mask processing on the batch outside the instance loop
+        class_softmax = class_queries_logits.softmax(dim=-1)[..., :-1]  # (batch, num_queries, num_classes - 1)
+        scores, pred_classes = class_softmax.max(-1)  # both (batch, num_queries)
+
+        # avoid repeated instantiations, cache indices 0..num_queries
         for i in range(batch_size):
             mask_pred = mask_probs_batch[i]
-            mask_class = class_queries_logits[i]
+            batch_scores = scores[i]  # (num_queries,)
+            batch_pred_classes = pred_classes[i]  # (num_queries,)
 
-            # Remove the null class `[..., :-1]`
-            scores, pred_classes = mask_class.softmax(dim=-1)[..., :-1].max(-1)
-            pred_masks = (mask_pred > 0).float()
+            # pred_masks: compute all at once, float as needed later
+            pred_masks = mask_pred > 0
+            pred_masks_float = pred_masks.float()
 
-            # Calculate average mask prob
-            mask_scores = (mask_pred.sigmoid().flatten(1) * pred_masks.flatten(1)).sum(1) / (
-                pred_masks.flatten(1).sum(1) + 1e-6
-            )
-            pred_scores = scores * mask_scores
+            # Calculate mask_scores vectorized
+            mask_pred_sigmoid_flat = mask_pred.sigmoid().flatten(1)  # (num_queries, H*W)
+            pred_masks_flat = pred_masks_float.flatten(1)
+            mask_pixels = pred_masks_flat.sum(1)  # (num_queries,)
+            mask_scores = (mask_pred_sigmoid_flat * pred_masks_flat).sum(1)
+            mask_scores = mask_scores / (mask_pixels + 1e-6)  # (num_queries,)
+            pred_scores = batch_scores * mask_scores  # (num_queries,)
 
-            segmentation = torch.zeros(target_sizes[i], device=device) - 1
+            segmentation = torch.full(target_sizes[i], -1, device=device)  # pre-fill with -1
 
-            instance_maps, segments = [], []
+            segments = []
             current_segment_id = 0
-            for j in range(num_queries):
-                score = pred_scores[j].item()
 
-                if not torch.all(pred_masks[j] == 0) and score >= threshold:
-                    segmentation[pred_masks[j] == 1] = current_segment_id
-                    segments.append(
-                        {
-                            "id": current_segment_id,
-                            "label_id": pred_classes[j].item(),
-                            "score": round(score, 6),
-                        }
-                    )
-                    current_segment_id += 1
-                    instance_maps.append(pred_masks[j])
+            # indices where mask is not empty and score >= threshold
+            valid_mask = (pred_masks_flat.sum(1) > 0) & (pred_scores >= threshold)
+            valid_indices = torch.nonzero(valid_mask, as_tuple=False).flatten()
+
+            # Avoid growing Python lists and per-instance loops by iterating only on valid indices
+            for j in valid_indices.tolist():
+                curr_pred_mask = pred_masks[j]
+                score = pred_scores[j].item()
+                segmentation[curr_pred_mask] = current_segment_id
+                segments.append(
+                    {
+                        "id": current_segment_id,
+                        "label_id": batch_pred_classes[j].item(),
+                        "score": round(score, 6),
+                    }
+                )
+                current_segment_id += 1
 
             results.append({"segmentation": segmentation, "segments_info": segments})
+
         return results
 
 
