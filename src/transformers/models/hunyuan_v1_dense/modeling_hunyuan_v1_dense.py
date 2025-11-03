@@ -60,7 +60,12 @@ class HunYuanDenseV1RMSNorm(nn.Module):
         return self.weight * hidden_states.to(input_dtype)
 
     def extra_repr(self):
-        return f"{tuple(self.weight.shape)}, eps={self.variance_epsilon}"
+        shape = self.weight.shape
+        if len(shape) == 1:
+            shape_str = f"({shape[0]},)"
+        else:
+            shape_str = str(tuple(shape))
+        return f"{shape_str}, eps={self.variance_epsilon}"
 
 
 class HunYuanDenseV1MLP(nn.Module):
