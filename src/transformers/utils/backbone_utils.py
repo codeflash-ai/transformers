@@ -41,11 +41,14 @@ def verify_out_features_out_indices(
     if out_features is not None:
         if not isinstance(out_features, (list,)):
             raise ValueError(f"out_features must be a list got {type(out_features)}")
-        if any(feat not in stage_names for feat in out_features):
+        # Use set operations for faster subset and uniqueness checks
+        out_features_set = set(out_features)
+        stage_names_set = set(stage_names)
+        if not out_features_set.issubset(stage_names_set):
             raise ValueError(f"out_features must be a subset of stage_names: {stage_names} got {out_features}")
-        if len(out_features) != len(set(out_features)):
+        if len(out_features) != len(out_features_set):
             raise ValueError(f"out_features must not contain any duplicates, got {out_features}")
-        if out_features != (sorted_feats := [feat for feat in stage_names if feat in out_features]):
+        if out_features != (sorted_feats := [feat for feat in stage_names if feat in out_features_set]):
             raise ValueError(
                 f"out_features must be in the same order as stage_names, expected {sorted_feats} got {out_features}"
             )
@@ -95,13 +98,17 @@ def _align_output_features_output_indices(
         out_indices (`list[int]` or `tuple[int]`): The indices of the features for the backbone to output.
         stage_names (`list[str]`): The names of the stages of the backbone.
     """
+    # Pre-convert stage_names to tuple for possible repeated indexing or membership
+    stage_names_tuple = tuple(stage_names)
     if out_indices is None and out_features is None:
-        out_indices = [len(stage_names) - 1]
-        out_features = [stage_names[-1]]
+        out_indices = [len(stage_names_tuple) - 1]
+        out_features = [stage_names_tuple[-1]]
     elif out_indices is None and out_features is not None:
-        out_indices = [stage_names.index(layer) for layer in out_features]
+        # Save the lookup as a dict for O(1) index finding on large lists
+        name_to_index = {name: idx for idx, name in enumerate(stage_names_tuple)}
+        out_indices = [name_to_index[layer] for layer in out_features]
     elif out_features is None and out_indices is not None:
-        out_features = [stage_names[idx] for idx in out_indices]
+        out_features = [stage_names_tuple[idx % len(stage_names_tuple) if idx < 0 else idx] for idx in out_indices]
     return out_features, out_indices
 
 
@@ -126,7 +133,11 @@ def get_aligned_output_features_output_indices(
         out_indices (`list[int]` or `tuple[int]`): The indices of the features for the backbone to output.
         stage_names (`list[str]`): The names of the stages of the backbone.
     """
-    out_indices = list(out_indices) if out_indices is not None else None
+    # Only convert tuple to list if needed (avoid list conversion in cases where it's already None or a list)
+    if out_indices is not None and not isinstance(out_indices, list):
+        out_indices = list(out_indices)
+
+    # First verify that the out_features and out_indices are valid
     # First verify that the out_features and out_indices are valid
     verify_out_features_out_indices(out_features=out_features, out_indices=out_indices, stage_names=stage_names)
     output_features, output_indices = _align_output_features_output_indices(
