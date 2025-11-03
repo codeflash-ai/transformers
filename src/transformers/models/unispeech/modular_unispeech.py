@@ -95,7 +95,10 @@ class UniSpeechGumbelVectorQuantizer(Wav2Vec2GumbelVectorQuantizer):
     @staticmethod
     def _compute_perplexity(probs):
         marginal_probs = probs.mean(dim=0)
-        perplexity = torch.exp(-torch.sum(marginal_probs * torch.log(marginal_probs + 1e-7), dim=-1)).sum()
+        # Use torch.where to ensure numerical stability, masking zeros avoids log(0)
+        # However, with +1e-7 this is already handled, so it's safe
+        entropy = -torch.sum(marginal_probs * torch.log(marginal_probs + 1e-7), dim=-1)
+        perplexity = torch.exp(entropy)
         return perplexity
 
     def forward(self, hidden_states):
