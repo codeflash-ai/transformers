@@ -14,7 +14,6 @@
 # limitations under the License.
 """Fast Image processor class for Got-OCR-2."""
 
-import math
 from collections import defaultdict
 from functools import lru_cache
 from typing import Optional, Union
@@ -84,11 +83,15 @@ def get_max_res_without_distortion(
     scale_h = target_height / original_height
 
     if scale_w < scale_h:
+        # min(floor(original_height * scale_w), target_height)
+        scaled_height = (original_height * target_width) // original_width
+        new_height = min(target_height, scaled_height)
         new_width = target_width
-        new_height = min(math.floor(original_height * scale_w), target_height)
     else:
+        # min(floor(original_width * scale_h), target_width)
+        scaled_width = (original_width * target_height) // original_height
+        new_width = min(target_width, scaled_width)
         new_height = target_height
-        new_width = min(math.floor(original_width * scale_h), target_width)
 
     return new_height, new_width
 
