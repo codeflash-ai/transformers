@@ -320,7 +320,9 @@ class HunYuanDenseV1RotaryEmbedding(nn.Module):
             base = self.config.rope_parameters["rope_theta"] * self.config.rope_parameters["alpha"] ** (
                 self.config.head_dim / (self.config.head_dim - 2)
             )
-            inv_freq = 1.0 / (base ** (torch.arange(0, self.dim, 2).float().to(device) / self.config.head_dim))
+            inv_freq = 1.0 / (
+                base ** (torch.arange(0, self.dim, 2, device=device, dtype=torch.float) / self.config.head_dim)
+            )
             self.attention_scaling = 1.0
         else:
             rope_init_fn: Callable = self.compute_default_rope_parameters
@@ -364,17 +366,35 @@ class HunYuanDenseV1RotaryEmbedding(nn.Module):
     @torch.no_grad()
     @dynamic_rope_update  # power user: used with advanced RoPE types (e.g. dynamic rope)
     def forward(self, x, position_ids):
-        inv_freq_expanded = self.inv_freq[None, :, None].float().expand(position_ids.shape[0], -1, 1).to(x.device)
-        position_ids_expanded = position_ids[:, None, :].float()
+        # Avoid repeated .float() and .to() conversions, and use out-of-place operations only once. Also, avoid .expand() if possible.
+        # position_ids: (batch, seq)
+        # inv_freq: (dim/2,)
 
-        device_type = x.device.type if isinstance(x.device.type, str) and x.device.type != "mps" else "cpu"
-        with torch.autocast(device_type=device_type, enabled=False):  # Force float32
-            freqs = (inv_freq_expanded.float() @ position_ids_expanded.float()).transpose(1, 2)
-            emb = torch.cat((freqs, freqs), dim=-1)
-            cos = emb.cos() * self.attention_scaling
-            sin = emb.sin() * self.attention_scaling
+        # shape management for efficient broadcast
+        # Let b, s = position_ids.shape
+        # inv_freq (d,), position_ids (b, s)
+        # -> freqs = position_ids.float()[:, :, None] * self.inv_freq[None, None, :]
 
-        return cos.to(dtype=x.dtype), sin.to(dtype=x.dtype)
+        # Compute frequencies in a vectorized way to avoid unnecessary broadcasting/expand/copies
+        # This also keeps the device and dtype correct
+
+        # Use contiguous to ensure memory layout for .view/reshape performance if transposing
+        position_ids = position_ids.to(dtype=torch.float, device=x.device)
+        inv_freq = self.inv_freq.to(dtype=torch.float, device=x.device)
+
+        # position_ids: (batch, seq), inv_freq: (dim/2,)
+        # Frequecies: (batch, seq, dim/2)
+        freqs = position_ids[:, :, None] * inv_freq[None, None, :]
+
+        # Duplicate for cos/sin: (batch, seq, dim)
+        emb = torch.cat((freqs, freqs), dim=-1)
+
+        # Compute cos/sin directly in target dtype (float32 for stability); attention_scaling can be fused
+        # Avoid torch.autocast() context overhead unless needed
+        cos = emb.cos().mul_(self.attention_scaling).to(dtype=x.dtype)
+        sin = emb.sin().mul_(self.attention_scaling).to(dtype=x.dtype)
+
+        return cos, sin
 
 
 @auto_docstring
