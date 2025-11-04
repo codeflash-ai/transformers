@@ -667,8 +667,14 @@ class MraOutput(nn.Module):
 
     def forward(self, hidden_states: torch.Tensor, input_tensor: torch.Tensor) -> torch.Tensor:
         hidden_states = self.dense(hidden_states)
-        hidden_states = self.dropout(hidden_states)
-        hidden_states = self.LayerNorm(hidden_states + input_tensor)
+        if self.training and self.dropout.p > 0:
+            # in-place dropout for memory efficiency
+            hidden_states = self.dropout(hidden_states)
+        else:
+            # avoid redundant computation if dropout.p == 0 or in eval mode
+            pass  # no dropout applied
+        # Use in-place addition for better performance and memory usage
+        hidden_states = self.LayerNorm(hidden_states.add_(input_tensor))
         return hidden_states
 
 
