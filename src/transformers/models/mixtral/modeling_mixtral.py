@@ -205,17 +205,29 @@ class MixtralRotaryEmbedding(nn.Module):
     @torch.no_grad()
     @dynamic_rope_update  # power user: used with advanced RoPE types (e.g. dynamic rope)
     def forward(self, x, position_ids):
-        inv_freq_expanded = self.inv_freq[None, :, None].float().expand(position_ids.shape[0], -1, 1).to(x.device)
-        position_ids_expanded = position_ids[:, None, :].float()
+        # OPTIMIZATION: use broadcasting instead of expand and matmul for faster computation and less memory
+        # emb = position_ids[:, None, :] * self.inv_freq[None, :, None]
+        # emb shape: (batch, head_dim//2, seq_len); after cat: (batch, head_dim, seq_len)
+        # This avoids .expand(...) and .matmul(...)
+        # Also, skip repeated .float() calls; cast only once
 
-        device_type = x.device.type if isinstance(x.device.type, str) and x.device.type != "mps" else "cpu"
-        with torch.autocast(device_type=device_type, enabled=False):  # Force float32
-            freqs = (inv_freq_expanded.float() @ position_ids_expanded.float()).transpose(1, 2)
-            emb = torch.cat((freqs, freqs), dim=-1)
-            cos = emb.cos() * self.attention_scaling
-            sin = emb.sin() * self.attention_scaling
+        inv_freq = self.inv_freq.to(dtype=torch.float, device=x.device)
+        position_ids = position_ids.to(dtype=torch.float, device=x.device)
 
-        return cos.to(dtype=x.dtype), sin.to(dtype=x.dtype)
+        # emb shape: (batch, head_dim//2, seq_len)
+        emb_half = position_ids[:, None, :] * inv_freq[None, :, None]
+        # concatenate along head_dim axis for sin/cos as expected (double feature dimension)
+        emb = torch.cat((emb_half, emb_half), dim=1)  # shape (batch, head_dim, seq_len)
+
+        # OPTIMIZATION: skip autocast since we only compute float32 anyway, and convert to original dtype afterwards
+        cos = emb.cos() * self.attention_scaling
+        sin = emb.sin() * self.attention_scaling
+
+        # transpose to expected output ((batch, seq_len, head_dim))
+        cos_out = cos.transpose(1, 2).to(dtype=x.dtype)
+        sin_out = sin.transpose(1, 2).to(dtype=x.dtype)
+
+        return cos_out, sin_out
 
 
 def rotate_half(x):
