@@ -102,9 +102,8 @@ def sparse_mask(mask, indices, block_size=32):
     batch_size, seq_len = mask.shape
     num_block = seq_len // block_size
 
-    batch_idx = torch.arange(indices.size(0), dtype=torch.long, device=indices.device)
-    mask = mask.reshape(batch_size, num_block, block_size)
-    mask = mask[batch_idx[:, None], (indices % num_block).long(), :]
+    mask = mask.view(batch_size, num_block, block_size)
+    mask = torch.gather(mask, 1, (indices % num_block).long().unsqueeze(-1).expand(-1, -1, block_size))
 
     return mask
 
