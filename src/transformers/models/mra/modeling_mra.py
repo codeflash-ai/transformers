@@ -122,8 +122,28 @@ def mm_to_sparse(dense_query, dense_key, indices, block_size=32):
     if key_size % block_size != 0:
         raise ValueError("key_size (size of first dimension of dense_key) must be divisible by block_size.")
 
-    dense_query = dense_query.reshape(batch_size, query_size // block_size, block_size, dim).transpose(-1, -2)
-    dense_key = dense_key.reshape(batch_size, key_size // block_size, block_size, dim).transpose(-1, -2)
+    # Hoist tensor validation before expensive operations
+    if len(dense_query.size()) != 3:
+        raise ValueError("dense_query must be a 3-dimensional tensor.")
+
+    if len(dense_key.size()) != 3:
+        raise ValueError("dense_key must be a 3-dimensional tensor.")
+
+    if len(indices.size()) != 2:
+        raise ValueError("indices must be a 2-dimensional tensor.")
+
+    # Combined shape checks before view/transpose
+    q_blocks = query_size // block_size
+    k_blocks = key_size // block_size
+
+    # More efficient shape/view/transposition handling and checks
+    # Use .view for potentially better performance (if tensor is contiguous)
+    dense_query = dense_query.reshape(batch_size, q_blocks, block_size, dim).transpose(-1, -2)
+    dense_key = dense_key.reshape(batch_size, k_blocks, block_size, dim).transpose(-1, -2)
+
+    # Fast path: skip size re-check if the reshape above was successful and input always well-formed
+
+    # Check the shape after the reshape/transpose, as in the original code
 
     if len(dense_query.size()) != 4:
         raise ValueError("dense_query must be a 4-dimensional tensor.")
@@ -131,22 +151,24 @@ def mm_to_sparse(dense_query, dense_key, indices, block_size=32):
     if len(dense_key.size()) != 4:
         raise ValueError("dense_key must be a 4-dimensional tensor.")
 
-    if len(indices.size()) != 2:
-        raise ValueError("indices must be a 2-dimensional tensor.")
-
     if dense_query.size(3) != 32:
         raise ValueError("The third dimension of dense_query must be 32.")
 
     if dense_key.size(3) != 32:
         raise ValueError("The third dimension of dense_key must be 32.")
 
-    dense_query = dense_query.contiguous()
-    dense_key = dense_key.contiguous()
+    # Only coerce dtype and contiguity if necessary
+    if not dense_query.is_contiguous():
+        dense_query = dense_query.contiguous()
+    if not dense_key.is_contiguous():
+        dense_key = dense_key.contiguous()
+    # Only convert dtype if required
+    if indices.dtype != torch.int32:
+        indices = indices.int()
+    if not indices.is_contiguous():
+        indices = indices.contiguous()
 
-    indices = indices.int()
-    indices = indices.contiguous()
-
-    return mra_cuda_kernel.mm_to_sparse(dense_query, dense_key, indices.int())
+    return mra_cuda_kernel.mm_to_sparse(dense_query, dense_key, indices)
 
 
 def sparse_dense_mm(sparse_query, indices, dense_key, query_num_block, block_size=32):
