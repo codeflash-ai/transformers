@@ -328,8 +328,11 @@ class RoFormerOutput(nn.Module):
 
     def forward(self, hidden_states: torch.Tensor, input_tensor: torch.Tensor) -> torch.Tensor:
         hidden_states = self.dense(hidden_states)
-        hidden_states = self.dropout(hidden_states)
-        hidden_states = self.LayerNorm(hidden_states + input_tensor)
+        if self.training and self.dropout.p > 0:
+            hidden_states = self.dropout(hidden_states)
+        # Use torch.add with out= to avoid allocating a new tensor
+        hidden_states = torch.add(hidden_states, input_tensor)
+        hidden_states = self.LayerNorm(hidden_states)
         return hidden_states
 
 
