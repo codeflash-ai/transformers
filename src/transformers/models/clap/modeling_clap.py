@@ -101,8 +101,14 @@ def window_reverse(windows, window_size, height, width):
 # contrastive loss function, adapted from
 # https://sachinruk.github.io/blog/pytorch/pytorch%20lightning/loss%20function/gpu/2021/03/07/CLIP.html#CLIP-loss-function
 def contrastive_loss(logits: torch.Tensor) -> torch.Tensor:
-    labels = torch.arange(len(logits), device=logits.device)
-    return nn.functional.cross_entropy(logits, labels)
+    batch_size = logits.shape[0]
+    if not hasattr(contrastive_loss, "_arange_cache"):
+        contrastive_loss._arange_cache = {}
+    cache = contrastive_loss._arange_cache
+    key = (batch_size, logits.device)
+    if key not in cache:
+        cache[key] = torch.arange(batch_size, device=logits.device)
+    return nn.functional.cross_entropy(logits, cache[key])
 
 
 @dataclass
