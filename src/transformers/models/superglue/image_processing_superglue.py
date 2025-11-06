@@ -117,20 +117,41 @@ def validate_and_format_image_pairs(images: ImageInput):
 
     def _is_valid_image(image):
         """images is a PIL Image or a 3D array."""
-        return is_pil_image(image) or (
-            is_valid_image(image) and get_image_type(image) != ImageType.PIL and len(image.shape) == 3
-        )
+        if is_pil_image(image):
+            return True
+        if is_valid_image(image):
+            img_type = get_image_type(image)
+            # ImageType.PIL already handled above; avoid repeated call
+            return (
+                img_type != ImageType.PIL
+                and getattr(image, "ndim", None) == 3
+                or hasattr(image, "shape")
+                and len(image.shape) == 3
+            )
+        return False
 
     if isinstance(images, list):
-        if len(images) == 2 and all((_is_valid_image(image)) for image in images):
-            return images
-        if all(
-            isinstance(image_pair, list)
-            and len(image_pair) == 2
-            and all(_is_valid_image(image) for image in image_pair)
-            for image_pair in images
-        ):
-            return [image for image_pair in images for image in image_pair]
+        # Fast path: check if it's a valid pair
+        if len(images) == 2:
+            # Avoid generator if possible, as all() short-circuits immediately
+            a, b = images
+            if _is_valid_image(a) and _is_valid_image(b):
+                return images
+
+        # Instead of using all() and a generator, do a single-pass validation and flatten in one loop
+        flat_result = []
+        for image_pair in images:
+            # Check pair structure early
+            if not (isinstance(image_pair, list) and len(image_pair) == 2):
+                break
+            i0, i1 = image_pair
+            if not (_is_valid_image(i0) and _is_valid_image(i1)):
+                break
+            flat_result.extend((i0, i1))
+        else:
+            # Only return if every pair valid, otherwise break triggers and skips this
+            return flat_result
+
     raise ValueError(error_message)
 
 
