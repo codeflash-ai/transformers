@@ -142,18 +142,27 @@ def bytes_to_unicode():
     decent coverage. This is a significant percentage of your normal, say, 32K bpe vocab. To avoid that, we want lookup
     tables between utf-8 bytes and unicode strings.
     """
-    bs = (
-        list(range(ord("!"), ord("~") + 1)) + list(range(ord("¡"), ord("¬") + 1)) + list(range(ord("®"), ord("ÿ") + 1))
-    )
-    cs = bs[:]
+    # Precompute ranges with list comprehensions and extend to build bs directly to avoid repeated list concatenations.
+    bs = []
+    bs_extend = bs.extend  # localize for performance
+    bs_extend(range(ord("!"), ord("~") + 1))
+    bs_extend(range(ord("¡"), ord("¬") + 1))
+    bs_extend(range(ord("®"), ord("ÿ") + 1))
+    cs = bs.copy()  # Shallow copy is fastest here.
     n = 0
-    for b in range(2**8):
-        if b not in bs:
-            bs.append(b)
-            cs.append(2**8 + n)
+
+    # Use set for O(1) lookups rather than repeated in-list searches.
+    bs_set = set(bs)
+    append_bs = bs.append
+    append_cs = cs.append
+    for b in range(256):
+        if b not in bs_set:
+            append_bs(b)
+            append_cs(256 + n)
             n += 1
-    cs = [chr(n) for n in cs]
-    return dict(zip(bs, cs))
+    # Avoid repeated chr() calls in a list comprehension
+    cs_chr = list(map(chr, cs))
+    return dict(zip(bs, cs_chr))
 
 
 # Copied from transformers.models.roberta.tokenization_roberta.get_pairs
