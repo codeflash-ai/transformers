@@ -122,15 +122,29 @@ def validate_and_format_image_pairs(images: ImageInput):
         )
 
     if isinstance(images, list):
-        if len(images) == 2 and all((_is_valid_image(image)) for image in images):
-            return images
-        if all(
-            isinstance(image_pair, list)
-            and len(image_pair) == 2
-            and all(_is_valid_image(image) for image in image_pair)
-            for image_pair in images
-        ):
-            return [image for image_pair in images for image in image_pair]
+        N = len(images)
+        # Most common case: single image pair (length 2)
+        if N == 2:
+            img0, img1 = images
+            if _is_valid_image(img0) and _is_valid_image(img1):
+                return images
+        # Next most common: batch of pairs
+        # Pre-filter and flatten in one tight loop, minimize intermediate allocations
+        is_valid_pair = True
+        out_flat = []
+        for image_pair in images:
+            if (
+                isinstance(image_pair, list)
+                and len(image_pair) == 2
+                and _is_valid_image(image_pair[0])
+                and _is_valid_image(image_pair[1])
+            ):
+                out_flat.extend(image_pair)
+            else:
+                is_valid_pair = False
+                break
+        if is_valid_pair and len(out_flat) == 2 * N:
+            return out_flat
     raise ValueError(error_message)
 
 
@@ -437,31 +451,44 @@ class SuperGlueImageProcessor(BaseImageProcessor):
 
         results = []
         for image_pair, pair_output in zip(image_pairs, keypoint_matching_output):
-            height0, width0 = image_pair[0].shape[:2]
-            height1, width1 = image_pair[1].shape[:2]
-            plot_image = np.zeros((max(height0, height1), width0 + width1, 3), dtype=np.uint8)
-            plot_image[:height0, :width0] = image_pair[0]
-            plot_image[:height1, width0:] = image_pair[1]
+            img0, img1 = image_pair
+            height0, width0 = img0.shape[:2]
+            height1, width1 = img1.shape[:2]
+            maxheight = max(height0, height1)
+            totalwidth = width0 + width1
+            plot_image = np.zeros((maxheight, totalwidth, 3), dtype=np.uint8)
+            plot_image[:height0, :width0] = img0
+            plot_image[:height1, width0:] = img1
 
             plot_image_pil = Image.fromarray(plot_image)
             draw = ImageDraw.Draw(plot_image_pil)
 
-            keypoints0_x, keypoints0_y = pair_output["keypoints0"].unbind(1)
-            keypoints1_x, keypoints1_y = pair_output["keypoints1"].unbind(1)
-            for keypoint0_x, keypoint0_y, keypoint1_x, keypoint1_y, matching_score in zip(
-                keypoints0_x, keypoints0_y, keypoints1_x, keypoints1_y, pair_output["matching_scores"]
-            ):
-                color = self._get_color(matching_score)
-                draw.line(
-                    (keypoint0_x, keypoint0_y, keypoint1_x + width0, keypoint1_y),
-                    fill=color,
-                    width=3,
-                )
-                draw.ellipse((keypoint0_x - 2, keypoint0_y - 2, keypoint0_x + 2, keypoint0_y + 2), fill="black")
-                draw.ellipse(
-                    (keypoint1_x + width0 - 2, keypoint1_y - 2, keypoint1_x + width0 + 2, keypoint1_y + 2),
-                    fill="black",
-                )
+            keypoints0 = pair_output["keypoints0"]
+            keypoints1 = pair_output["keypoints1"]
+            # Unbind ONCE, not twice, as .unbind creates tuples, reduce per-call overhead
+            keypoints0_x, keypoints0_y = keypoints0.unbind(1)
+            keypoints1_x, keypoints1_y = keypoints1.unbind(1)
+            matching_scores = pair_output["matching_scores"]
+
+            # Use local bind for methods used inside loop for performance
+            draw_line = draw.line
+            draw_ellipse = draw.ellipse
+            get_color = self._get_color
+
+            # Pre-fetch width0 for loop
+            width0_local = width0
+
+            # If keypoint tensors are reasonably sized, we can precompute all needed tuples
+            for x0, y0, x1, y1, score in zip(keypoints0_x, keypoints0_y, keypoints1_x, keypoints1_y, matching_scores):
+                color = get_color(score)
+                # Coordinates as integers
+                x0i = int(x0)
+                y0i = int(y0)
+                x1i = int(x1) + width0_local
+                y1i = int(y1)
+                draw_line((x0i, y0i, x1i, y1i), fill=color, width=3)
+                draw_ellipse((x0i - 2, y0i - 2, x0i + 2, y0i + 2), fill="black")
+                draw_ellipse((x1i - 2, y1i - 2, x1i + 2, y1i + 2), fill="black")
 
             results.append(plot_image_pil)
         return results

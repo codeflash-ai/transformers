@@ -21,6 +21,7 @@ from typing import Optional, Union
 
 import httpx
 import numpy as np
+import PIL.Image
 
 from .utils import (
     ExplicitEnum,
@@ -132,14 +133,14 @@ def concatenate_list(input_list):
 
 
 def valid_images(imgs):
-    # If we have an list of images, make sure every image is valid
-    if isinstance(imgs, (list, tuple)):
-        for img in imgs:
-            if not valid_images(img):
-                return False
-    # If not a list of tuple, we have been given a single image or batched tensor of images
-    elif not is_valid_image(imgs):
-        return False
+    # Iteratively validate images/batches/lists for improved performance (no recursion)
+    stack = [imgs]
+    while stack:
+        img = stack.pop()
+        if isinstance(img, (list, tuple)):
+            stack.extend(img)
+        elif not is_valid_image(img):
+            return False
     return True
 
 
@@ -222,15 +223,16 @@ def make_flat_list_of_images(
         return [img for img_list in images for img in img_list]
 
     if isinstance(images, (list, tuple)) and is_valid_list_of_images(images):
-        if is_pil_image(images[0]) or images[0].ndim == expected_ndims:
+        first_img = images[0]
+        if is_pil_image(first_img) or getattr(first_img, "ndim", None) == expected_ndims:
             return images
-        if images[0].ndim == expected_ndims + 1:
+        if getattr(first_img, "ndim", None) == expected_ndims + 1:
             return [img for img_list in images for img in img_list]
 
     if is_valid_image(images):
-        if is_pil_image(images) or images.ndim == expected_ndims:
+        if is_pil_image(images) or getattr(images, "ndim", None) == expected_ndims:
             return [images]
-        if images.ndim == expected_ndims + 1:
+        if getattr(images, "ndim", None) == expected_ndims + 1:
             return list(images)
 
     raise ValueError(f"Could not make a flat list of images from {images}")
@@ -279,7 +281,12 @@ def to_numpy_array(img) -> np.ndarray:
     if not is_valid_image(img):
         raise ValueError(f"Invalid image type: {type(img)}")
 
-    if is_vision_available() and isinstance(img, PIL.Image.Image):
+    # Optimize common-case early returns for numpy (short-circuit if already ndarray):
+    if isinstance(img, np.ndarray):
+        return img
+
+    # PIL.Image.Image is much faster to check than is_vision_available
+    if isinstance(img, PIL.Image.Image):
         return np.array(img)
     return to_numpy(img)
 
