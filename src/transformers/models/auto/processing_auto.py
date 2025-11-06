@@ -40,6 +40,15 @@ from .image_processing_auto import AutoImageProcessor
 from .tokenization_auto import AutoTokenizer
 
 
+_module_cache = {}
+
+_processor_class_cache = {}
+
+_main_module_cache = [None]
+
+_class_to_module = {}
+
+
 logger = logging.get_logger(__name__)
 
 PROCESSOR_MAPPING_NAMES = OrderedDict(
@@ -161,25 +170,44 @@ PROCESSOR_MAPPING = _LazyAutoMapping(CONFIG_MAPPING_NAMES, PROCESSOR_MAPPING_NAM
 
 
 def processor_class_from_name(class_name: str):
-    for module_name, processors in PROCESSOR_MAPPING_NAMES.items():
-        if class_name in processors:
-            module_name = model_type_to_module_name(module_name)
+    # Fast path: check processor_class cache
+    cached = _processor_class_cache.get(class_name)
+    if cached is not None:
+        return cached
 
-            module = importlib.import_module(f".{module_name}", "transformers.models")
+    module_name = _class_to_module.get(class_name)
+    if module_name is not None:
+        module_import_name = model_type_to_module_name(module_name)
+        # Module import with cache
+        module = _module_cache.get(module_import_name)
+        if module is None:
             try:
-                return getattr(module, class_name)
+                module = importlib.import_module(f".{module_import_name}", "transformers.models")
+            except ImportError:
+                module = None
+            _module_cache[module_import_name] = module
+        if module:
+            try:
+                result = getattr(module, class_name)
+                _processor_class_cache[class_name] = result
+                return result
             except AttributeError:
-                continue
+                pass
 
     for processor in PROCESSOR_MAPPING._extra_content.values():
         if getattr(processor, "__name__", None) == class_name:
+            _processor_class_cache[class_name] = processor
             return processor
 
     # We did not fine the class, but maybe it's because a dep is missing. In that case, the class will be in the main
     # init and we return the proper dummy to get an appropriate error message.
-    main_module = importlib.import_module("transformers")
+    if _main_module_cache[0] is None:
+        _main_module_cache[0] = importlib.import_module("transformers")
+    main_module = _main_module_cache[0]
     if hasattr(main_module, class_name):
-        return getattr(main_module, class_name)
+        processor = getattr(main_module, class_name)
+        _processor_class_cache[class_name] = processor
+        return processor
 
     return None
 
