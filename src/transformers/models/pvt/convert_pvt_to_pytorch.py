@@ -33,69 +33,108 @@ logger = logging.get_logger(__name__)
 
 # here we list all keys to be renamed (original name on the left, our name on the right)
 def create_rename_keys(config):
+    # Preallocate list size using maximum length estimation, if possible.
+    # Otherwise, minimize repeated append overhead by using local vars.
+    depths = config.depths
+    num_encoder_blocks = config.num_encoder_blocks
+    sequence_reduction_ratios = config.sequence_reduction_ratios
+
+    # Because 8 keys before the innermost loop and up to 16-24 per inner block depending on ratio.
+    precompute_sz = (num_encoder_blocks * (5 + sum(depths) * 15)) + 7
     rename_keys = []
-    for i in range(config.num_encoder_blocks):
+    append = rename_keys.append  # Local function var for faster access
+
+    for i in range(num_encoder_blocks):
+        idx1 = i + 1
         # Rename embeddings' parameters
-        rename_keys.append((f"pos_embed{i + 1}", f"pvt.encoder.patch_embeddings.{i}.position_embeddings"))
+        append((f"pos_embed{idx1}", f"pvt.encoder.patch_embeddings.{i}.position_embeddings"))
+        append((f"patch_embed{idx1}.proj.weight", f"pvt.encoder.patch_embeddings.{i}.projection.weight"))
+        append((f"patch_embed{idx1}.proj.bias", f"pvt.encoder.patch_embeddings.{i}.projection.bias"))
+        append((f"patch_embed{idx1}.norm.weight", f"pvt.encoder.patch_embeddings.{i}.layer_norm.weight"))
+        append((f"patch_embed{idx1}.norm.bias", f"pvt.encoder.patch_embeddings.{i}.layer_norm.bias"))
 
-        rename_keys.append((f"patch_embed{i + 1}.proj.weight", f"pvt.encoder.patch_embeddings.{i}.projection.weight"))
-        rename_keys.append((f"patch_embed{i + 1}.proj.bias", f"pvt.encoder.patch_embeddings.{i}.projection.bias"))
-        rename_keys.append((f"patch_embed{i + 1}.norm.weight", f"pvt.encoder.patch_embeddings.{i}.layer_norm.weight"))
-        rename_keys.append((f"patch_embed{i + 1}.norm.bias", f"pvt.encoder.patch_embeddings.{i}.layer_norm.bias"))
+        depth = depths[i]
+        sr_ratio = sequence_reduction_ratios[i]
+        for j in range(depth):
+            # Prepare strings only once per pattern for this block/j, then interpolate just the indices
+            idx_j = f"{i}.{j}"
+            block_prefix = f"block{idx1}.{j}"
+            encoder_block_prefix = f"pvt.encoder.block.{i}.{j}"
 
-        for j in range(config.depths[i]):
             # Rename blocks' parameters
-            rename_keys.append(
-                (f"block{i + 1}.{j}.attn.q.weight", f"pvt.encoder.block.{i}.{j}.attention.self.query.weight")
+            append(
+                (f"{block_prefix}.attn.q.weight", f"{encoder_block_prefix}.attention.self.query.weight")
             )
-            rename_keys.append(
-                (f"block{i + 1}.{j}.attn.q.bias", f"pvt.encoder.block.{i}.{j}.attention.self.query.bias")
+            append(
+                (f"{block_prefix}.attn.q.bias", f"{encoder_block_prefix}.attention.self.query.bias")
             )
-            rename_keys.append(
-                (f"block{i + 1}.{j}.attn.kv.weight", f"pvt.encoder.block.{i}.{j}.attention.self.kv.weight")
+            append(
+                (f"{block_prefix}.attn.kv.weight", f"{encoder_block_prefix}.attention.self.kv.weight")
             )
-            rename_keys.append((f"block{i + 1}.{j}.attn.kv.bias", f"pvt.encoder.block.{i}.{j}.attention.self.kv.bias"))
+            append(
+                (f"{block_prefix}.attn.kv.bias", f"{encoder_block_prefix}.attention.self.kv.bias")
+            )
 
-            if config.sequence_reduction_ratios[i] > 1:
-                rename_keys.append(
+            if sr_ratio > 1:
+                append(
                     (
-                        f"block{i + 1}.{j}.attn.norm.weight",
-                        f"pvt.encoder.block.{i}.{j}.attention.self.layer_norm.weight",
+                        f"{block_prefix}.attn.norm.weight",
+                        f"{encoder_block_prefix}.attention.self.layer_norm.weight",
                     )
                 )
-                rename_keys.append(
-                    (f"block{i + 1}.{j}.attn.norm.bias", f"pvt.encoder.block.{i}.{j}.attention.self.layer_norm.bias")
-                )
-                rename_keys.append(
+                append(
                     (
-                        f"block{i + 1}.{j}.attn.sr.weight",
-                        f"pvt.encoder.block.{i}.{j}.attention.self.sequence_reduction.weight",
+                        f"{block_prefix}.attn.norm.bias",
+                        f"{encoder_block_prefix}.attention.self.layer_norm.bias",
                     )
                 )
-                rename_keys.append(
+                append(
                     (
-                        f"block{i + 1}.{j}.attn.sr.bias",
-                        f"pvt.encoder.block.{i}.{j}.attention.self.sequence_reduction.bias",
+                        f"{block_prefix}.attn.sr.weight",
+                        f"{encoder_block_prefix}.attention.self.sequence_reduction.weight",
+                    )
+                )
+                append(
+                    (
+                        f"{block_prefix}.attn.sr.bias",
+                        f"{encoder_block_prefix}.attention.self.sequence_reduction.bias",
                     )
                 )
 
-            rename_keys.append(
-                (f"block{i + 1}.{j}.attn.proj.weight", f"pvt.encoder.block.{i}.{j}.attention.output.dense.weight")
+            append(
+                (f"{block_prefix}.attn.proj.weight", f"{encoder_block_prefix}.attention.output.dense.weight")
             )
-            rename_keys.append(
-                (f"block{i + 1}.{j}.attn.proj.bias", f"pvt.encoder.block.{i}.{j}.attention.output.dense.bias")
+            append(
+                (f"{block_prefix}.attn.proj.bias", f"{encoder_block_prefix}.attention.output.dense.bias")
             )
 
-            rename_keys.append((f"block{i + 1}.{j}.norm1.weight", f"pvt.encoder.block.{i}.{j}.layer_norm_1.weight"))
-            rename_keys.append((f"block{i + 1}.{j}.norm1.bias", f"pvt.encoder.block.{i}.{j}.layer_norm_1.bias"))
+            append(
+                (f"{block_prefix}.norm1.weight", f"{encoder_block_prefix}.layer_norm_1.weight")
+            )
+            append(
+                (f"{block_prefix}.norm1.bias", f"{encoder_block_prefix}.layer_norm_1.bias")
+            )
+            append(
+                (f"{block_prefix}.norm2.weight", f"{encoder_block_prefix}.layer_norm_2.weight")
+            )
+            append(
+                (f"{block_prefix}.norm2.bias", f"{encoder_block_prefix}.layer_norm_2.bias")
+            )
 
-            rename_keys.append((f"block{i + 1}.{j}.norm2.weight", f"pvt.encoder.block.{i}.{j}.layer_norm_2.weight"))
-            rename_keys.append((f"block{i + 1}.{j}.norm2.bias", f"pvt.encoder.block.{i}.{j}.layer_norm_2.bias"))
+            append(
+                (f"{block_prefix}.mlp.fc1.weight", f"{encoder_block_prefix}.mlp.dense1.weight")
+            )
+            append(
+                (f"{block_prefix}.mlp.fc1.bias", f"{encoder_block_prefix}.mlp.dense1.bias")
+            )
+            append(
+                (f"{block_prefix}.mlp.fc2.weight", f"{encoder_block_prefix}.mlp.dense2.weight")
+            )
+            append(
+                (f"{block_prefix}.mlp.fc2.bias", f"{encoder_block_prefix}.mlp.dense2.bias")
+            )
 
-            rename_keys.append((f"block{i + 1}.{j}.mlp.fc1.weight", f"pvt.encoder.block.{i}.{j}.mlp.dense1.weight"))
-            rename_keys.append((f"block{i + 1}.{j}.mlp.fc1.bias", f"pvt.encoder.block.{i}.{j}.mlp.dense1.bias"))
-            rename_keys.append((f"block{i + 1}.{j}.mlp.fc2.weight", f"pvt.encoder.block.{i}.{j}.mlp.dense2.weight"))
-            rename_keys.append((f"block{i + 1}.{j}.mlp.fc2.bias", f"pvt.encoder.block.{i}.{j}.mlp.dense2.bias"))
+    # Rename cls token
 
     # Rename cls token
     rename_keys.extend(
