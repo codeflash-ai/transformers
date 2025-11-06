@@ -74,7 +74,7 @@ def window_partition(hidden_states, window_size):
     hidden_states = hidden_states.view(
         batch_size, height // window_size, window_size, width // window_size, window_size, num_channels
     )
-    windows = hidden_states.permute(0, 1, 3, 2, 4, 5).contiguous().view(-1, window_size, window_size, num_channels)
+    windows = hidden_states.permute(0, 1, 3, 2, 4, 5).reshape(-1, window_size, window_size, num_channels)
     return windows
 
 
