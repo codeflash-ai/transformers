@@ -870,13 +870,13 @@ class Zamba2HybridLayer(ZambaHybridLayer):
         )
 
         transformer_hidden_states = layer_outputs[0]
-
-        if output_attentions:
-            self_attn_weights = layer_outputs[1]
+        # Avoid unnecessary extraction if not needed
+        self_attn_weights = layer_outputs[1] if output_attentions else None
 
         transformer_hidden_states = self.linear(transformer_hidden_states)
 
-        layer_outputs = self.mamba_decoder(
+        # Use output_attentions directly, don't recheck inside mamba_decoder
+        layer_outputs_mamba = self.mamba_decoder(
             hidden_states,
             transformer_hidden_states=transformer_hidden_states,
             attention_mask=attention_mask,
@@ -887,9 +887,10 @@ class Zamba2HybridLayer(ZambaHybridLayer):
         )
 
         if output_attentions:
-            layer_outputs = (layer_outputs[0], self_attn_weights) + layer_outputs[2:]
-
-        return layer_outputs
+            # Slightly faster tuple construction by direct packing
+            return (layer_outputs_mamba[0], self_attn_weights) + layer_outputs_mamba[2:]
+        else:
+            return layer_outputs_mamba
 
 
 class Zamba2PreTrainedModel(PreTrainedModel):
