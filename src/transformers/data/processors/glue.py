@@ -158,15 +158,11 @@ class MrpcProcessor(DataProcessor):
 
     def _create_examples(self, lines, set_type):
         """Creates examples for the training, dev and test sets."""
-        examples = []
-        for i, line in enumerate(lines):
-            if i == 0:
-                continue
-            guid = f"{set_type}-{i}"
-            text_a = line[3]
-            text_b = line[4]
-            label = None if set_type == "test" else line[0]
-            examples.append(InputExample(guid=guid, text_a=text_a, text_b=text_b, label=label))
+        is_test = set_type == "test"
+        examples = [
+            InputExample(guid=f"{set_type}-{i}", text_a=line[3], text_b=line[4], label=None if is_test else line[0])
+            for i, line in enumerate(lines[1:], start=1)
+        ]
         return examples
 
 
