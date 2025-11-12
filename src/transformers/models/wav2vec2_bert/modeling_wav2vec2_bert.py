@@ -74,30 +74,37 @@ class Wav2Vec2BertRelPositionalEmbedding(nn.Module):
         self.max_len = config.max_source_positions
         self.d_model = config.hidden_size
         self.pe = None
+
+        # Precompute positional encodings once on CPU and cache for efficiency
+        self._precomputed_pe = self._precompute_positional_encodings(self.max_len, self.d_model)
+
+        # Initialize self.pe on the default device/dtype used at first call
+        # This mirrors the original behavior
         self.extend_pe(torch.tensor(0.0).expand(1, self.max_len))
 
     def extend_pe(self, x):
         # Reset the positional encodings
-        if self.pe is not None:
-            # self.pe contains both positive and negative parts
-            # the length of self.pe is 2 * input_len - 1
-            if self.pe.size(1) >= x.size(1) * 2 - 1:
-                if self.pe.dtype != x.dtype or self.pe.device != x.device:
-                    self.pe = self.pe.to(dtype=x.dtype, device=x.device)
-                return
-        # Suppose `i` is the position of query vector and `j` is the
-        # position of key vector. We use positive relative positions when keys
-        # are to the left (i>j) and negative relative positions otherwise (i<j).
-        pe_positive = torch.zeros(x.size(1), self.d_model)
-        pe_negative = torch.zeros(x.size(1), self.d_model)
-        position = torch.arange(0, x.size(1), dtype=torch.int64).float().unsqueeze(1)
-        div_term = torch.exp(
-            torch.arange(0, self.d_model, 2, dtype=torch.int64).float() * -(math.log(10000.0) / self.d_model)
-        )
+        input_len = x.size(1)
+        required_len = input_len * 2 - 1
+        # Fast path: current cached self.pe sufficient in shape, dtype, and device
+        if self.pe is not None and self.pe.size(1) >= required_len:
+            if self.pe.dtype != x.dtype or self.pe.device != x.device:
+                self.pe = self.pe.to(dtype=x.dtype, device=x.device)
+            return
+        # Use the cached CPU float32 positional encodings for required_len <= max_len*2-1
+        if required_len <= self._precomputed_pe.size(1):
+            pe = self._precomputed_pe[:, :required_len]
+            self.pe = pe.to(device=x.device, dtype=x.dtype)
+            return
+        # If extended length required, recompute like original logic
+        pe_positive = torch.zeros(input_len, self.d_model)
+        pe_negative = torch.zeros(input_len, self.d_model)
+        position = torch.arange(0, input_len).float().unsqueeze(1)
+        div_term = torch.exp(torch.arange(0, self.d_model, 2).float() * -(math.log(10000.0) / self.d_model))
         pe_positive[:, 0::2] = torch.sin(position * div_term)
         pe_positive[:, 1::2] = torch.cos(position * div_term)
-        pe_negative[:, 0::2] = torch.sin(-1 * position * div_term)
-        pe_negative[:, 1::2] = torch.cos(-1 * position * div_term)
+        pe_negative[:, 0::2] = torch.sin(-position * div_term)
+        pe_negative[:, 1::2] = torch.cos(-position * div_term)
 
         # Reverse the order of positive indices and concat both positive and
         # negative indices. This is used to support the shifting trick
@@ -114,6 +121,25 @@ class Wav2Vec2BertRelPositionalEmbedding(nn.Module):
         relative_position_embeddings = self.pe[:, start_idx:end_idx]
 
         return relative_position_embeddings
+
+    @staticmethod
+    def _precompute_positional_encodings(length: int, d_model: int) -> torch.Tensor:
+        # Precompute positive and negative positional encodings
+        position = torch.arange(0, length).float().unsqueeze(1)  # shape: [length, 1]
+        div_term = torch.exp(torch.arange(0, d_model, 2).float() * -(math.log(10000.0) / d_model))
+        pe_positive = torch.zeros(length, d_model)
+        pe_negative = torch.zeros(length, d_model)
+        # Vectorized computation
+        pe_positive[:, 0::2] = torch.sin(position * div_term)
+        pe_positive[:, 1::2] = torch.cos(position * div_term)
+        pe_negative[:, 0::2] = torch.sin(-position * div_term)
+        pe_negative[:, 1::2] = torch.cos(-position * div_term)
+
+        # Apply flipping and concatenation
+        pe_positive = torch.flip(pe_positive, [0]).unsqueeze(0)  # [1, length, d_model]
+        pe_negative = pe_negative[1:].unsqueeze(0)  # [1, length-1, d_model]
+        pe = torch.cat([pe_positive, pe_negative], dim=1)  # [1, 2*length-1, d_model]
+        return pe  # on CPU, float32 by default
 
 
 class Wav2Vec2BertFeatureProjection(nn.Module):
