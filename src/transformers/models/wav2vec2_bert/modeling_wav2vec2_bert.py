@@ -604,14 +604,16 @@ def _compute_new_attention_mask(hidden_states: torch.Tensor, seq_lens: torch.Ten
     """
     batch_size, mask_seq_len = hidden_states.shape[:2]
 
-    indices = torch.arange(mask_seq_len, device=seq_lens.device).expand(batch_size, -1)
+    # Vectorized mask computation avoids explicit creation of indices and expands
+    # Makes use of broadcasting for direct boolean mask construction
+    # (batch_size, seq_len) result, matching the required mask shape
+    seq_range = torch.arange(mask_seq_len, device=hidden_states.device)
+    bool_mask = seq_range.unsqueeze(0) >= seq_lens.unsqueeze(1)
 
-    bool_mask = indices >= seq_lens.unsqueeze(1).expand(-1, mask_seq_len)
+    # Directly create the mask and use masked_fill_ (in-place) for efficiency
 
     mask = hidden_states.new_ones((batch_size, mask_seq_len))
-
-    mask = mask.masked_fill(bool_mask, 0)
-
+    mask.masked_fill_(bool_mask, 0)
     return mask
 
 
