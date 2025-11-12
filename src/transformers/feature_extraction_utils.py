@@ -19,6 +19,7 @@ import copy
 import json
 import os
 from collections import UserDict
+from functools import lru_cache
 from typing import TYPE_CHECKING, Any, Optional, TypeVar, Union
 
 import numpy as np
@@ -101,40 +102,19 @@ class BatchFeature(UserDict):
         if tensor_type is None:
             return None, None
 
-        # Convert to TensorType
-        if not isinstance(tensor_type, TensorType):
-            tensor_type = TensorType(tensor_type)
+        tensor_type_enum = self._tensor_type_from_str(tensor_type)
 
-        if tensor_type == TensorType.PYTORCH:
-            if not is_torch_available():
-                raise ImportError("Unable to convert output to PyTorch tensors format, PyTorch is not installed.")
-            import torch
+        if tensor_type_enum == TensorType.PYTORCH:
+            torch_mod = self._torch_import_and_check()
 
             def as_tensor(value):
-                if isinstance(value, (list, tuple)) and len(value) > 0:
-                    if isinstance(value[0], np.ndarray):
-                        value = np.array(value)
-                    elif (
-                        isinstance(value[0], (list, tuple))
-                        and len(value[0]) > 0
-                        and isinstance(value[0][0], np.ndarray)
-                    ):
-                        value = np.array(value)
-                if isinstance(value, np.ndarray):
-                    return torch.from_numpy(value)
-                else:
-                    return torch.tensor(value)
+                return BatchFeature._as_tensor_pytorch(value)
 
-            is_tensor = torch.is_tensor
+            is_tensor = torch_mod.is_tensor
         else:
 
             def as_tensor(value, dtype=None):
-                if isinstance(value, (list, tuple)) and isinstance(value[0], (list, tuple, np.ndarray)):
-                    value_lens = [len(val) for val in value]
-                    if len(set(value_lens)) > 1 and dtype is None:
-                        # we have a ragged list so handle explicitly
-                        value = as_tensor([np.asarray(val) for val in value], dtype=object)
-                return np.asarray(value, dtype=dtype)
+                return BatchFeature._as_tensor_numpy(value, dtype=dtype)
 
             is_tensor = is_numpy_array
         return is_tensor, as_tensor
@@ -216,6 +196,61 @@ class BatchFeature(UserDict):
 
         self.data = {k: maybe_to(v) for k, v in self.items()}
         return self
+
+    @staticmethod
+    def _as_tensor_pytorch(value):
+        import torch
+
+        # Fast numpy stack detection and conversion, avoids double conversion for nested numpy
+        if isinstance(value, (list, tuple)) and value and isinstance(value[0], np.ndarray):
+            value = np.array(value)
+        elif (
+            isinstance(value, (list, tuple))
+            and value
+            and isinstance(value[0], (list, tuple))
+            and value[0]
+            and isinstance(value[0][0], np.ndarray)
+        ):
+            value = np.array(value)
+        if isinstance(value, np.ndarray):
+            return torch.from_numpy(value)
+        else:
+            return torch.tensor(value)
+
+    @staticmethod
+    def _as_tensor_numpy(value, dtype=None):
+        # Ragged list handling (keep dtype=object if needed)
+        if isinstance(value, (list, tuple)) and value and isinstance(value[0], (list, tuple, np.ndarray)):
+            lens = (len(val) for val in value)
+            # More efficient ragged list detection
+            first_len = None
+            for l in lens:
+                if first_len is None:
+                    first_len = l
+                elif l != first_len:
+                    if dtype is None:
+                        value = [np.asarray(val) for val in value]
+                        return np.asarray(value, dtype=object)
+                    break
+        return np.asarray(value, dtype=dtype)
+
+    @staticmethod
+    @lru_cache(maxsize=8)
+    def _tensor_type_from_str(tensor_type: Union[str, TensorType]):
+        # lru_cache to avoid repeated TensorType constructions for common tensor_type keys
+        if isinstance(tensor_type, TensorType):
+            return tensor_type
+        return TensorType(tensor_type)
+
+    @staticmethod
+    @lru_cache(maxsize=1)
+    def _torch_import_and_check():
+        # lru_cache here avoids repeat imports and capability checks
+        if not is_torch_available():
+            raise ImportError("Unable to convert output to PyTorch tensors format, PyTorch is not installed.")
+        import torch
+
+        return torch
 
 
 class FeatureExtractionMixin(PushToHubMixin):

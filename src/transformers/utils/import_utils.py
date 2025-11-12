@@ -204,7 +204,6 @@ def is_torch_npu_available(check_device=False) -> bool:
         return False
 
     import torch
-    import torch_npu  # noqa: F401
 
     if check_device:
         try:
@@ -229,7 +228,7 @@ def is_torch_xpu_available(check_device: bool = False) -> bool:
     torch_version = version.parse(get_torch_version())
     if torch_version.major == 2 and torch_version.minor < 6:
         if is_ipex_available():
-            import intel_extension_for_pytorch  # noqa: F401
+            pass
         elif torch_version.major == 2 and torch_version.minor < 4:
             return False
 
@@ -255,7 +254,6 @@ def is_torch_mlu_available() -> bool:
         return False
 
     import torch
-    import torch_mlu  # noqa: F401
 
     pytorch_cndev_based_mlu_check_previous_value = os.environ.get("PYTORCH_CNDEV_BASED_MLU_CHECK")
     try:
@@ -277,7 +275,6 @@ def is_torch_musa_available(check_device=False) -> bool:
         return False
 
     import torch
-    import torch_musa  # noqa: F401
 
     torch_musa_min_version = "0.33.0"
     accelerate_available, accelerate_version = _is_package_available("accelerate", return_version=True)
@@ -334,8 +331,7 @@ def is_torch_hpu_available() -> bool:
     import torch
 
     if os.environ.get("PT_HPU_LAZY_MODE", "1") == "1":
-        # import habana_frameworks.torch in case of lazy mode to patch torch with torch.hpu
-        import habana_frameworks.torch  # noqa: F401
+        pass
 
     if not hasattr(torch, "hpu") or not torch.hpu.is_available():
         return False
@@ -730,8 +726,6 @@ def is_detectron2_available() -> bool:
     # i.e. `import detectron2` and `import detectron2.modeling` still work, even though the library is uninstalled
     # (the package exists but the objects are not reachable) - so here we explicitly try to import an object from it
     try:
-        from detectron2.modeling import META_ARCH_REGISTRY  # noqa
-
         return True
     except Exception:
         return False
