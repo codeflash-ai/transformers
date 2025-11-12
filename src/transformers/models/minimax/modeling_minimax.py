@@ -66,7 +66,10 @@ class MiniMaxRMSNorm(nn.Module):
         return self.weight * hidden_states.to(input_dtype)
 
     def extra_repr(self):
-        return f"{tuple(self.weight.shape)}, eps={self.variance_epsilon}"
+        shape = self.weight.shape
+        if len(shape) == 1:
+            return f"({shape[0]},), eps={self.variance_epsilon}"
+        return f"{tuple(shape)}, eps={self.variance_epsilon}"
 
 
 class MiniMaxCache(DynamicCache):
