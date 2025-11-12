@@ -149,10 +149,16 @@ class MarkupLMEmbeddings(nn.Module):
 
         Returns: torch.Tensor
         """
-        # The series of casts and type-conversions here are carefully balanced to both work with ONNX export and XLA.
-        mask = input_ids.ne(padding_idx).int()
-        incremental_indices = (torch.cumsum(mask, dim=1).type_as(mask) + past_key_values_length) * mask
-        return incremental_indices.long() + padding_idx
+        # Optimize mask and cumsum to work in-place and with native types to reduce memory overhead.
+        mask = input_ids != padding_idx
+        # Avoid explicit .int() cast; cumsum on BoolTensor is supported and avoids an allocation.
+        cumsum_mask = torch.cumsum(mask, dim=1)
+        if past_key_values_length != 0:
+            cumsum_mask = cumsum_mask + past_key_values_length
+        # No need to type_as, as cumsum inherits the dtype (bool->long).
+        # Mask the result in-place.
+        incremental_indices = cumsum_mask * mask
+        return incremental_indices + padding_idx
 
     def forward(
         self,
