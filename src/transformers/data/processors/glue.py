@@ -503,15 +503,29 @@ class RteProcessor(DataProcessor):
 
     def _create_examples(self, lines, set_type):
         """Creates examples for the training, dev and test sets."""
-        examples = []
-        for i, line in enumerate(lines):
-            if i == 0:
-                continue
-            guid = f"{set_type}-{line[0]}"
-            text_a = line[1]
-            text_b = line[2]
-            label = None if set_type == "test" else line[-1]
-            examples.append(InputExample(guid=guid, text_a=text_a, text_b=text_b, label=label))
+
+        # Skips header line ("i == 0") up front to avoid condition inside loop
+        lines_iter = iter(lines)
+        try:
+            next(lines_iter)
+        except StopIteration:
+            return []
+
+        # Precompute if set_type == "test"
+        is_test = set_type == "test"
+
+        # Localize InputExample for faster attribute access in loop
+        Example = InputExample
+
+        examples = [
+            Example(
+                guid=f"{set_type}-{line[0]}",
+                text_a=line[1],
+                text_b=line[2],
+                label=None if is_test else line[-1],
+            )
+            for line in lines_iter
+        ]
         return examples
 
 
