@@ -457,15 +457,40 @@ class QnliProcessor(DataProcessor):
 
     def _create_examples(self, lines, set_type):
         """Creates examples for the training, dev and test sets."""
-        examples = []
-        for i, line in enumerate(lines):
-            if i == 0:
-                continue
-            guid = f"{set_type}-{line[0]}"
-            text_a = line[1]
-            text_b = line[2]
-            label = None if set_type == "test" else line[-1]
-            examples.append(InputExample(guid=guid, text_a=text_a, text_b=text_b, label=label))
+        # Optimized to reduce Python-level append overhead and f-string formatting in loop
+        if not lines or len(lines) <= 1:
+            return []
+        # Extract lines once, skip header row
+        lines_iter = iter(lines)
+        next(lines_iter)  # Skip header row
+
+        set_type_prefix = f"{set_type}-"
+        is_test = set_type == "test"
+        # Local variable access is faster than repeated attribute lookup in loop
+        InputExample_local = InputExample
+
+        # Preallocate examples with list comprehension for improved performance
+        if is_test:
+            examples = [
+                InputExample_local(
+                    guid=f"{set_type_prefix}{line[0]}",
+                    text_a=line[1],
+                    text_b=line[2],
+                    label=None,
+                )
+                for line in lines_iter
+            ]
+        else:
+            examples = [
+                InputExample_local(
+                    guid=f"{set_type_prefix}{line[0]}",
+                    text_a=line[1],
+                    text_b=line[2],
+                    label=line[-1],
+                )
+                for line in lines_iter
+            ]
+
         return examples
 
 
