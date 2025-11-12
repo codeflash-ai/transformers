@@ -408,18 +408,22 @@ class QqpProcessor(DataProcessor):
         test_mode = set_type == "test"
         q1_index = 1 if test_mode else 3
         q2_index = 2 if test_mode else 4
+        # Skip the first line directly using slicing instead of checking "i == 0"
+        lines = lines[1:]
+        # Preallocate list size for efficiency
+        # It is possible some lines will be skipped, so we can't fully preallocate. We'll still use local variables.
         examples = []
-        for i, line in enumerate(lines):
-            if i == 0:
-                continue
-            guid = f"{set_type}-{line[0]}"
+        append_example = examples.append
+        guid_prefix = f"{set_type}-"
+        for line in lines:
             try:
+                guid = guid_prefix + line[0]
                 text_a = line[q1_index]
                 text_b = line[q2_index]
                 label = None if test_mode else line[5]
+                append_example(InputExample(guid=guid, text_a=text_a, text_b=text_b, label=label))
             except IndexError:
                 continue
-            examples.append(InputExample(guid=guid, text_a=text_a, text_b=text_b, label=label))
         return examples
 
 
