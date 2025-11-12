@@ -332,13 +332,33 @@ def eager_attention_forward(
     dropout: float = 0.0,
     **kwargs,
 ):
-    attn_weights = torch.matmul(query, key.transpose(2, 3)) * scaling
-    if attention_mask is not None:
-        causal_mask = attention_mask[:, :, :, : key.shape[-2]]
-        attn_weights = attn_weights + causal_mask
+    # Use local variables and cache frequently accessed attributes to reduce lookup time
+    F = nn.functional
+    q_dtype = query.dtype
+    k_shape_last2 = key.shape[-2]
 
-    attn_weights = nn.functional.softmax(attn_weights, dim=-1, dtype=torch.float32).to(query.dtype)
-    attn_weights = nn.functional.dropout(attn_weights, p=dropout, training=module.training)
+    # Use in-place addition for mask to reduce memory churn
+    attn_weights = torch.matmul(query, key.transpose(2, 3))
+    attn_weights.mul_(scaling)
+
+    if attention_mask is not None:
+        # Note: causal_mask slicing is cheap, but broadcasting is not.
+        # Avoid extra allocation using in-place addition here as well.
+        causal_mask = attention_mask[:, :, :, :k_shape_last2]
+        attn_weights.add_(causal_mask)
+
+    # softmax directly to the query dtype if it's float32 (save unnecessary .to call)
+    if q_dtype == torch.float32:
+        attn_weights = F.softmax(attn_weights, dim=-1, dtype=torch.float32)
+    else:
+        attn_weights = F.softmax(attn_weights, dim=-1, dtype=torch.float32).to(q_dtype)
+
+    # Dropout can be done in-place for further memory reduction if p > 0 and training
+    if dropout > 0.0 and module.training:
+        attn_weights = F.dropout(attn_weights, p=dropout, training=True)
+    else:
+        # Dropout is a no-op, avoid unnecessary call
+        pass
 
     attn_output = torch.matmul(attn_weights, value)
     attn_output = attn_output.transpose(1, 2).contiguous()
