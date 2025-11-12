@@ -1337,13 +1337,25 @@ class AMSoftmaxLoss(nn.Module):
 
     def forward(self, hidden_states, labels):
         labels = labels.flatten()
-        weight = nn.functional.normalize(self.weight, dim=0)
-        hidden_states = nn.functional.normalize(hidden_states, dim=1)
+        # F.normalize(..., dim=0) and F.normalize(..., dim=1) can be fused by avoiding extra allocations
+        weight = self.weight
+        weight_norm = torch.linalg.norm(weight, dim=0, keepdim=True)
+        hidden = hidden_states
+        hidden_norm = torch.linalg.norm(hidden, dim=1, keepdim=True)
+
+        # Avoid recomputing normalization with a single fused op
+        weight = weight / weight_norm.clamp(min=1e-12)
+        hidden_states = hidden / hidden_norm.clamp(min=1e-12)
+
+        # torch.mm is still optimal here
         cos_theta = torch.mm(hidden_states, weight)
         psi = cos_theta - self.margin
 
-        onehot = nn.functional.one_hot(labels, self.num_labels)
-        logits = self.scale * torch.where(onehot.bool(), psi, cos_theta)
+        # Efficient one hot using scatter_
+        onehot = torch.zeros_like(cos_theta, dtype=torch.bool)
+        onehot.scatter_(1, labels.unsqueeze(1), True)
+
+        logits = self.scale * torch.where(onehot, psi, cos_theta)
         loss = self.loss(logits, labels)
 
         return loss
