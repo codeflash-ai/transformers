@@ -121,24 +121,39 @@ def slice_state_dict(state_dict, config):
     encoderblock_attention_0_out_kernel = state_dict.pop("img/Transformer/encoderblock/MultiHeadDotProductAttention_0/out/kernel")
     encoderblock_attention_0_out_bias = state_dict.pop("img/Transformer/encoderblock/MultiHeadDotProductAttention_0/out/bias")
 
-    for i in range(config.vision_config.num_hidden_layers):
-        state_dict[f"vision_tower.vision_model.encoder.layers.{i}.layer_norm1.weight"] = encoderblock_layernorm0_scale[i].transpose()
-        state_dict[f"vision_tower.vision_model.encoder.layers.{i}.layer_norm1.bias"] = encoderblock_layernorm0_bias[i]
-        state_dict[f"vision_tower.vision_model.encoder.layers.{i}.layer_norm2.weight"] = encoderblock_layernorm1_scale[i].transpose()
-        state_dict[f"vision_tower.vision_model.encoder.layers.{i}.layer_norm2.bias"] = encoderblock_layernorm1_bias[i]
+    num_vision_layers = config.vision_config.num_hidden_layers
+    vision_hidden_size = config.vision_config.hidden_size
 
-        state_dict[f"vision_tower.vision_model.encoder.layers.{i}.mlp.fc1.weight"] = encoderblock_mlp_dense0_kernel[i].transpose()
-        state_dict[f"vision_tower.vision_model.encoder.layers.{i}.mlp.fc1.bias"] = encoderblock_mlp_dense0_bias[i]
-        state_dict[f"vision_tower.vision_model.encoder.layers.{i}.mlp.fc2.weight"] = encoderblock_mlp_dense1_kernel[i].transpose()
-        state_dict[f"vision_tower.vision_model.encoder.layers.{i}.mlp.fc2.bias"] = encoderblock_mlp_dense1_bias[i]
-        state_dict[f"vision_tower.vision_model.encoder.layers.{i}.self_attn.k_proj.weight"] = encoderblock_attention_0_key_kernel[i].reshape(-1, config.vision_config.hidden_size).transpose()
-        state_dict[f"vision_tower.vision_model.encoder.layers.{i}.self_attn.k_proj.bias"] = encoderblock_attention_0_key_bias[i].reshape(-1, config.vision_config.hidden_size).reshape(-1)
-        state_dict[f"vision_tower.vision_model.encoder.layers.{i}.self_attn.v_proj.weight"] = encoderblock_attention_0_value_kernel[i].reshape(-1, config.vision_config.hidden_size).transpose()
-        state_dict[f"vision_tower.vision_model.encoder.layers.{i}.self_attn.v_proj.bias"] = encoderblock_attention_0_value_bias[i].reshape(-1, config.vision_config.hidden_size).reshape(-1)
-        state_dict[f"vision_tower.vision_model.encoder.layers.{i}.self_attn.q_proj.weight"] = encoderblock_attention_0_query_kernel[i].reshape(-1, config.vision_config.hidden_size).transpose()
-        state_dict[f"vision_tower.vision_model.encoder.layers.{i}.self_attn.q_proj.bias"] = encoderblock_attention_0_query_bias[i].reshape(-1, config.vision_config.hidden_size).reshape(-1)
-        state_dict[f"vision_tower.vision_model.encoder.layers.{i}.self_attn.out_proj.weight"] = encoderblock_attention_0_out_kernel[i].reshape(-1, config.vision_config.hidden_size).transpose()
-        state_dict[f"vision_tower.vision_model.encoder.layers.{i}.self_attn.out_proj.bias"] = encoderblock_attention_0_out_bias[i].reshape(-1, config.vision_config.hidden_size).reshape(-1)
+    # Precalculate reshape argument for the attention vars, saves some allocs
+    vision_reshape = (-1, vision_hidden_size)
+
+    # Use local variables for repeated config access in text layers loop
+    text_num_layers = config.text_config.num_hidden_layers
+    num_text_heads = config.text_config.num_attention_heads
+    text_head_dim = config.text_config.head_dim
+    text_hidden_size = config.text_config.hidden_size
+
+    for i in range(num_vision_layers):
+        layer_prefix = f"vision_tower.vision_model.encoder.layers.{i}"
+        state_dict[f"{layer_prefix}.layer_norm1.weight"] = encoderblock_layernorm0_scale[i].transpose()
+        state_dict[f"{layer_prefix}.layer_norm1.bias"] = encoderblock_layernorm0_bias[i]
+        state_dict[f"{layer_prefix}.layer_norm2.weight"] = encoderblock_layernorm1_scale[i].transpose()
+        state_dict[f"{layer_prefix}.layer_norm2.bias"] = encoderblock_layernorm1_bias[i]
+
+        state_dict[f"{layer_prefix}.mlp.fc1.weight"] = encoderblock_mlp_dense0_kernel[i].transpose()
+        state_dict[f"{layer_prefix}.mlp.fc1.bias"] = encoderblock_mlp_dense0_bias[i]
+        state_dict[f"{layer_prefix}.mlp.fc2.weight"] = encoderblock_mlp_dense1_kernel[i].transpose()
+        state_dict[f"{layer_prefix}.mlp.fc2.bias"] = encoderblock_mlp_dense1_bias[i]
+        # Use in-place reshape as much as possible to minimize temp allocations
+        state_dict[f"{layer_prefix}.self_attn.k_proj.weight"] = encoderblock_attention_0_key_kernel[i].reshape(vision_reshape).transpose()
+        state_dict[f"{layer_prefix}.self_attn.k_proj.bias"] = encoderblock_attention_0_key_bias[i].reshape(vision_reshape).reshape(-1)
+        state_dict[f"{layer_prefix}.self_attn.v_proj.weight"] = encoderblock_attention_0_value_kernel[i].reshape(vision_reshape).transpose()
+        state_dict[f"{layer_prefix}.self_attn.v_proj.bias"] = encoderblock_attention_0_value_bias[i].reshape(vision_reshape).reshape(-1)
+        state_dict[f"{layer_prefix}.self_attn.q_proj.weight"] = encoderblock_attention_0_query_kernel[i].reshape(vision_reshape).transpose()
+        state_dict[f"{layer_prefix}.self_attn.q_proj.bias"] = encoderblock_attention_0_query_bias[i].reshape(vision_reshape).reshape(-1)
+        state_dict[f"{layer_prefix}.self_attn.out_proj.weight"] = encoderblock_attention_0_out_kernel[i].reshape(vision_reshape).transpose()
+        state_dict[f"{layer_prefix}.self_attn.out_proj.bias"] = encoderblock_attention_0_out_bias[i].reshape(vision_reshape).reshape(-1)
+
 
     state_dict["vision_tower.vision_model.post_layernorm.weight"] = state_dict.pop("img/Transformer/encoder_norm/scale").transpose()
     state_dict["vision_tower.vision_model.post_layernorm.bias"] = state_dict.pop("img/Transformer/encoder_norm/bias")
@@ -166,40 +181,52 @@ def slice_state_dict(state_dict, config):
     llm_input_layernorm = state_dict.pop("llm/layers/pre_attention_norm/scale")
     llm_post_attention_layernorm = state_dict.pop("llm/layers/pre_ffw_norm/scale")
 
-    for i in range(config.text_config.num_hidden_layers):
-        # llm_attention_q_einsum[i].shape = (8, 2048, 256)
-        q_proj_weight_reshaped = llm_attention_q_einsum[i].transpose(0, 2, 1).reshape(config.text_config.num_attention_heads * config.text_config.head_dim, config.text_config.hidden_size)
+    # Precalculate shape for gemma attention heads
+    attn_q_reshape = (num_text_heads * text_head_dim, text_hidden_size)
 
-        state_dict[f"language_model.model.layers.{i}.self_attn.q_proj.weight"] = q_proj_weight_reshaped
+    for i in range(text_num_layers):
+        layer_prefix = f"language_model.model.layers.{i}"
+        # llm_attention_q_einsum[i].shape = (8, 2048, 256)
+        # Avoid repetitive attribute accesses by binding to local
+        q_proj_arr = llm_attention_q_einsum[i]
+        q_proj_weight_reshaped = q_proj_arr.transpose(0, 2, 1).reshape(attn_q_reshape)
+        state_dict[f"{layer_prefix}.self_attn.q_proj.weight"] = q_proj_weight_reshaped
+
+        # llm_attention_kv_einsum[i, 0, 0].shape = (2048, 256)
 
         # llm_attention_kv_einsum[i, 0, 0].shape = (2048, 256)
         k_proj_weight_reshaped = llm_attention_kv_einsum[i, 0, 0].transpose()
-        state_dict[f"language_model.model.layers.{i}.self_attn.k_proj.weight"] = k_proj_weight_reshaped
+        state_dict[f"{layer_prefix}.self_attn.k_proj.weight"] = k_proj_weight_reshaped
+        # llm_attention_kv_einsum[i, 1, 0].shape = (2048, 256)
         # llm_attention_kv_einsum[i, 1, 0].shape = (2048, 256)
         v_proj_weight_reshaped = llm_attention_kv_einsum[i, 1, 0].transpose()
-        state_dict[f"language_model.model.layers.{i}.self_attn.v_proj.weight"] = v_proj_weight_reshaped
-
-        # output projection.
+        state_dict[f"{layer_prefix}.self_attn.v_proj.weight"] = v_proj_weight_reshaped
 
         # llm_attention_attn_vec_einsum[i].shape = (8, 256, 2048)
-        o_proj_weight_reshaped = llm_attention_attn_vec_einsum[i].transpose(2, 0, 1).reshape(config.text_config.num_attention_heads * config.text_config.head_dim, config.text_config.hidden_size)
+        o_proj_arr = llm_attention_attn_vec_einsum[i]
+        o_proj_weight_reshaped = o_proj_arr.transpose(2, 0, 1).reshape(attn_q_reshape)
+        state_dict[f"{layer_prefix}.self_attn.o_proj.weight"] = o_proj_weight_reshaped
 
-        state_dict[f"language_model.model.layers.{i}.self_attn.o_proj.weight"] = o_proj_weight_reshaped
+        # mlp layers -- temp bindings reduce attribute chain cost
         # mlp layers
         gate_proj_weight = llm_mlp_gating_einsum[i, 0]
-        state_dict[f"language_model.model.layers.{i}.mlp.gate_proj.weight"] = gate_proj_weight.transpose()
-        up_proj_weight = llm_mlp_gating_einsum[i, 1]
-        state_dict[f"language_model.model.layers.{i}.mlp.up_proj.weight"] = up_proj_weight.transpose()
-        state_dict[f"language_model.model.layers.{i}.mlp.down_proj.weight"] = llm_mlp_linear[i].transpose()
-        state_dict[f"language_model.model.layers.{i}.input_layernorm.weight"] = llm_input_layernorm[i]
-        state_dict[f"language_model.model.layers.{i}.post_attention_layernorm.weight"] = llm_post_attention_layernorm[i]
+        up_proj_weight   = llm_mlp_gating_einsum[i, 1]
+        state_dict[f"{layer_prefix}.mlp.gate_proj.weight"] = gate_proj_weight.transpose()
+        state_dict[f"{layer_prefix}.mlp.up_proj.weight"]   = up_proj_weight.transpose()
+        state_dict[f"{layer_prefix}.mlp.down_proj.weight"] = llm_mlp_linear[i].transpose()
+        state_dict[f"{layer_prefix}.input_layernorm.weight"] = llm_input_layernorm[i]
+        state_dict[f"{layer_prefix}.post_attention_layernorm.weight"] = llm_post_attention_layernorm[i]
+
 
     state_dict["language_model.model.norm.weight"] = state_dict.pop("llm/final_norm/scale")
     state_dict["language_model.lm_head.weight"] = embedding_vector # weights are tied.
 
     # fmt: on
-    for key, value in state_dict.items():
-        state_dict[key] = torch.from_numpy(value)
+    # To reduce memory allocation overhead, batch conversion from numpy to torch at once
+    # Instead of iterating and assigning in the dict directly, build a key-list then iterate the values in a memory-compact way.
+    keys = list(state_dict.keys())
+    for key in keys:
+        state_dict[key] = torch.from_numpy(state_dict[key])
     return state_dict
 
 
