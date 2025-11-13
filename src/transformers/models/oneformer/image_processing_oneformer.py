@@ -93,7 +93,12 @@ def max_across_indices(values: Iterable[Any]) -> list[Any]:
     """
     Return the maximum value across all indices of an iterable of values.
     """
-    return [max(values_i) for values_i in zip(*values)]
+    # Optimization: convert to tuple to avoid repeated iteration in zip,
+    # and use map to avoid temporary list implied by list comprehension
+    values_tuple = tuple(values)
+    if not values_tuple:
+        return []
+    return list(map(max, zip(*values_tuple)))
 
 
 # Copied from transformers.models.detr.image_processing_detr.get_max_height_width
