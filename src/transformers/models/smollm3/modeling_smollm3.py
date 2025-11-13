@@ -89,10 +89,18 @@ class SmolLM3RotaryEmbedding(nn.Module):
 
         attention_factor = 1.0  # Unused in this type of RoPE
 
-        # Compute the inverse frequencies
-        inv_freq = 1.0 / (
-            base ** (torch.arange(0, dim, 2, dtype=torch.int64).to(device=device, dtype=torch.float) / dim)
-        )
+        # Fast path: directly compute the pow exponent tensor in float, use efficient tensor ops for memory and speed
+        # Avoid creating an int tensor only to immediately `.to(dtype=torch.float)`
+
+        # Create tensor of dims [0, 2, ..., dim-2] in float dtype directly (saves conversion step and RAM)
+        # Small advance: use .arange with step=2, dtype=float, device=device directly
+        idx = torch.arange(0, dim, 2, device=device, dtype=torch.float)
+        # No need to divide idx by dim as float each time, do it in one op
+        pow_exponent = idx / dim
+        # Use torch.pow for maximum performance and memory efficiency
+        base_pow = torch.pow(base, pow_exponent)
+        inv_freq = 1.0 / base_pow
+
         return inv_freq, attention_factor
 
     @torch.no_grad()
