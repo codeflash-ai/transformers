@@ -98,16 +98,34 @@ class SmolLM3RotaryEmbedding(nn.Module):
     @torch.no_grad()
     @dynamic_rope_update  # power user: used with advanced RoPE types (e.g. dynamic rope)
     def forward(self, x, position_ids):
-        inv_freq_expanded = self.inv_freq[None, :, None].float().expand(position_ids.shape[0], -1, 1).to(x.device)
-        position_ids_expanded = position_ids[:, None, :].float()
+        # Fast path: fuse broadcasting instead of expand
+        # inv_freq: [head_dim//2]
+        # position_ids: [batch, seq_len]
+        # Compute outer product efficiently using broadcasting and reshape
+        # [batch, seq_len, head_dim//2] = [batch, seq_len, 1] * [1, 1, head_dim//2]
+        batch_size, seq_len = position_ids.shape
+        inv_freq = self.inv_freq.to(x.device)
+        # position_ids: [batch, seq_len] -> [batch, seq_len, 1]
+        position_ids_exp = position_ids.unsqueeze(-1).float()
+        inv_freq_exp = inv_freq.view(1, 1, -1).float()
+        # [batch, seq_len, head_dim//2]
+        freqs = position_ids_exp * inv_freq_exp  # broadcasting
+        # Concatenate last dimension with itself ([batch, seq_len, head_dim])
+        emb = torch.cat((freqs, freqs), dim=-1)
+        # Ensure attention scaling is promoted to emb's dtype for correctness
+        scaling = self.attention_scaling
 
-        device_type = x.device.type if isinstance(x.device.type, str) and x.device.type != "mps" else "cpu"
-        with torch.autocast(device_type=device_type, enabled=False):  # Force float32
-            freqs = (inv_freq_expanded.float() @ position_ids_expanded.float()).transpose(1, 2)
-            emb = torch.cat((freqs, freqs), dim=-1)
-            cos = emb.cos() * self.attention_scaling
-            sin = emb.sin() * self.attention_scaling
+        # Avoid unnecessary autocast if already float32
+        if emb.dtype != torch.float32:
+            device_type = x.device.type if isinstance(x.device.type, str) and x.device.type != "mps" else "cpu"
+            with torch.autocast(device_type=device_type, enabled=False):
+                cos = emb.cos() * scaling
+                sin = emb.sin() * scaling
+        else:
+            cos = emb.cos() * scaling
+            sin = emb.sin() * scaling
 
+        # Cast result to x's dtype
         return cos.to(dtype=x.dtype), sin.to(dtype=x.dtype)
 
 
