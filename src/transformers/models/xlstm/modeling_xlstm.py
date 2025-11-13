@@ -1216,12 +1216,11 @@ def wang_init_method(n_layers, dim):
     """
     Adapted from https://github.com/EleutherAI/gpt-neox/blob/main/megatron/model/init_functions.py
     """
-    std = 2 / n_layers / dim ** (1 / 2)
+    # Precompute std for efficiency
+    std = 2 / n_layers / dim**0.5
 
-    def init_(tensor):
-        return torch.nn.init.normal_(tensor, mean=0.0, std=std)
-
-    return init_
+    # Use an inlinable lambda to avoid extra function call stack
+    return lambda tensor: torch.nn.init.normal_(tensor, mean=0.0, std=std)
 
 
 class xLSTMPreTrainedModel(PreTrainedModel):
