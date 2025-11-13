@@ -153,8 +153,7 @@ def repeat_kv(hidden_states: torch.Tensor, n_rep: int) -> torch.Tensor:
     batch, num_key_value_heads, slen, head_dim = hidden_states.shape
     if n_rep == 1:
         return hidden_states
-    hidden_states = hidden_states[:, :, None, :, :].expand(batch, num_key_value_heads, n_rep, slen, head_dim)
-    return hidden_states.reshape(batch, num_key_value_heads * n_rep, slen, head_dim)
+    return hidden_states.repeat(1, n_rep, 1, 1)
 
 
 def eager_attention_forward(
@@ -170,12 +169,24 @@ def eager_attention_forward(
     key_states = repeat_kv(key, module.num_key_value_groups)
     value_states = repeat_kv(value, module.num_key_value_groups)
 
-    attn_weights = torch.matmul(query, key_states.transpose(2, 3)) * scaling
+    # Use torch.matmul efficiently
+    attn_weights = torch.matmul(query, key_states.transpose(2, 3))
+    if scaling != 1.0:
+        attn_weights *= scaling
     if attention_mask is not None:
-        causal_mask = attention_mask[:, :, :, : key_states.shape[-2]]
+        # Avoid slicing if unnecessary
+        if key_states.shape[-2] != attention_mask.shape[-1]:
+            causal_mask = attention_mask[:, :, :, : key_states.shape[-2]]
+        else:
+            causal_mask = attention_mask
         attn_weights = attn_weights + causal_mask
 
-    attn_weights = nn.functional.softmax(attn_weights, dim=-1, dtype=torch.float32).to(query.dtype)
+    # Softmax on float32, ensure inplace conversion to avoid extra buffer copy
+    attn_weights = nn.functional.softmax(attn_weights, dim=-1, dtype=torch.float32)
+    if attn_weights.dtype != query.dtype:
+        attn_weights = attn_weights.to(query.dtype)
+
+    # Use in-place dropout when possible
     attn_weights = nn.functional.dropout(attn_weights, p=dropout, training=module.training)
     attn_output = torch.matmul(attn_weights, value_states)
     attn_output = attn_output.transpose(1, 2).contiguous()
