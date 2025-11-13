@@ -233,8 +233,26 @@ class XcodecEuclideanCodebook(nn.Module):
 
     def encode(self, hidden_states):
         shape = hidden_states.shape
-        hidden_states = hidden_states.reshape((-1, shape[-1]))
-        embed_ind = self.quantize(hidden_states)
+
+        # Use .contiguous(), which makes the view operation faster and safer with non-contiguous input
+        # Use .view() rather than .reshape() because we're calling .view() on the output anyway
+        hidden_states = hidden_states.contiguous().view(-1, shape[-1])
+
+        # Quantize method implementation optimized for performance:
+        # Avoid unnecessary .t(), use tensor operations directly, reuse computed values when possible
+        embed = self.embed  # (codebook_size, codebook_dim)
+        embed_t = embed.t()  # (codebook_dim, codebook_size)
+
+        # Compute all terms needed for Euclidean distance efficiently
+        # scale_states: (N, 1), embed_pow: (1, codebook_size), states @ embed_t: (N, codebook_size)
+        scale_states = torch.sum(hidden_states * hidden_states, dim=1, keepdim=True)  # (N, 1)
+        states_embed = torch.matmul(hidden_states, embed_t)  # (N, codebook_size)
+        embed_pow = torch.sum(embed * embed, dim=1, keepdim=True).t()  # (1, codebook_size)
+        dist = -(scale_states - 2 * states_embed + embed_pow)
+
+        # Use .argmax with dim=-1 for performance (PyTorch recommends argmax for explicit axis rather than max(...).indices)
+        embed_ind = torch.argmax(dist, dim=-1)
+
         embed_ind = embed_ind.view(*shape[:-1])
         return embed_ind
 
