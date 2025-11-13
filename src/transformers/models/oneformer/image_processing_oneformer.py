@@ -309,21 +309,24 @@ def convert_segmentation_map_to_binary_masks(
         all_labels = all_labels[all_labels != ignore_index]
 
     # Generate a binary mask for each object instance
-    binary_masks = [(segmentation_map == i) for i in all_labels]
-
-    # Stack the binary masks
-    if binary_masks:
-        binary_masks = np.stack(binary_masks, axis=0)
+    # Optimization: use broadcasting instead of a list comprehension and np.stack.
+    if all_labels.size > 0:
+        shape = (all_labels.size, *segmentation_map.shape)
+        binary_masks = segmentation_map == all_labels[:, None, None]
     else:
-        binary_masks = np.zeros((0, *segmentation_map.shape))
+        binary_masks = np.zeros((0, *segmentation_map.shape), dtype=bool)
+
+    # Convert instance ids to class ids
 
     # Convert instance ids to class ids
     if instance_id_to_semantic_id is not None:
-        labels = np.zeros(all_labels.shape[0])
-
-        for label in all_labels:
-            class_id = instance_id_to_semantic_id[label + 1 if do_reduce_labels else label]
-            labels[all_labels == label] = class_id - 1 if do_reduce_labels else class_id
+        if do_reduce_labels:
+            remapped_labels = np.array(
+                [instance_id_to_semantic_id[label + 1] - 1 for label in all_labels], dtype=np.int64
+            )
+        else:
+            remapped_labels = np.array([instance_id_to_semantic_id[label] for label in all_labels], dtype=np.int64)
+        labels = remapped_labels
     else:
         labels = all_labels
 
