@@ -132,14 +132,14 @@ def concatenate_list(input_list):
 
 
 def valid_images(imgs):
-    # If we have an list of images, make sure every image is valid
-    if isinstance(imgs, (list, tuple)):
-        for img in imgs:
-            if not valid_images(img):
-                return False
-    # If not a list of tuple, we have been given a single image or batched tensor of images
-    elif not is_valid_image(imgs):
-        return False
+    # Iteratively validate images/batches/lists for improved performance (no recursion)
+    stack = [imgs]
+    while stack:
+        img = stack.pop()
+        if isinstance(img, (list, tuple)):
+            stack.extend(img)
+        elif not is_valid_image(img):
+            return False
     return True
 
 
@@ -222,15 +222,16 @@ def make_flat_list_of_images(
         return [img for img_list in images for img in img_list]
 
     if isinstance(images, (list, tuple)) and is_valid_list_of_images(images):
-        if is_pil_image(images[0]) or images[0].ndim == expected_ndims:
+        first_img = images[0]
+        if is_pil_image(first_img) or getattr(first_img, "ndim", None) == expected_ndims:
             return images
-        if images[0].ndim == expected_ndims + 1:
+        if getattr(first_img, "ndim", None) == expected_ndims + 1:
             return [img for img_list in images for img in img_list]
 
     if is_valid_image(images):
-        if is_pil_image(images) or images.ndim == expected_ndims:
+        if is_pil_image(images) or getattr(images, "ndim", None) == expected_ndims:
             return [images]
-        if images.ndim == expected_ndims + 1:
+        if getattr(images, "ndim", None) == expected_ndims + 1:
             return list(images)
 
     raise ValueError(f"Could not make a flat list of images from {images}")
@@ -361,7 +362,24 @@ def get_image_size(image: np.ndarray, channel_dim: Optional[ChannelDimension] = 
         A tuple of the image's height and width.
     """
     if channel_dim is None:
-        channel_dim = infer_channel_dimension_format(image)
+        ndim = image.ndim
+        shape = image.shape
+        if ndim == 3:
+            if shape[0] in (1, 3):
+                channel_dim = ChannelDimension.FIRST
+            elif shape[2] in (1, 3):
+                channel_dim = ChannelDimension.LAST
+            else:
+                channel_dim = infer_channel_dimension_format(image)
+        elif ndim == 4:
+            if shape[1] in (1, 3):
+                channel_dim = ChannelDimension.FIRST
+            elif shape[3] in (1, 3):
+                channel_dim = ChannelDimension.LAST
+            else:
+                channel_dim = infer_channel_dimension_format(image)
+        else:
+            channel_dim = infer_channel_dimension_format(image)
 
     if channel_dim == ChannelDimension.FIRST:
         return image.shape[-2], image.shape[-1]
