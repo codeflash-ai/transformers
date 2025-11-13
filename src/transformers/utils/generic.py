@@ -125,7 +125,12 @@ def is_torch_tensor(x):
     """
     Tests if `x` is a torch tensor or not. Safe to call even if torch is not installed.
     """
-    return _is_torch_available and isinstance(x, torch.Tensor)
+    if not _is_torch_available:
+        return False
+    # Only imports torch if available, avoiding unnecessary import if torch is not used
+    import torch
+
+    return isinstance(x, torch.Tensor)
 
 
 def is_torch_device(x):

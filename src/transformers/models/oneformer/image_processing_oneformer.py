@@ -150,11 +150,22 @@ def binary_mask_to_rle(mask):
     if is_torch_tensor(mask):
         mask = mask.numpy()
 
-    pixels = mask.flatten()
-    pixels = np.concatenate([[0], pixels, [0]])
-    runs = np.where(pixels[1:] != pixels[:-1])[0] + 1
-    runs[1::2] -= runs[::2]
-    return list(runs)
+    # Use ravel instead of flatten for potential non-copy (unless needed)
+    pixels = mask.ravel()
+    n = pixels.size
+    # Preallocate output array to reduce list concatenation overhead and preserve dtype
+    padded_pixels = np.empty(n + 2, dtype=pixels.dtype)
+    padded_pixels[0] = 0
+    padded_pixels[1:-1] = pixels
+    padded_pixels[-1] = 0
+
+    diff = padded_pixels[1:] != padded_pixels[:-1]
+    # Compute run starts only at locations where values change
+    run_starts = np.flatnonzero(diff) + 1
+    # Modify in-place for run lengths
+    run_lengths = run_starts.copy()
+    run_lengths[1::2] -= run_lengths[::2]
+    return list(run_lengths)
 
 
 # Copied from transformers.models.detr.image_processing_detr.convert_segmentation_to_rle
