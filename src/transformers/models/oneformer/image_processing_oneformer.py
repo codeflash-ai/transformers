@@ -148,11 +148,23 @@ def binary_mask_to_rle(mask):
         format.
     """
     if is_torch_tensor(mask):
-        mask = mask.numpy()
+        # Use .contiguous() to ensure no unnecessary view/copy penalty when converting to numpy
+        mask = mask.contiguous().numpy()
 
-    pixels = mask.flatten()
-    pixels = np.concatenate([[0], pixels, [0]])
-    runs = np.where(pixels[1:] != pixels[:-1])[0] + 1
+    # Avoid explicit flatten() + np.concatenate to reduce redundancy and memory footprint
+    pixels = np.ravel(mask)
+    n = pixels.size
+    # Pre-allocate output (padding with 0 at start and end), avoid np.concatenate
+    padded = np.empty(n + 2, dtype=pixels.dtype)
+    padded[0] = 0
+    padded[1:-1] = pixels
+    padded[-1] = 0
+
+    # Avoid slicing twice
+    diff = padded[1:] != padded[:-1]
+    idx = np.flatnonzero(diff)
+    runs = idx + 1
+    # This assignment does not need to slice runs twice; use slicing notation
     runs[1::2] -= runs[::2]
     return list(runs)
 
@@ -171,10 +183,20 @@ def convert_segmentation_to_rle(segmentation):
     segment_ids = torch.unique(segmentation)
 
     run_length_encodings = []
-    for idx in segment_ids:
-        mask = torch.where(segmentation == idx, 1, 0)
-        rle = binary_mask_to_rle(mask)
-        run_length_encodings.append(rle)
+    # Convert once to numpy if possible for efficiency over multiple iterations
+    is_torch = is_torch_tensor(segmentation)
+    if is_torch:
+        np_segmentation = segmentation.cpu().numpy()
+        for idx in segment_ids:
+            mask = np_segmentation == idx.item()  # produce a binary mask efficiently in numpy
+            rle = binary_mask_to_rle(mask.astype(np.uint8))
+            run_length_encodings.append(rle)
+    else:
+        # segmentation is already numpy
+        for idx in np.unique(segmentation):
+            mask = segmentation == idx
+            rle = binary_mask_to_rle(mask.astype(np.uint8))
+            run_length_encodings.append(rle)
 
     return run_length_encodings
 
