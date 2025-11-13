@@ -260,9 +260,8 @@ class XcodecVectorQuantization(nn.Module):
 
     # Copied from transformers.models.encodec.modeling_encodec.EncodecVectorQuantization.decode
     def decode(self, embed_ind):
-        quantize = self.codebook.decode(embed_ind)
-        quantize = quantize.permute(0, 2, 1)
-        return quantize
+        # Avoid unnecessary intermediate variables and chain operations where possible
+        return self.codebook.decode(embed_ind).permute(0, 2, 1)
 
 
 class XcodecResidualVectorQuantization(nn.Module):
