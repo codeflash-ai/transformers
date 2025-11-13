@@ -23,6 +23,19 @@ from transformers import AutoTokenizer, LlamaTokenizerFast, MistralConfig, Mistr
 from transformers.integrations.mistral import convert_tekken_tokenizer
 
 
+_COMPILED_STATE_DICT_MAPPING = [
+    (re.compile(r"^output.weight"), r"lm_head.weight"),
+    (re.compile(r"^norm.weight"), r"model.norm.weight"),
+    (re.compile(r"^tok_embeddings.weight"), r"model.embed_tokens.weight"),
+    (re.compile(r"^layers.(\d+).attention_norm.weight"), r"model.layers.\1.input_layernorm.weight"),
+    (re.compile(r"^layers.(\d+).ffn_norm.weight"), r"model.layers.\1.post_attention_layernorm.weight"),
+    (re.compile(r"^layers.(\d+).attention.w(q|k|v|o).weight"), r"model.layers.\1.self_attn.\2_proj.weight"),
+    (re.compile(r"^layers.(\d+).feed_forward.w1.weight"), r"model.layers.\1.mlp.gate_proj.weight"),
+    (re.compile(r"^layers.(\d+).feed_forward.w2.weight"), r"model.layers.\1.mlp.down_proj.weight"),
+    (re.compile(r"^layers.(\d+).feed_forward.w3.weight"), r"model.layers.\1.mlp.up_proj.weight"),
+]
+
+
 # fmt: off
 STATE_DICT_MAPPING = {
     # CausalLM keys
@@ -50,8 +63,9 @@ STATE_DICT_MAPPING = {
 
 def map_old_key_to_new(old_key):
     """Map of a key of the original state dict to the equivalent key in HF format"""
-    for pattern, replacement in STATE_DICT_MAPPING.items():
-        new_key, n_replace = re.subn(pattern, replacement, old_key)
+    for pattern, replacement in _COMPILED_STATE_DICT_MAPPING:
+        new_key, n_replace = pattern.subn(replacement, old_key)
+        # Early exit of the loop
         # Early exit of the loop
         if n_replace > 0:
             return new_key
