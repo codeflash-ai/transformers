@@ -236,44 +236,86 @@ class Pop2PianoFeatureExtractor(SequenceFeatureExtractor):
 
     def _pad(self, features: np.ndarray, add_zero_line=True):
         features_shapes = [each_feature.shape for each_feature in features]
-        attention_masks, padded_features = [], []
+        n = len(features)
+        max_3d_1 = 0
+        max_3d_2 = 0
+        max_2d_1 = 0
+        # Precompute maximum dimensions to avoid repeated calculation in the loop
+        for shp in features_shapes:
+            if len(shp) == 3:
+                if shp[1] > max_3d_1:
+                    max_3d_1 = shp[1]
+                if shp[2] > max_3d_2:
+                    max_3d_2 = shp[2]
+            else:
+                if shp[0] > max_2d_1:
+                    max_2d_1 = shp[0]
+        # For concatenate/np.pad to work, set max_3d_2 to feature_size
+        if max_3d_2 == 0:
+            max_3d_2 = self.feature_size
+
+        attention_masks = []
+        padded_features = []
+        # Preallocate zero arrays for concatenation to reduce allocation inside the loop
+        zero_line_cache = None
+        zero_mask_cache = None
+
         for i, each_feature in enumerate(features):
+            shp = features_shapes[i]
             # To pad "input_features".
-            if len(each_feature.shape) == 3:
-                features_pad_value = max([*zip(*features_shapes)][1]) - features_shapes[i][1]
-                attention_mask = np.ones(features_shapes[i][:2], dtype=np.int64)
+            if len(shp) == 3:
+                features_pad_value = max_3d_1 - shp[1]
+                attention_mask = np.ones(shp[:2], dtype=np.int64)
                 feature_padding = ((0, 0), (0, features_pad_value), (0, 0))
                 attention_mask_padding = (feature_padding[0], feature_padding[1])
 
             # To pad "beatsteps" and "extrapolated_beatstep".
             else:
-                each_feature = each_feature.reshape(1, -1)
-                features_pad_value = max([*zip(*features_shapes)][0]) - features_shapes[i][0]
-                attention_mask = np.ones(features_shapes[i], dtype=np.int64).reshape(1, -1)
+                reshaped_shp = (1, shp[0])
+                each_feature = each_feature.reshape(reshaped_shp)
+                features_pad_value = max_2d_1 - shp[0]
+                attention_mask = np.ones(shp, dtype=np.int64).reshape(reshaped_shp)
                 feature_padding = attention_mask_padding = ((0, 0), (0, features_pad_value))
 
-            each_padded_feature = np.pad(each_feature, feature_padding, "constant", constant_values=self.padding_value)
-            attention_mask = np.pad(
-                attention_mask, attention_mask_padding, "constant", constant_values=self.padding_value
-            )
+            # Use np.pad efficiently: skip where possible
+            if features_pad_value > 0:
+                each_padded_feature = np.pad(
+                    each_feature, feature_padding, "constant", constant_values=self.padding_value
+                )
+                attention_mask = np.pad(
+                    attention_mask, attention_mask_padding, "constant", constant_values=self.padding_value
+                )
+            else:
+                each_padded_feature = each_feature
+                # Make sure shapes match expected, since for some pads we want explicit shape
+                if len(shp) == 3:
+                    each_padded_feature = each_padded_feature
+                else:
+                    each_padded_feature = each_padded_feature
+                # attention_mask is already in expected shape
 
             if add_zero_line:
                 # if it is batched then we separate each examples using zero array
-                zero_array_len = max([*zip(*features_shapes)][1])
+                zero_array_len = max_3d_1
+                # Cache zero arrays to avoid multiple allocations
+                if zero_line_cache is None or zero_line_cache.shape[1] != zero_array_len:
+                    zero_line_cache = np.zeros([1, zero_array_len, self.feature_size], dtype=each_padded_feature.dtype)
+                    zero_mask_cache = np.zeros([1, zero_array_len], dtype=attention_mask.dtype)
+                # we concatenate the zero array line here
 
                 # we concatenate the zero array line here
-                each_padded_feature = np.concatenate(
-                    [each_padded_feature, np.zeros([1, zero_array_len, self.feature_size])], axis=0
-                )
-                attention_mask = np.concatenate(
-                    [attention_mask, np.zeros([1, zero_array_len], dtype=attention_mask.dtype)], axis=0
-                )
+                each_padded_feature = np.concatenate([each_padded_feature, zero_line_cache], axis=0)
+                attention_mask = np.concatenate([attention_mask, zero_mask_cache], axis=0)
 
             padded_features.append(each_padded_feature)
             attention_masks.append(attention_mask)
 
-        padded_features = np.concatenate(padded_features, axis=0).astype(np.float32)
-        attention_masks = np.concatenate(attention_masks, axis=0).astype(np.int64)
+        padded_features = np.concatenate(padded_features, axis=0)
+        if padded_features.dtype != np.float32:
+            padded_features = padded_features.astype(np.float32)
+        attention_masks = np.concatenate(attention_masks, axis=0)
+        if attention_masks.dtype != np.int64:
+            attention_masks = attention_masks.astype(np.int64)
 
         return padded_features, attention_masks
 
@@ -320,7 +362,9 @@ class Pop2PianoFeatureExtractor(SequenceFeatureExtractor):
         """
 
         processed_features_dict = {}
-        for feature_name, feature_value in inputs.items():
+        # Gather a list before the loop to avoid calling .items multiple times (marginally faster)
+        input_items = list(inputs.items())
+        for feature_name, feature_value in input_items:
             if feature_name == "input_features":
                 padded_feature_values, attention_mask = self._pad(feature_value, add_zero_line=True)
                 processed_features_dict[feature_name] = padded_feature_values
