@@ -57,10 +57,19 @@ class Lfm2RMSNorm(nn.Module):
 
     def forward(self, hidden_states):
         input_dtype = hidden_states.dtype
-        hidden_states = hidden_states.to(torch.float32)
-        variance = hidden_states.pow(2).mean(-1, keepdim=True)
-        hidden_states = hidden_states * torch.rsqrt(variance + self.variance_epsilon)
-        return self.weight * hidden_states.to(input_dtype)
+        # Avoid casting if already float32
+        if hidden_states.dtype != torch.float32:
+            hidden_states = hidden_states.to(torch.float32)
+        # Efficient squared and mean via fused .mul, .mean
+        variance = torch.mean(hidden_states * hidden_states, dim=-1, keepdim=True)
+        # Fused addition and rsqrt for stability
+        hidden_states = hidden_states * torch.rsqrt(variance.add(self.variance_epsilon))
+        # In-place cast if input_dtype is same as float32
+        if input_dtype == torch.float32:
+            out = self.weight * hidden_states
+        else:
+            out = self.weight * hidden_states.to(input_dtype)
+        return out
 
     def extra_repr(self):
         return f"{tuple(self.weight.shape)}, eps={self.variance_epsilon}"
