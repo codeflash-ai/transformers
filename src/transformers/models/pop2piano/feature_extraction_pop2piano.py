@@ -115,6 +115,8 @@ class Pop2PianoFeatureExtractor(SequenceFeatureExtractor):
             mel_scale="htk",
         )
 
+        self._mel_window = np.hanning(self.window_size + 1)[:-1]  # Precompute and reuse window for all frames
+
     def mel_spectrogram(self, sequence: np.ndarray):
         """
         Generates MelSpectrogram.
@@ -124,8 +126,8 @@ class Pop2PianoFeatureExtractor(SequenceFeatureExtractor):
                 The sequence of which the mel-spectrogram will be computed.
         """
         mel_specs = []
+        window = self._mel_window  # Use precomputed window
         for seq in sequence:
-            window = np.hanning(self.window_size + 1)[:-1]
             mel_specs.append(
                 spectrogram(
                     waveform=seq,
