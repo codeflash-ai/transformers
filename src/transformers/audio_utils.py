@@ -27,6 +27,7 @@ from typing import TYPE_CHECKING, Any, Optional, Union
 
 import httpx
 import numpy as np
+from numpy.lib.stride_tricks import as_strided
 from packaging import version
 
 from .utils import (
@@ -767,58 +768,77 @@ def spectrogram(
     num_frames = int(1 + np.floor((waveform.size - frame_length) / hop_length))
 
     num_frequency_bins = (fft_length // 2) + 1 if onesided else fft_length
-    spectrogram = np.empty((num_frames, num_frequency_bins), dtype=np.complex64)
+
+    # Compute frames in a vectorized fashion using strided views
+    # Each frame: waveform[i * hop_length : i * hop_length + frame_length]
+    shape = (num_frames, frame_length)
+    strides = (hop_length * waveform.strides[0], waveform.strides[0])
+    frames = as_strided(waveform, shape=shape, strides=strides)
+
+    # Remove DC offset if required
+    if remove_dc_offset:
+        frames = frames - frames.mean(axis=1, keepdims=True)
+
+    # Apply preemphasis (if any), done vectorized for each frame
+    if preemphasis is not None:
+        # frames[:, 0] *= (1 - preemphasis)
+        frames = frames.copy()
+        frames[:, 1:] -= preemphasis * frames[:, :-1]
+        frames[:, 0] *= 1 - preemphasis
+
+    # Apply window (broadcast)
+    frames = frames * window
+
+    # Dithering
+    if dither != 0.0:
+        frames = frames + dither * np.random.randn(*frames.shape)
+
+    # Pad frames to fft_length if needed
+    if fft_length > frame_length:
+        pad_width = ((0, 0), (0, fft_length - frame_length))
+        frames = np.pad(frames, pad_width, mode="constant")
+
+    # Compute FFT for all frames at once
 
     # rfft is faster than fft
     fft_func = np.fft.rfft if onesided else np.fft.fft
-    buffer = np.zeros(fft_length)
+    spectrogram_arr = fft_func(frames, axis=1)
 
-    timestep = 0
-    for frame_idx in range(num_frames):
-        buffer[:frame_length] = waveform[timestep : timestep + frame_length]
-
-        if dither != 0.0:
-            buffer[:frame_length] += dither * np.random.randn(frame_length)
-
-        if remove_dc_offset:
-            buffer[:frame_length] = buffer[:frame_length] - buffer[:frame_length].mean()
-
-        if preemphasis is not None:
-            buffer[1:frame_length] -= preemphasis * buffer[: frame_length - 1]
-            buffer[0] *= 1 - preemphasis
-
-        buffer[:frame_length] *= window
-
-        spectrogram[frame_idx] = fft_func(buffer)
-        timestep += hop_length
+    # Reshape to expected (num_frames, num_frequency_bins)
+    if onesided:
+        spectrogram_arr = spectrogram_arr[:, :num_frequency_bins]
+    else:
+        spectrogram_arr = spectrogram_arr[:, :fft_length]
 
     # note: ** is much faster than np.power
     if power is not None:
-        spectrogram = np.abs(spectrogram, dtype=np.float64) ** power
+        spectrogram_arr = np.abs(spectrogram_arr, dtype=np.float64) ** power
 
-    spectrogram = spectrogram.T
+    # Transpose to output shape (num_frequency_bins, num_frames)
+    spectrogram_arr = spectrogram_arr.T
 
     if mel_filters is not None:
-        spectrogram = np.maximum(mel_floor, np.dot(mel_filters.T, spectrogram))
+        # mel_filters shape: (num_freq_bins, num_mel_filters)
+        spectrogram_arr = np.maximum(mel_floor, np.dot(mel_filters.T, spectrogram_arr))
 
     if power is not None and log_mel is not None:
         if log_mel == "log":
-            spectrogram = np.log(spectrogram)
+            spectrogram_arr = np.log(spectrogram_arr)
         elif log_mel == "log10":
-            spectrogram = np.log10(spectrogram)
+            spectrogram_arr = np.log10(spectrogram_arr)
         elif log_mel == "dB":
             if power == 1.0:
-                spectrogram = amplitude_to_db(spectrogram, reference, min_value, db_range)
+                spectrogram_arr = amplitude_to_db(spectrogram_arr, reference, min_value, db_range)
             elif power == 2.0:
-                spectrogram = power_to_db(spectrogram, reference, min_value, db_range)
+                spectrogram_arr = power_to_db(spectrogram_arr, reference, min_value, db_range)
             else:
                 raise ValueError(f"Cannot use log_mel option '{log_mel}' with power {power}")
         else:
             raise ValueError(f"Unknown log_mel option: {log_mel}")
 
-        spectrogram = np.asarray(spectrogram, dtype)
+        spectrogram_arr = np.asarray(spectrogram_arr, dtype)
 
-    return spectrogram
+    return spectrogram_arr
 
 
 def spectrogram_batch(
