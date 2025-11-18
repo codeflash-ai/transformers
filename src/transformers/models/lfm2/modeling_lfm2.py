@@ -80,6 +80,9 @@ class Lfm2RotaryEmbedding(nn.Module):
         rope_init_fn: Callable = self.compute_default_rope_parameters
         if self.rope_type != "default":
             rope_init_fn = ROPE_INIT_FUNCTIONS[self.rope_type]
+        # Only compute device ONCE for all calls during __init__, and reuse
+        if device is None and hasattr(config, "device"):
+            device = config.device
         inv_freq, self.attention_scaling = rope_init_fn(self.config, device)
 
         self.register_buffer("inv_freq", inv_freq, persistent=False)
@@ -105,14 +108,17 @@ class Lfm2RotaryEmbedding(nn.Module):
             post-processing scaling factor applied to the computed cos/sin (unused in this type of RoPE).
         """
         base = config.rope_parameters["rope_theta"]
-        dim = getattr(config, "head_dim", None) or config.hidden_size // config.num_attention_heads
+        dim = getattr(config, "head_dim", None)
+        if dim is None:
+            # Use integer division for slightly faster calculation and avoid float conversion
+            dim = config.hidden_size // config.num_attention_heads
 
         attention_factor = 1.0  # Unused in this type of RoPE
 
-        # Compute the inverse frequencies
-        inv_freq = 1.0 / (
-            base ** (torch.arange(0, dim, 2, dtype=torch.int64).to(device=device, dtype=torch.float) / dim)
-        )
+        # Precompute range and perform all ops in a single step
+        range_tensor = torch.arange(0, dim, 2, dtype=torch.float, device=device)
+        # Instead of casting then dividing, multiply and then use pow for all at once
+        inv_freq = torch.pow(base, -range_tensor / dim)
         return inv_freq, attention_factor
 
     @torch.no_grad()
