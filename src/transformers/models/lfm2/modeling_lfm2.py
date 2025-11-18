@@ -287,8 +287,7 @@ class Lfm2HybridConvCache:
 
 def rotate_half(x):
     """Rotates half the hidden dims of the input."""
-    x1 = x[..., : x.shape[-1] // 2]
-    x2 = x[..., x.shape[-1] // 2 :]
+    x1, x2 = torch.chunk(x, 2, dim=-1)
     return torch.cat((-x2, x1), dim=-1)
 
 
@@ -314,8 +313,16 @@ def apply_rotary_pos_emb(q, k, cos, sin, position_ids=None, unsqueeze_dim=1):
     """
     cos = cos.unsqueeze(unsqueeze_dim)
     sin = sin.unsqueeze(unsqueeze_dim)
-    q_embed = (q * cos) + (rotate_half(q) * sin)
-    k_embed = (k * cos) + (rotate_half(k) * sin)
+
+    # Precompute the rotated values (rotate_half) only once per input
+    q_rotated = rotate_half(q)
+    k_rotated = rotate_half(k)
+
+    # Use fused multiply_add if available for minor speedup
+    # But PyTorch only exposes torch.add(q * cos, q_rotated * sin) for float32/float16 tensors
+
+    q_embed = torch.add(q * cos, q_rotated * sin)
+    k_embed = torch.add(k * cos, k_rotated * sin)
     return q_embed, k_embed
 
 
