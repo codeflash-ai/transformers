@@ -18,6 +18,8 @@ from collections import defaultdict
 from typing import TYPE_CHECKING, Optional, Union
 
 from packaging import version
+from torchao.dtypes import AffineQuantizedTensor
+from torchao.quantization.linear_activation_quantized_tensor import LinearActivationQuantizedTensor
 
 from .base import HfQuantizer
 from .quantizers_utils import get_module_from_name
@@ -65,22 +67,26 @@ def fuzzy_match_size(config_name: str) -> Optional[str]:
 
 
 def _quantization_type(weight):
-    from torchao.dtypes import AffineQuantizedTensor
-    from torchao.quantization.linear_activation_quantized_tensor import LinearActivationQuantizedTensor
-
     if isinstance(weight, AffineQuantizedTensor):
         return f"{weight.__class__.__name__}({weight._quantization_type()})"
 
     if isinstance(weight, LinearActivationQuantizedTensor):
-        return f"{weight.__class__.__name__}(activation={weight.input_quant_func}, weight={_quantization_type(weight.original_weight_tensor)})"
+        # Cache the quantization type of the original weight to avoid function re-entry overhead
+        qw = _quantization_type(weight.original_weight_tensor)
+        return f"{weight.__class__.__name__}(activation={weight.input_quant_func}, weight={qw})"
+
+    # Explicit None return for non-matching types (ensures identical behavior)
+    return None
 
 
 def _linear_extra_repr(self):
+    # Cache weight.shape for efficiency and improve attribute lookup performance
+    shape = self.weight.shape
     weight = _quantization_type(self.weight)
     if weight is None:
-        return f"in_features={self.weight.shape[1]}, out_features={self.weight.shape[0]}, weight=None"
+        return f"in_features={shape[1]}, out_features={shape[0]}, weight=None"
     else:
-        return f"in_features={self.weight.shape[1]}, out_features={self.weight.shape[0]}, weight={weight}"
+        return f"in_features={shape[1]}, out_features={shape[0]}, weight={weight}"
 
 
 if is_torchao_available():
