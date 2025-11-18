@@ -118,6 +118,11 @@ class TorchAoHfQuantizer(HfQuantizer):
         # Instead of serializing the simple torch.Tensor like usual, torchao adds a `:_data` suffix so we need this
         self.full_ao_keys = self.weight_ao_keys + ["_data"]
 
+        # -- START OPTIMIZATION --
+        # Prepare tuple suffixes for faster endswith checks in update_unexpected_keys
+        self._full_ao_suffixes = tuple(self.full_ao_keys)
+        # -- END OPTIMIZATION --
+
     def validate_environment(self, *args, **kwargs):
         if not is_torchao_available():
             raise ImportError("Loading an torchao quantized model requires torchao library (`pip install torchao`)")
@@ -234,7 +239,9 @@ class TorchAoHfQuantizer(HfQuantizer):
         return
 
     def update_unexpected_keys(self, model, unexpected_keys: list[str]) -> list[str]:
-        return [k for k in unexpected_keys if not any(k.endswith(x) for x in self.full_ao_keys)]
+        # Optimized to avoid inner for/any by using str.endswith(tuple_of_suffixes)
+        suffixes = self._full_ao_suffixes
+        return [k for k in unexpected_keys if not k.endswith(suffixes)]
 
     def param_needs_quantization(self, model: "PreTrainedModel", param_name: str, **kwargs) -> bool:
         if self.quantization_config.quant_type == "autoquant":
