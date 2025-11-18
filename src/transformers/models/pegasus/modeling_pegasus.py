@@ -118,14 +118,28 @@ def eager_attention_forward(
         scaling = query.size(-1) ** -0.5
 
     # Take the dot product between "query" and "key" to get the raw attention scores.
-    attn_weights = torch.matmul(query, key.transpose(2, 3)) * scaling
+    # Use torch.bmm when possible for batched matmul for efficiency.
+    # If the query/key tensors are 4D: (batch, heads, seq, features)
+    # We'll stick with torch.matmul for compatibility, as behavior preservation is critical.
+
+    # Precompute key transpose for possible reuse and avoid multiple transpositions
+    key_transposed = key.transpose(2, 3)
+
+    attn_weights = torch.matmul(query, key_transposed)
+    if scaling != 1.0:
+        attn_weights.mul_(scaling)  # In-place multiplication for efficiency
 
     if attention_mask is not None:
-        attention_mask = attention_mask[:, :, :, : key.shape[-2]]
-        attn_weights = attn_weights + attention_mask
+        # attention_mask shape: (batch, 1, tgt_len, src_len)
+        # key.shape[-2]: src_len, so we slice for attn_weights width.
+        # Avoid unnecessary index op if mask already matches via shape (common case).
+        if attention_mask.size(-1) != key.shape[-2]:
+            attention_mask = attention_mask[:, :, :, : key.shape[-2]]
+        attn_weights.add_(attention_mask)  # In-place addition
 
     attn_weights = nn.functional.softmax(attn_weights, dim=-1)
-    attn_weights = nn.functional.dropout(attn_weights, p=dropout, training=module.training)
+    if dropout > 0.0:
+        attn_weights = nn.functional.dropout(attn_weights, p=dropout, training=module.training)
 
     attn_output = torch.matmul(attn_weights, value)
     attn_output = attn_output.transpose(1, 2).contiguous()
