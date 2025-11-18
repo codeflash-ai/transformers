@@ -118,16 +118,29 @@ class Lfm2RotaryEmbedding(nn.Module):
     @torch.no_grad()
     @dynamic_rope_update  # power user: used with advanced RoPE types (e.g. dynamic rope)
     def forward(self, x, position_ids):
-        inv_freq_expanded = self.inv_freq[None, :, None].float().expand(position_ids.shape[0], -1, 1).to(x.device)
-        position_ids_expanded = position_ids[:, None, :].float()
+        # Avoid redundant expand and float conversions; perform only when necessary
+        # Avoid unnecessary .float() calls and transpose/matmul overhead
+        batch_size, seq_len = position_ids.shape[0], position_ids.shape[1]
+        device = x.device
 
-        device_type = x.device.type if isinstance(x.device.type, str) and x.device.type != "mps" else "cpu"
-        with torch.autocast(device_type=device_type, enabled=False):  # Force float32
-            freqs = (inv_freq_expanded.float() @ position_ids_expanded.float()).transpose(1, 2)
-            emb = torch.cat((freqs, freqs), dim=-1)
-            cos = emb.cos() * self.attention_scaling
-            sin = emb.sin() * self.attention_scaling
+        # Convert position_ids to shape [batch_size, seq_len] to [batch_size * seq_len]
+        # But keep original shape for broadcasting
+        # inv_freq shape: [dim/2], position_ids shape: [batch_size, seq_len]
+        inv_freq = self.inv_freq.to(device, dtype=torch.float32)
+        position_ids = position_ids.to(device=device, dtype=torch.float32)
 
+        # Compute outer product in a fully vectorized way [batch_size, seq_len, dim/2]
+        # Instead of manual expansion & matmul, use broadcasting
+        freqs = torch.einsum("bi,j->bij", position_ids, inv_freq)
+
+        # Duplicate freqs along last dimension for rotary embeddings [batch_size, seq_len, dim]
+        emb = torch.cat((freqs, freqs), dim=-1)
+        # Use fused operations to directly multiply by attention_scaling after cos/sin
+        cos = emb.cos().mul_(self.attention_scaling)
+        sin = emb.sin().mul_(self.attention_scaling)
+
+        # Return same shapes as before
+        # Convert dtype last as original
         return cos.to(dtype=x.dtype), sin.to(dtype=x.dtype)
 
 
