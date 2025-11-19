@@ -62,12 +62,34 @@ def weighting_function(max_num_bins: int, up: torch.Tensor, reg_scale: int) -> t
     """
     upper_bound1 = abs(up[0]) * abs(reg_scale)
     upper_bound2 = abs(up[0]) * abs(reg_scale) * 2
-    step = (upper_bound1 + 1) ** (2 / (max_num_bins - 2))
-    left_values = [-((step) ** i) + 1 for i in range(max_num_bins // 2 - 1, 0, -1)]
-    right_values = [(step) ** i - 1 for i in range(1, max_num_bins // 2)]
-    values = [-upper_bound2] + left_values + [torch.zeros_like(up[0][None])] + right_values + [upper_bound2]
-    values = [v if v.dim() > 0 else v.unsqueeze(0) for v in values]
-    values = torch.cat(values, 0)
+    # Precompute exponents and powers for vectorization
+    step_power = 2 / (max_num_bins - 2)
+    step = (upper_bound1 + 1) ** step_power
+
+    half = max_num_bins // 2
+    device = up.device
+    dtype = up.dtype
+
+    # Vectorize left_values and right_values (these are non-tensor objects in orig, but can be made tensors)
+    if half > 1:
+        left_inds = torch.arange(half - 1, 0, -1, dtype=dtype, device=device)
+        left_values = -(step**left_inds) + 1
+    else:
+        left_values = torch.empty(0, dtype=dtype, device=device)
+    if half > 0:
+        right_inds = torch.arange(1, half, dtype=dtype, device=device)
+        right_values = (step**right_inds) - 1
+    else:
+        right_values = torch.empty(0, dtype=dtype, device=device)
+    zero_value = torch.zeros(1, dtype=dtype, device=device)
+    values_parts = [
+        torch.as_tensor([-upper_bound2], dtype=dtype, device=device),
+        left_values,
+        zero_value,
+        right_values,
+        torch.as_tensor([upper_bound2], dtype=dtype, device=device),
+    ]
+    values = torch.cat(values_parts, dim=0)
     return values
 
 
@@ -94,11 +116,9 @@ def translate_gt(gt: torch.Tensor, max_num_bins: int, reg_scale: int, up: torch.
     """
     gt = gt.reshape(-1)
     function_values = weighting_function(max_num_bins, up, reg_scale)
-
-    # Find the closest left-side indices for each value
-    diffs = function_values.unsqueeze(0) - gt.unsqueeze(1)
-    mask = diffs <= 0
-    closest_left_indices = torch.sum(mask, dim=1) - 1
+    # Use torch.searchsorted for left indices (vectorized, monotonic increasing)
+    # function_values assumed sorted ascending
+    closest_left_indices = torch.searchsorted(function_values, gt, right=True) - 1
 
     # Calculate the weights for the interpolation
     indices = closest_left_indices.float()
@@ -109,27 +129,34 @@ def translate_gt(gt: torch.Tensor, max_num_bins: int, reg_scale: int, up: torch.
     valid_idx_mask = (indices >= 0) & (indices < max_num_bins)
     valid_indices = indices[valid_idx_mask].long()
 
-    # Obtain distances
-    left_values = function_values[valid_indices]
-    right_values = function_values[valid_indices + 1]
+    # Only perform gather if any valid indices
+    if valid_indices.numel() > 0:
+        left_values = function_values[valid_indices]
+        right_values = function_values[valid_indices + 1]
 
-    left_diffs = torch.abs(gt[valid_idx_mask] - left_values)
-    right_diffs = torch.abs(right_values - gt[valid_idx_mask])
+        left_diffs = torch.abs(gt[valid_idx_mask] - left_values)
+        right_diffs = torch.abs(right_values - gt[valid_idx_mask])
 
-    # Valid weights
-    weight_right[valid_idx_mask] = left_diffs / (left_diffs + right_diffs)
-    weight_left[valid_idx_mask] = 1.0 - weight_right[valid_idx_mask]
+        denom = left_diffs + right_diffs
+        # denom > 0 guaranteed (since left!=right unless gt is precisely on value, but safe /0 handled by 0/0=nan)
+        weight_right_valid = left_diffs / denom
+        weight_right[valid_idx_mask] = weight_right_valid
+        weight_left[valid_idx_mask] = 1.0 - weight_right_valid
+
+    # Invalid weights (out of range)
 
     # Invalid weights (out of range)
     invalid_idx_mask_neg = indices < 0
-    weight_right[invalid_idx_mask_neg] = 0.0
-    weight_left[invalid_idx_mask_neg] = 1.0
-    indices[invalid_idx_mask_neg] = 0.0
+    if invalid_idx_mask_neg.any():
+        weight_right[invalid_idx_mask_neg] = 0.0
+        weight_left[invalid_idx_mask_neg] = 1.0
+        indices[invalid_idx_mask_neg] = 0.0
 
     invalid_idx_mask_pos = indices >= max_num_bins
-    weight_right[invalid_idx_mask_pos] = 1.0
-    weight_left[invalid_idx_mask_pos] = 0.0
-    indices[invalid_idx_mask_pos] = max_num_bins - 0.1
+    if invalid_idx_mask_pos.any():
+        weight_right[invalid_idx_mask_pos] = 1.0
+        weight_left[invalid_idx_mask_pos] = 0.0
+        indices[invalid_idx_mask_pos] = max_num_bins - 0.1
 
     return indices, weight_right, weight_left
 
