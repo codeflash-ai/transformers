@@ -558,19 +558,36 @@ class Data2VecVisionRelativePositionBias(nn.Module):
         # cls to token & token 2 cls & cls to cls
         # get pair-wise relative position index for each token inside the window
         window_area = window_size[0] * window_size[1]
-        grid = torch.meshgrid(torch.arange(window_size[0]), torch.arange(window_size[1]), indexing="ij")
-        coords = torch.stack(grid)  # 2, Wh, Ww
-        coords_flatten = torch.flatten(coords, 1)  # 2, Wh*Ww
-        relative_coords = coords_flatten[:, :, None] - coords_flatten[:, None, :]  # 2, Wh*Ww, Wh*Ww
-        relative_coords = relative_coords.permute(1, 2, 0).contiguous()  # Wh*Ww, Wh*Ww, 2
-        relative_coords[:, :, 0] += window_size[0] - 1  # shift to start from 0
-        relative_coords[:, :, 1] += window_size[1] - 1
-        relative_coords[:, :, 0] *= 2 * window_size[1] - 1
-        relative_position_index = torch.zeros(size=(window_area + 1,) * 2, dtype=relative_coords.dtype)
-        relative_position_index[1:, 1:] = relative_coords.sum(-1)  # Wh*Ww, Wh*Ww
-        relative_position_index[0, 0:] = num_relative_distance - 3
-        relative_position_index[0:, 0] = num_relative_distance - 2
+
+        # Efficient meshgrid and coordinate computation
+        range_h = torch.arange(window_size[0])
+        range_w = torch.arange(window_size[1])
+        grid_h, grid_w = torch.meshgrid(range_h, range_w, indexing="ij")
+        coords_flatten_h = grid_h.flatten()
+        coords_flatten_w = grid_w.flatten()
+        # Stack without additional intermediate tensor, then torch.stack returns [2, window_area]
+        coords_flatten = torch.stack((coords_flatten_h, coords_flatten_w), dim=0)  # 2, Wh*Ww
+
+        # Efficient broadcasting instead of advanced indexing for relative_coords
+        rel_h = coords_flatten[0][:, None] - coords_flatten[0][None, :]  # Wh*Ww, Wh*Ww
+        rel_w = coords_flatten[1][:, None] - coords_flatten[1][None, :]  # Wh*Ww, Wh*Ww
+
+        # Shift to start from 0 and use inplace ops to save memory
+        rel_h.add_(window_size[0] - 1)
+        rel_w.add_(window_size[1] - 1)
+
+        # Compute flattened index directly
+        rel_h.mul_(2 * window_size[1] - 1)
+        rel_sum = rel_h + rel_w  # Wh*Ww, Wh*Ww
+
+        relative_position_index = torch.zeros((window_area + 1, window_area + 1), dtype=rel_sum.dtype)
+        relative_position_index[1:, 1:] = rel_sum
+
+        # Fill special indices as in the original code, vectorized
+        relative_position_index[0, 1:] = num_relative_distance - 3
+        relative_position_index[1:, 0] = num_relative_distance - 2
         relative_position_index[0, 0] = num_relative_distance - 1
+
         return relative_position_index
 
     def forward(self, window_size, interpolate_pos_encoding: bool = False, dim_size=None) -> torch.Tensor:
