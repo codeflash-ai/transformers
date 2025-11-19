@@ -77,7 +77,10 @@ def rotate_half(x):
     """Rotates half the hidden dims of the input."""
     x1 = x[..., 0::2]
     x2 = x[..., 1::2]
-    return torch.stack((-x2, x1), dim=-1).flatten(-2)
+    y = torch.empty_like(x)
+    y[..., 0::2] = -x2
+    y[..., 1::2] = x1
+    return y
 
 
 def apply_rotary_pos_emb(q, k, cos, sin, position_ids=None, unsqueeze_dim=1):
