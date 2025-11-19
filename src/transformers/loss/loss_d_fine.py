@@ -95,43 +95,57 @@ def translate_gt(gt: torch.Tensor, max_num_bins: int, reg_scale: int, up: torch.
     gt = gt.reshape(-1)
     function_values = weighting_function(max_num_bins, up, reg_scale)
 
-    # Find the closest left-side indices for each value
-    diffs = function_values.unsqueeze(0) - gt.unsqueeze(1)
-    mask = diffs <= 0
-    closest_left_indices = torch.sum(mask, dim=1) - 1
+    # Use torch.searchsorted for efficient bin assignment (vectorized, O(log n) per element)
+    # torch.searchsorted returns the index where each element should be inserted to maintain sorted order
+    # For closest *left* bin: use side='right', then subtract 1
+    indices = torch.searchsorted(function_values, gt, right=True) - 1
 
-    # Calculate the weights for the interpolation
-    indices = closest_left_indices.float()
+    indices_float = indices.float()
+    weight_right = torch.zeros_like(indices_float)
+    weight_left = torch.zeros_like(indices_float)
 
-    weight_right = torch.zeros_like(indices)
-    weight_left = torch.zeros_like(indices)
+    # Valid indices (in bounds)
 
     valid_idx_mask = (indices >= 0) & (indices < max_num_bins)
-    valid_indices = indices[valid_idx_mask].long()
+    valid_indices = indices[valid_idx_mask]
 
-    # Obtain distances
-    left_values = function_values[valid_indices]
-    right_values = function_values[valid_indices + 1]
+    # Only perform computations for valid indices
+    if valid_indices.numel() > 0:
+        left_values = function_values[valid_indices]
+        right_values = function_values[valid_indices + 1]
 
-    left_diffs = torch.abs(gt[valid_idx_mask] - left_values)
-    right_diffs = torch.abs(right_values - gt[valid_idx_mask])
+        gt_valid = gt[valid_idx_mask]
+        left_diffs = torch.abs(gt_valid - left_values)
+        right_diffs = torch.abs(right_values - gt_valid)
 
-    # Valid weights
-    weight_right[valid_idx_mask] = left_diffs / (left_diffs + right_diffs)
-    weight_left[valid_idx_mask] = 1.0 - weight_right[valid_idx_mask]
+        # Avoid possible division by zero
+        total = left_diffs + right_diffs
+        # total can only be zero if gt_value == left_value == right_value, so any division is safe
+
+        weight_right_val = left_diffs / total
+        weight_left_val = 1.0 - weight_right_val
+
+        weight_right[valid_idx_mask] = weight_right_val
+        weight_left[valid_idx_mask] = weight_left_val
+
+    # Invalid (left out of bound): gt < function_values[0]
 
     # Invalid weights (out of range)
     invalid_idx_mask_neg = indices < 0
-    weight_right[invalid_idx_mask_neg] = 0.0
-    weight_left[invalid_idx_mask_neg] = 1.0
-    indices[invalid_idx_mask_neg] = 0.0
+    if invalid_idx_mask_neg.any():
+        weight_right[invalid_idx_mask_neg] = 0.0
+        weight_left[invalid_idx_mask_neg] = 1.0
+        indices_float[invalid_idx_mask_neg] = 0.0
+
+    # Invalid (right out of bound): gt >= function_values[-1] (not in bin range)
 
     invalid_idx_mask_pos = indices >= max_num_bins
-    weight_right[invalid_idx_mask_pos] = 1.0
-    weight_left[invalid_idx_mask_pos] = 0.0
-    indices[invalid_idx_mask_pos] = max_num_bins - 0.1
+    if invalid_idx_mask_pos.any():
+        weight_right[invalid_idx_mask_pos] = 1.0
+        weight_left[invalid_idx_mask_pos] = 0.0
+        indices_float[invalid_idx_mask_pos] = float(max_num_bins) - 0.1
 
-    return indices, weight_right, weight_left
+    return indices_float, weight_right, weight_left
 
 
 def bbox2distance(points, bbox, max_num_bins, reg_scale, up, eps=0.1):
@@ -151,10 +165,14 @@ def bbox2distance(points, bbox, max_num_bins, reg_scale, up, eps=0.1):
     """
 
     reg_scale = abs(reg_scale)
-    left = (points[:, 0] - bbox[:, 0]) / (points[..., 2] / reg_scale + 1e-16) - 0.5 * reg_scale
-    top = (points[:, 1] - bbox[:, 1]) / (points[..., 3] / reg_scale + 1e-16) - 0.5 * reg_scale
-    right = (bbox[:, 2] - points[:, 0]) / (points[..., 2] / reg_scale + 1e-16) - 0.5 * reg_scale
-    bottom = (bbox[:, 3] - points[:, 1]) / (points[..., 3] / reg_scale + 1e-16) - 0.5 * reg_scale
+    div_w = points[..., 2] / reg_scale + 1e-16
+    div_h = points[..., 3] / reg_scale + 1e-16
+
+    left = (points[:, 0] - bbox[:, 0]) / div_w - 0.5 * reg_scale
+    top = (points[:, 1] - bbox[:, 1]) / div_h - 0.5 * reg_scale
+    right = (bbox[:, 2] - points[:, 0]) / div_w - 0.5 * reg_scale
+    bottom = (bbox[:, 3] - points[:, 1]) / div_h - 0.5 * reg_scale
+
     four_lens = torch.stack([left, top, right, bottom], -1)
     four_lens, weight_right, weight_left = translate_gt(four_lens, max_num_bins, reg_scale, up)
     if max_num_bins is not None:
