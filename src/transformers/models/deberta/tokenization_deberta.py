@@ -205,46 +205,60 @@ class DebertaTokenizer(PreTrainedTokenizer):
 
     # Copied from transformers.models.gpt2.tokenization_gpt2.GPT2Tokenizer.bpe
     def bpe(self, token):
-        if token in self.cache:
-            return self.cache[token]
+        cache = self.cache
+        bpe_ranks = self.bpe_ranks
+        get_pairs_local = get_pairs  # localize lookup, might help in tight loop
+        if token in cache:
+            return cache[token]
         word = tuple(token)
-        pairs = get_pairs(word)
+        pairs = get_pairs_local(word)
 
         if not pairs:
             return token
 
         while True:
-            bigram = min(pairs, key=lambda pair: self.bpe_ranks.get(pair, float("inf")))
-            if bigram not in self.bpe_ranks:
+            # Use local scope for min call for a small gain
+            min_rank = float("inf")
+            min_pair = None
+            for pair in pairs:
+                rank = bpe_ranks.get(pair, min_rank)
+                if rank < min_rank:
+                    min_rank = rank
+                    min_pair = pair
+            if min_pair is None or min_pair not in bpe_ranks:
                 break
-            first, second = bigram
+            first, second = min_pair
             new_word = []
             i = 0
-            while i < len(word):
+            word_len = len(word)
+            while i < word_len:
                 try:
                     j = word.index(first, i)
                 except ValueError:
-                    new_word.extend(word[i:])
+                    # Extend once with a slice if possible
+                    if i < word_len:
+                        new_word.extend(word[i:])
                     break
                 else:
-                    new_word.extend(word[i:j])
+                    if i < j:
+                        new_word.extend(word[i:j])
                     i = j
 
-                if word[i] == first and i < len(word) - 1 and word[i + 1] == second:
+                # Only append merged token if possible
+                if word[i] == first and i < word_len - 1 and word[i + 1] == second:
                     new_word.append(first + second)
                     i += 2
                 else:
                     new_word.append(word[i])
                     i += 1
-            new_word = tuple(new_word)
-            word = new_word
+            word = tuple(new_word)
             if len(word) == 1:
                 break
             else:
-                pairs = get_pairs(word)
-        word = " ".join(word)
-        self.cache[token] = word
-        return word
+                pairs = get_pairs_local(word)
+        word_str = " ".join(word)
+        cache[token] = word_str
+        return word_str
 
     def build_inputs_with_special_tokens(
         self, token_ids_0: list[int], token_ids_1: Optional[list[int]] = None
