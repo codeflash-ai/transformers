@@ -174,6 +174,7 @@ class DebertaTokenizer(PreTrainedTokenizer):
             bpe_merges = merges_handle.read().split("\n")[1:-1]
         bpe_merges = [tuple(merge.split()) for merge in bpe_merges]
         self.bpe_ranks = dict(zip(bpe_merges, range(len(bpe_merges))))
+
         self.cache = {}
         self.add_prefix_space = add_prefix_space
 
@@ -358,8 +359,14 @@ class DebertaTokenizer(PreTrainedTokenizer):
 
     def prepare_for_tokenization(self, text, is_split_into_words=False, **kwargs):
         add_prefix_space = kwargs.pop("add_prefix_space", self.add_prefix_space)
-        if (is_split_into_words or add_prefix_space) and (len(text) > 0 and not text[0].isspace()):
-            text = " " + text
+        # Optimize condition by hoisting len(text) > 0 to a direct bool conversion;
+        # Short-circuit logic to minimize calls
+        # Fast path: If neither is_split_into_words nor add_prefix_space, skip all checks
+        if is_split_into_words or add_prefix_space:
+            # Using text and not text[0].isspace() as fast as possible
+            if text and not text[0].isspace():
+                # String concatenation as in original; no performance benefit with other methods here for short strings
+                text = " " + text
         return (text, kwargs)
 
 
