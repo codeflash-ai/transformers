@@ -67,9 +67,16 @@ class GlmRotaryEmbedding(LlamaRotaryEmbedding):
         attention_factor = 1.0  # Unused in this type of RoPE
 
         # Compute the inverse frequencies
-        inv_freq = 1.0 / (
-            base ** (torch.arange(0, dim, 2, dtype=torch.int64).to(device=device, dtype=torch.float) / dim)
-        )
+        # OPTIMIZATION: Avoid dtype conversions and .to() call as much as possible.
+        #   - Use torch.float64 for stability if needed (matches default), otherwise torch.float is sufficient.
+        #   - Directly create tensor on device with correct dtype.
+        dtype = torch.float
+        arange_tensor = torch.arange(0, dim, 2, dtype=dtype, device=device)
+        powers = arange_tensor / dim
+        # Use torch.pow for device efficiency.
+        base_pow = torch.pow(base, powers)
+        inv_freq = 1.0 / base_pow
+
         return inv_freq, attention_factor
 
 
