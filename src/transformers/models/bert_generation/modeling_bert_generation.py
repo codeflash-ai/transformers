@@ -631,9 +631,15 @@ class BertGenerationOnlyLMHead(nn.Module):
         self.bias = nn.Parameter(torch.zeros(config.vocab_size))
         self.decoder.bias = self.bias
 
+        # Pre-fetch weights and bias for possible fused call
+        self._weight = self.decoder.weight
+        self._bias = self.bias
+
     def forward(self, hidden_states):
-        logits = self.decoder(hidden_states)
-        return logits
+        # Use torch.nn.functional.linear directly for less overhead,
+        # as decoder is only a Linear layer and weights/bias are already managed.
+        # This avoids unneeded attribute lookups and small dispatch overhead.
+        return torch.nn.functional.linear(hidden_states, self._weight, self._bias)
 
     def _tie_weights(self):
         # For accelerate compatibility and to not break backward compatibility
