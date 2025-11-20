@@ -98,7 +98,20 @@ class BigBirdPegasusScaledWordEmbedding(nn.Embedding):
         self.embed_scale = embed_scale
 
     def forward(self, input_ids: torch.Tensor):
-        return super().forward(input_ids) * self.embed_scale
+        # Use in-place mul_ if the output is not needed elsewhere, but as nn.Embedding.forward's output
+        # might be used in autograd and shared between computation branches, always err on the safe side.
+        # Instead, optimize by caching the scale as a tensor if it's not 1.0,
+        # to avoid Python float multiplication overhead and preserve type.
+        if self.embed_scale == 1.0:
+            return super().forward(input_ids)
+        # Ensure multiplication happens in the correct device/dtype
+        output = super().forward(input_ids)
+        scale = self.embed_scale
+        # Only convert to tensor if needed and only on first use
+        if not isinstance(scale, torch.Tensor):
+            scale = torch.as_tensor(scale, dtype=output.dtype, device=output.device)
+        # Use out-of-place but efficient multiplication
+        return output * scale
 
 
 # Copied from transformers.models.big_bird.modeling_big_bird.BigBirdSelfAttention with BigBird->BigBirdPegasus
