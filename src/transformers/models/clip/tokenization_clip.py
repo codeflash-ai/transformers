@@ -82,11 +82,7 @@ def whitespace_clean(text):
 # Copied from transformers.models.bert.tokenization_bert.whitespace_tokenize
 def whitespace_tokenize(text):
     """Runs basic whitespace cleaning and splitting on a piece of text."""
-    text = text.strip()
-    if not text:
-        return []
-    tokens = text.split()
-    return tokens
+    return text.split()
 
 
 # Copied from transformers.models.bert.tokenization_bert.BasicTokenizer
