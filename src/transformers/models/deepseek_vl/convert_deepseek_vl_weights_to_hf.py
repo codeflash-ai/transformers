@@ -138,7 +138,12 @@ def get_qkv_state_dict(key, parameter):
     xxxx.v.xxxx         (m//3, n)
     """
     qkv_state_dict = {}
-    placeholder = re.search(r"(\(.*?\))", key).group(1)  # finds   "(query|key|value)"
+    start = key.find("(")
+    end = key.find(")", start)
+    if start == -1 or end == -1:
+        placeholder = re.search(r"(\(.*?\))", key).group(1)
+    else:
+        placeholder = key[start : end + 1]
     replacements_keys = placeholder[1:-1].split("|")  # creates ['query', 'key', 'value']
     replacements_vals = torch.split(
         parameter, split_size_or_sections=parameter.size(0) // len(replacements_keys), dim=0
