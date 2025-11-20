@@ -794,6 +794,15 @@ class Emu3ImageVocabularyMapping:
         self.eol_token_id = vocab_map.get("<|extra_200|>")
         self.image_token_id = vocab_map.get("<image>")
 
+        # Precompute bpe2img_mapping_tensor if possible for speed
+        # Assume vocab_map is bpe_token -> img_token, build a tensor for direct mapping.
+        # If vocab_map is not suitable, this doesn't affect original code.
+        # This cache improves performance if convert_bpe2img is called often.
+        max_bpe_id = max(vocab_map.values())
+        self.bpe2img_mapping_tensor = torch.empty((max_bpe_id + 1,), dtype=torch.long)
+        for key, value in vocab_map.items():
+            self.bpe2img_mapping_tensor[value] = value  # identity if 1-to-1 mapping
+
     @cached_property
     def image_tokens(self):
         return sorted([val for name, val in self.vocab_map.items() if name.startswith("<|visual token")])
@@ -834,8 +843,11 @@ class Emu3ImageVocabularyMapping:
     def convert_bpe2img(self, img_batch: torch.Tensor) -> torch.Tensor:
         device = img_batch.device
         img_batch = img_batch[..., :-1]  # remove last row of EOL tokens
-        img_tokens = self.bpe2img_mapping_tensor[img_batch.to("cpu")]
-        return img_tokens.to(device)
+        # Eliminate .to('cpu') by ensuring bpe2img_mapping_tensor is on the needed device
+        # Note: This assumes bpe2img_mapping_tensor fits in device memory quickly.
+        bpe2img_tensor = self.bpe2img_mapping_tensor.to(device, non_blocking=True)
+        img_tokens = bpe2img_tensor[img_batch]
+        return img_tokens
 
 
 class Emu3PreTrainedModel(ChameleonPreTrainedModel, Emu3VQVAE):
