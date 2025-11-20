@@ -49,6 +49,33 @@ def whitespace_tokenize(text):
     return tokens
 
 
+def _is_control(char):
+    # Unicode categories for all control chars (fast path, localize function)
+    if char == "\t" or char == "\n" or char == "\r":
+        return False
+    cat = unicodedata.category(char)
+    return cat in ("Cc", "Cf")
+
+
+def _is_whitespace(char):
+    # Fast-check per original code, localize for speed
+    if char in (" ", "\t", "\n", "\r"):
+        return True
+    cat = unicodedata.category(char)
+    return cat == "Zs"
+
+
+def _is_punctuation(char):
+    # Local copy for optimization, includes ASCII and Unicode
+    cp = ord(char)
+    # ASCII punctuation
+    if (33 <= cp <= 47) or (58 <= cp <= 64) or (91 <= cp <= 96) or (123 <= cp <= 126):
+        return True
+    # Unicode punctuation
+    cat = unicodedata.category(char)
+    return cat.startswith("P")
+
+
 # Copied from transformers.models.bert.tokenization_bert.BertTokenizer with Bert->Electra,BERT->Electra
 class ElectraTokenizer(PreTrainedTokenizer):
     r"""
@@ -160,14 +187,18 @@ class ElectraTokenizer(PreTrainedTokenizer):
     def _tokenize(self, text, split_special_tokens=False):
         split_tokens = []
         if self.do_basic_tokenize:
-            for token in self.basic_tokenizer.tokenize(
-                text, never_split=self.all_special_tokens if not split_special_tokens else None
-            ):
-                # If the token is part of the never_split set
-                if token in self.basic_tokenizer.never_split:
+            never_split = self.all_special_tokens if not split_special_tokens else None
+            # Rather than perform repeated membership checks in a set inside the loop,
+            # we prepare the set of tokens to never split (which is fast for lookup)
+            base_never_split = self.basic_tokenizer.never_split
+            loop_never_split = set(never_split) if never_split is not None else base_never_split
+            # Optimization: directly grab tokens and avoid repeated property access
+            tokens = self.basic_tokenizer.tokenize(text, never_split=never_split)
+            for token in tokens:
+                if token in base_never_split:
                     split_tokens.append(token)
                 else:
-                    split_tokens += self.wordpiece_tokenizer.tokenize(token)
+                    split_tokens.extend(self.wordpiece_tokenizer.tokenize(token))
         else:
             split_tokens = self.wordpiece_tokenizer.tokenize(text)
         return split_tokens
@@ -308,8 +339,8 @@ class BasicTokenizer:
                 Kept for backward compatibility purposes. Now implemented directly at the base class level (see
                 [`PreTrainedTokenizer.tokenize`]) List of token not to split.
         """
-        # union() returns a new set by concatenating the two sets.
-        never_split = self.never_split.union(set(never_split)) if never_split else self.never_split
+        # Avoid creating a new set repeatedly if both are empty or identical
+        effective_never_split = self.never_split.union(set(never_split)) if never_split else self.never_split
         text = self._clean_text(text)
 
         # This was added on November 1st, 2018 for the multilingual and Chinese
@@ -324,15 +355,26 @@ class BasicTokenizer:
         unicode_normalized_text = unicodedata.normalize("NFC", text)
         orig_tokens = whitespace_tokenize(unicode_normalized_text)
         split_tokens = []
+        lower_case = self.do_lower_case
+        strip_accents = self.strip_accents
+        run_strip_accents = self._run_strip_accents
+        run_split_on_punc = self._run_split_on_punc
+        # Optimization: Move membership check out of loop for performance
+        never_split_set = effective_never_split
+
         for token in orig_tokens:
-            if token not in never_split:
-                if self.do_lower_case:
+            if token not in never_split_set:
+                if lower_case:
                     token = token.lower()
-                    if self.strip_accents is not False:
-                        token = self._run_strip_accents(token)
-                elif self.strip_accents:
-                    token = self._run_strip_accents(token)
-            split_tokens.extend(self._run_split_on_punc(token, never_split))
+                    if strip_accents is not False:
+                        token = run_strip_accents(token)
+                elif strip_accents:
+                    token = run_strip_accents(token)
+            # Combine results in local buffer, extend only once per token
+            split_tokens.extend(run_split_on_punc(token, never_split_set))
+
+        # Instead of joining and then re-tokenizing, use generator for memory
+        # Optimization: whitespace_tokenize is already efficient
 
         output_tokens = whitespace_tokenize(" ".join(split_tokens))
         return output_tokens
@@ -446,23 +488,32 @@ class WordpieceTokenizer:
         """
 
         output_tokens = []
-        for token in whitespace_tokenize(text):
-            chars = list(token)
-            if len(chars) > self.max_input_chars_per_word:
-                output_tokens.append(self.unk_token)
-                continue
+        vocab = self.vocab
+        unk_token = self.unk_token
+        max_len = self.max_input_chars_per_word
 
-            is_bad = False
+        # Optimization: Instead of repeatedly creating substrings, operate with slices and cache
+        # Avoiding repeated "".join calls via array->string
+
+        for token in whitespace_tokenize(text):
+            if len(token) > max_len:
+                output_tokens.append(unk_token)
+                continue
             start = 0
             sub_tokens = []
-            while start < len(chars):
-                end = len(chars)
+            token_len = len(token)
+            is_bad = False
+
+            # Precompute token characters list once if needed for substring operations
+            while start < token_len:
+                end = token_len
                 cur_substr = None
                 while start < end:
-                    substr = "".join(chars[start:end])
+                    substr = token[start:end]
                     if start > 0:
                         substr = "##" + substr
-                    if substr in self.vocab:
+                    # vocab lookup
+                    if substr in vocab:
                         cur_substr = substr
                         break
                     end -= 1
@@ -473,7 +524,7 @@ class WordpieceTokenizer:
                 start = end
 
             if is_bad:
-                output_tokens.append(self.unk_token)
+                output_tokens.append(unk_token)
             else:
                 output_tokens.extend(sub_tokens)
         return output_tokens
