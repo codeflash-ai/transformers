@@ -134,11 +134,23 @@ class BigBirdPegasusSelfAttention(nn.Module):
         cache_position=None,
     ):
         batch_size, seq_length, _ = hidden_states.shape
-        query_layer = (
-            self.query(hidden_states)
-            .view(batch_size, -1, self.num_attention_heads, self.attention_head_size)
-            .transpose(1, 2)
-        )
+
+        # Precompute local variables for improved performance
+        num_attention_heads = self.num_attention_heads
+        attention_head_size = self.attention_head_size
+        all_head_size = self.all_head_size
+
+        # Most of the time these are <class 'torch.Tensor'>, so avoid access to self repeatedly
+        query = self.query
+        key = self.key
+        value = self.value
+        dropout = self.dropout
+
+        # Compute queries
+        # Apply contiguous before view for safety and performance
+        query_layer = query(hidden_states)
+        query_layer = query_layer.view(batch_size, seq_length, num_attention_heads, attention_head_size)
+        query_layer = query_layer.transpose(1, 2).contiguous()
 
         is_cross_attention = encoder_hidden_states is not None
         current_states = encoder_hidden_states if is_cross_attention else hidden_states
@@ -148,16 +160,14 @@ class BigBirdPegasusSelfAttention(nn.Module):
             key_layer = past_key_values.layers[self.layer_idx].keys
             value_layer = past_key_values.layers[self.layer_idx].values
         else:
-            key_layer = (
-                self.key(current_states)
-                .view(batch_size, -1, self.num_attention_heads, self.attention_head_size)
-                .transpose(1, 2)
-            )
-            value_layer = (
-                self.value(current_states)
-                .view(batch_size, -1, self.num_attention_heads, self.attention_head_size)
-                .transpose(1, 2)
-            )
+            # [B, L, H*D] -> [B, L, H, D] -> [B, H, L, D]
+            key_layer_out = key(current_states)
+            value_layer_out = value(current_states)
+            key_layer = key_layer_out.view(batch_size, -1, num_attention_heads, attention_head_size)
+            value_layer = value_layer_out.view(batch_size, -1, num_attention_heads, attention_head_size)
+            # Only call .contiguous() once after transpose for both
+            key_layer = key_layer.transpose(1, 2).contiguous()
+            value_layer = value_layer.transpose(1, 2).contiguous()
 
             if past_key_values is not None:
                 # save all key/value_layer to cache to be re-used for fast auto-regressive generation
@@ -169,8 +179,9 @@ class BigBirdPegasusSelfAttention(nn.Module):
 
         # Take the dot product between "query" and "key" to get the raw attention scores.
         attention_scores = torch.matmul(query_layer, key_layer.transpose(-1, -2))
+        # Precompute inverse sqrt for efficiency before dividing
+        attention_scores /= math.sqrt(attention_head_size)
 
-        attention_scores = attention_scores / math.sqrt(self.attention_head_size)
         if attention_mask is not None:
             # Apply the attention mask is (precomputed for all layers in BigBirdPegasusModel forward() function)
             attention_scores = attention_scores + attention_mask
@@ -178,15 +189,15 @@ class BigBirdPegasusSelfAttention(nn.Module):
         # Normalize the attention scores to probabilities.
         attention_probs = nn.functional.softmax(attention_scores, dim=-1)
 
-        # This is actually dropping out entire tokens to attend to, which might
-        # seem a bit unusual, but is taken from the original Transformer paper.
-        attention_probs = self.dropout(attention_probs)
+        # Apply dropout to the probabilities (standard transformer practice)
+        attention_probs = dropout(attention_probs)
+
+        # Output context vector: [B, H, L, D]
 
         context_layer = torch.matmul(attention_probs, value_layer)
 
         context_layer = context_layer.permute(0, 2, 1, 3).contiguous()
-        new_context_layer_shape = context_layer.size()[:-2] + (self.all_head_size,)
-        context_layer = context_layer.view(*new_context_layer_shape)
+        context_layer = context_layer.view(batch_size, seq_length, all_head_size)
 
         return context_layer, attention_probs
 
