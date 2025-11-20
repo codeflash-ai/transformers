@@ -338,8 +338,8 @@ def repeat_kv(hidden_states: torch.Tensor, n_rep: int) -> torch.Tensor:
     batch, num_key_value_heads, slen, head_dim = hidden_states.shape
     if n_rep == 1:
         return hidden_states
-    hidden_states = hidden_states[:, :, None, :, :].expand(batch, num_key_value_heads, n_rep, slen, head_dim)
-    return hidden_states.reshape(batch, num_key_value_heads * n_rep, slen, head_dim)
+    # More memory- and speed-efficient than expand+reshape for contiguous block copying
+    return hidden_states.repeat_interleave(n_rep, dim=1)
 
 
 # Copied from transformers.models.llama.modeling_llama.eager_attention_forward
@@ -353,15 +353,25 @@ def eager_attention_forward(
     dropout: float = 0.0,
     **kwargs: Unpack[TransformersKwargs],
 ):
-    key_states = repeat_kv(key, module.num_key_value_groups)
-    value_states = repeat_kv(value, module.num_key_value_groups)
+    # Pre-compute num_key_value_groups locally
+    num_key_value_groups = module.num_key_value_groups
 
-    attn_weights = torch.matmul(query, key_states.transpose(2, 3)) * scaling
+    key_states = repeat_kv(key, num_key_value_groups)
+    value_states = repeat_kv(value, num_key_value_groups)
+
+    # Precompute key_states transpose for matmul
+    key_states_t = key_states.transpose(2, 3)
+    attn_weights = torch.matmul(query, key_states_t).mul_(scaling)
+
     if attention_mask is not None:
-        causal_mask = attention_mask[:, :, :, : key_states.shape[-2]]
-        attn_weights = attn_weights + causal_mask
+        # Avoid recomputing slice indices
+        mask = attention_mask
+        kslen = key_states.shape[-2]
+        attn_weights = attn_weights + mask[:, :, :, :kslen]
 
-    attn_weights = nn.functional.softmax(attn_weights, dim=-1, dtype=torch.float32).to(query.dtype)
+    # Softmax and dropout in-place where possible
+    attn_weights = nn.functional.softmax(attn_weights, dim=-1, dtype=torch.float32)
+    attn_weights = attn_weights.to(dtype=query.dtype)
     attn_weights = nn.functional.dropout(attn_weights, p=dropout, training=module.training)
     attn_output = torch.matmul(attn_weights, value_states)
     attn_output = attn_output.transpose(1, 2).contiguous()
