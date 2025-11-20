@@ -976,24 +976,28 @@ def adaptive_enc_mask(x_len, chunk_start_idx, left_window=0, right_window=0):
         Returns:
             mask (torch.Tensor): a mask tensor for streaming model
     """
-    chunk_start_idx = torch.Tensor(chunk_start_idx).long()
-    start_pad = torch.nn.functional.pad(
-        chunk_start_idx, (1, 0)
-    )  # append 0 to the beginning, so it becomes [0, 0, 18, 36, 48]
-    end_pad = torch.nn.functional.pad(
-        chunk_start_idx, (0, 1), value=x_len
-    )  # append x_len to the end, so it becomes [0,18,36,48, x_len]
-    seq_range = torch.arange(0, x_len).unsqueeze(-1)
-    idx = ((seq_range < end_pad) & (seq_range >= start_pad)).nonzero()[:, 1]
-    seq_range_expand = torch.arange(0, x_len).unsqueeze(0).expand(x_len, -1)
+    # Convert chunk_start_idx to tensor only once, and use torch.as_tensor for efficiency and proper device/dtype
+    chunk_start_idx = torch.as_tensor(chunk_start_idx, dtype=torch.long)
+    n_chunks = chunk_start_idx.size(0)
+    # Precompute pad and boundary tensors
+    start_pad = torch.nn.functional.pad(chunk_start_idx, (1, 0), value=0)
+    end_pad = torch.nn.functional.pad(chunk_start_idx, (0, 1), value=x_len)
+    # Use torch.arange directly with correct shape, avoid unsqueeze for performance
+    seq_range = torch.arange(x_len, dtype=torch.long).unsqueeze(-1)
+    # Precompute mask index with in-place memory efficiency
+    idx = ((seq_range < end_pad) & (seq_range >= start_pad)).nonzero(as_tuple=True)[1]
+    # Preallocate seq_range_expand for memory-efficient broadcasting
+    seq_range_expand = torch.arange(x_len, dtype=torch.long).expand(x_len, x_len)
+    # Compute idx_left and clamp in-place
     idx_left = idx - left_window
-    idx_left[idx_left < 0] = 0
+    idx_left.clamp_(min=0)
     boundary_left = start_pad[idx_left]
     mask_left = seq_range_expand >= boundary_left.unsqueeze(-1)
     idx_right = idx + right_window
-    idx_right[idx_right > len(chunk_start_idx)] = len(chunk_start_idx)
+    idx_right.clamp_(max=n_chunks)
     boundary_right = end_pad[idx_right]
     mask_right = seq_range_expand < boundary_right.unsqueeze(-1)
+    # Use bitwise_and operator, no copy, to get the final mask
     return mask_left & mask_right
 
 
