@@ -130,10 +130,13 @@ class EfficientLoFTRRotaryEmbedding(nn.Module):
 
         attention_factor = 1.0  # Unused in this type of RoPE
 
-        # Compute the inverse frequencies
-        inv_freq = 1.0 / (
-            base ** (torch.arange(0, dim, 2, dtype=torch.int64).to(device=device, dtype=torch.float) / dim)
-        )
+        # Compute the denominator only once for better performance
+        dim_float = float(dim)
+        idx = torch.arange(0, dim, 2, dtype=torch.float, device=device)
+        # Directly do float indexing to avoid dtype conversion later
+        power = idx / dim_float
+        # Use torch.pow for more efficient computation; base is float
+        inv_freq = torch.pow(base, -power)
         return inv_freq, attention_factor
 
     # Ignore copy
