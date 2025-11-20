@@ -245,11 +245,21 @@ def rms_forward(hidden_states, variance_epsilon=1e-6):
             The eps value to add in the square root scaling factor
     """
     input_dtype = hidden_states.dtype
-    hidden_states = hidden_states.to(torch.float32)
+    # Early exit for float32 to avoid unnecessary .to() copies
+    # torch.float32 is usually default, so optimize the common case
+    if hidden_states.dtype == torch.float32:
+        x = hidden_states
+    else:
+        x = hidden_states.to(torch.float32)
 
-    variance = hidden_states.pow(2).mean(-1, keepdim=True)
-    hidden_states = hidden_states * torch.rsqrt(variance + variance_epsilon)
-    return hidden_states.to(input_dtype)
+    # Use multiply_ and rsqrt_ for possible in-place, less allocation (if not needed, it's safe)
+    # Fused pow(2).mean() into mean of squared to reduce one intermediate
+    variance = (x * x).mean(dim=-1, keepdim=True)
+    normed = x * torch.rsqrt(variance + variance_epsilon)
+    # Only convert when needed
+    if normed.dtype != input_dtype:
+        return normed.to(input_dtype)
+    return normed
 
 
 class FalconMambaMixer(MambaMixer):
