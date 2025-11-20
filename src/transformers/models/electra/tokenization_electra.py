@@ -119,6 +119,17 @@ class ElectraTokenizer(PreTrainedTokenizer):
                 " model use `tokenizer = ElectraTokenizer.from_pretrained(PRETRAINED_MODEL_NAME)`"
             )
         self.vocab = load_vocab(vocab_file)
+        # Optimization: Use a simple list for ids_to_tokens for O(1) access by index
+        # This reduces per-lookup time and memory, since vocab is always a contiguous 0-N mapping.
+        if self.vocab:
+            max_id = max(self.vocab.values())
+            ids_to_tokens: list[str] = [None] * (max_id + 1)
+            for tok, idx in self.vocab.items():
+                ids_to_tokens[idx] = tok
+            self._ids_to_tokens_list = ids_to_tokens
+        else:
+            self._ids_to_tokens_list = []
+        # For compatibility; keep ids_to_tokens as OrderedDict for methods that traverse or need .items()
         self.ids_to_tokens = collections.OrderedDict([(ids, tok) for tok, ids in self.vocab.items()])
         self.do_basic_tokenize = do_basic_tokenize
         if do_basic_tokenize:
@@ -178,7 +189,13 @@ class ElectraTokenizer(PreTrainedTokenizer):
 
     def _convert_id_to_token(self, index):
         """Converts an index (integer) in a token (str) using the vocab."""
-        return self.ids_to_tokens.get(index, self.unk_token)
+        # Optimization: Fast-path for valid index using list, fallback to unk_token if out-of-range
+        lst = self._ids_to_tokens_list
+        if isinstance(index, int) and 0 <= index < len(lst):
+            tok = lst[index]
+            if tok is not None:
+                return tok
+        return self.unk_token
 
     def convert_tokens_to_string(self, tokens):
         """Converts a sequence of tokens (string) in a single string."""
