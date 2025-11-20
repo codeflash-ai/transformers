@@ -815,6 +815,7 @@ class FixedPointMul(Function):
     @staticmethod
     def backward(ctx, grad_output):
         identity_grad = None
+        grad = grad_output / ctx.z_scaling_factor
         if ctx.identity is not None:
-            identity_grad = grad_output.clone() / ctx.z_scaling_factor
-        return grad_output.clone() / ctx.z_scaling_factor, None, None, None, None, identity_grad, None
+            identity_grad = grad
+        return grad, None, None, None, None, identity_grad, None
