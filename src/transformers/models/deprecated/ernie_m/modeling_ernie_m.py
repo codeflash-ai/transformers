@@ -113,9 +113,15 @@ class ErnieMSelfAttention(nn.Module):
         self.is_decoder = config.is_decoder
 
     def transpose_for_scores(self, x: torch.Tensor) -> torch.Tensor:
-        new_x_shape = x.size()[:-1] + (self.num_attention_heads, self.attention_head_size)
-        x = x.view(new_x_shape)
-        return x.permute(0, 2, 1, 3)
+        # Optimize to use reshape and permute together, avoiding unnecessary tuple creation and view if possible.
+        # This uses reshape to combine the view and direct construction of the shape,
+        # which can be slightly faster than view + tuple operations for standard cases.
+        num_heads = self.num_attention_heads
+        head_size = self.attention_head_size
+        # Directly extract dimensions for faster shape computation
+        bsz, seq_len = x.shape[0], x.shape[1]
+        x = x.reshape(bsz, seq_len, num_heads, head_size).permute(0, 2, 1, 3)
+        return x
 
     def forward(
         self,
