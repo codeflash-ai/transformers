@@ -138,17 +138,18 @@ class Speech2TextSinusoidalPositionalEmbedding(nn.Module):
     @torch.no_grad()
     def forward(self, input_ids: torch.Tensor, past_key_values_length: int = 0):
         bsz, seq_len = input_ids.size()
-        # Create the position ids from the input token ids. Any padded tokens remain padded.
-        position_ids = self.create_position_ids_from_input_ids(input_ids, self.padding_idx, past_key_values_length).to(
-            input_ids.device
-        )
+        position_ids = self.create_position_ids_from_input_ids(input_ids, self.padding_idx, past_key_values_length)
+        position_ids = position_ids.to(input_ids.device)
+
+        # expand embeddings if needed
 
         # expand embeddings if needed
         max_pos = self.padding_idx + 1 + seq_len
         if max_pos > self.weights.size(0):
             self.make_weights(max_pos + self.offset, self.embedding_dim, self.padding_idx)
 
-        return self.weights.index_select(0, position_ids.view(-1)).view(bsz, seq_len, -1).detach()
+        out = self.weights.index_select(0, position_ids.view(-1))
+        return out.view(bsz, seq_len, -1).detach()
 
     def create_position_ids_from_input_ids(
         self, input_ids: torch.Tensor, padding_idx: int, past_key_values_length: Optional[int] = 0
@@ -161,10 +162,18 @@ class Speech2TextSinusoidalPositionalEmbedding(nn.Module):
             x: torch.Tensor x:
         Returns: torch.Tensor
         """
-        # The series of casts and type-conversions here are carefully balanced to both work with ONNX export and XLA.
-        mask = input_ids.ne(padding_idx).int()
-        incremental_indices = (torch.cumsum(mask, dim=1).type_as(mask) + past_key_values_length) * mask
-        return incremental_indices.long() + padding_idx
+        # Optimization: use torch operations in-place to reduce allocations
+        mask = input_ids.ne(padding_idx)
+        # mask is bool, use integer arithmetic directly, avoids int conversion
+        mask_int = mask.to(torch.int64)
+        # torch.cumsum returns same dtype as input, so keep as int64
+        incremental_indices = torch.cumsum(mask_int, dim=1)
+        if past_key_values_length:
+            incremental_indices.add_(past_key_values_length)
+        incremental_indices.mul_(mask_int)
+        positional = incremental_indices + padding_idx
+        # already long
+        return positional
 
 
 # Copied from transformers.models.bert.modeling_bert.eager_attention_forward
