@@ -372,16 +372,20 @@ class BasicTokenizer:
 
     def _tokenize_chinese_chars(self, text):
         """Adds whitespace around any CJK character."""
-        output = []
+        # Fast-path: create a set of characters in a single pass, then build the output using a list comprehension
+        # Optimized: reduce attribute lookups
+        is_chinese_char = self._is_chinese_char
+        output_parts = []
+        append = output_parts.append
         for char in text:
             cp = ord(char)
-            if self._is_chinese_char(cp):
-                output.append(" ")
-                output.append(char)
-                output.append(" ")
+            if is_chinese_char(cp):
+                append(" ")
+                append(char)
+                append(" ")
             else:
-                output.append(char)
-        return "".join(output)
+                append(char)
+        return "".join(output_parts)
 
     def _is_chinese_char(self, cp):
         """Checks whether CP is the codepoint of a CJK character."""
