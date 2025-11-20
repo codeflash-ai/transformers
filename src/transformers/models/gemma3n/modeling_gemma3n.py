@@ -1020,6 +1020,15 @@ class Gemma3nTextMLP(nn.Module):
         self.act_fn = ACT2FN[config.hidden_activation]
         self.activation_sparsity = config.activation_sparsity_pattern[layer_idx]
 
+        # move Normal(0,1) distribution to buffer to avoid repeated instantiation in forward
+        self.register_buffer(
+            "_std_multiplier",
+            torch.distributions.normal.Normal(0, 1)
+            .icdf(torch.tensor(self.activation_sparsity, dtype=torch.float32))
+            .reshape(()),
+            persistent=False,
+        )
+
     def forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
         gate_proj = self.gate_proj(hidden_states)
         if self.activation_sparsity > 0.0:
@@ -1030,16 +1039,9 @@ class Gemma3nTextMLP(nn.Module):
         return down_proj
 
     def _gaussian_topk(self, inputs: torch.Tensor) -> torch.Tensor:
-        target_sparsity_tensor = torch.tensor(self.activation_sparsity, dtype=torch.float32, device=inputs.device)
-        # normal_dist and std_multiplier are adapted from jax.scipy.stats.norm.ppf().
-        #
-        # References:
-        #   *   https://docs.jax.dev/en/latest/_autosummary/jax.scipy.stats.norm.ppf.html
-        #   *   https://pytorch.org/docs/stable/distributions.html#torch.distributions.normal.Normal
-        #   *   https://pytorch.org/docs/stable/distributions.html#torch.distributions.transformed_distribution.TransformedDistribution.icdf
-        normal_dist = torch.distributions.normal.Normal(0, 1)
-        std_multiplier: torch.Tensor = normal_dist.icdf(target_sparsity_tensor)
-        std_multiplier = std_multiplier.type(inputs.dtype)
+        # Use precomputed std_multiplier, move to device and dtype at runtime
+        std_multiplier = self._std_multiplier.to(dtype=inputs.dtype, device=inputs.device)
+
         inputs_mean = torch.mean(inputs, dim=-1, keepdim=True)
         inputs_std = torch.std(inputs, dim=-1, keepdim=True, unbiased=False)
         cutoff_x = inputs_mean + inputs_std * std_multiplier
