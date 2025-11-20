@@ -245,11 +245,15 @@ def rms_forward(hidden_states, variance_epsilon=1e-6):
             The eps value to add in the square root scaling factor
     """
     input_dtype = hidden_states.dtype
-    hidden_states = hidden_states.to(torch.float32)
+    if input_dtype != torch.float32:
+        hidden_states = hidden_states.to(torch.float32)
 
-    variance = hidden_states.pow(2).mean(-1, keepdim=True)
+    variance = torch.mean(hidden_states * hidden_states, dim=-1, keepdim=True)
     hidden_states = hidden_states * torch.rsqrt(variance + variance_epsilon)
-    return hidden_states.to(input_dtype)
+
+    if input_dtype != torch.float32:
+        hidden_states = hidden_states.to(input_dtype)
+    return hidden_states
 
 
 class FalconMambaMixer(MambaMixer):
@@ -540,9 +544,11 @@ class FalconMambaMixer(MambaMixer):
 
 class FalconMambaRMSNorm(MambaRMSNorm):
     def forward(self, hidden_states):
-        return self.weight.to(hidden_states.device) * rms_forward(
-            hidden_states, variance_epsilon=self.variance_epsilon
-        )
+        # Avoid unnecessary device transfer if already on the correct device
+        weight = self.weight
+        if weight.device != hidden_states.device:
+            weight = weight.to(hidden_states.device)
+        return weight * rms_forward(hidden_states, variance_epsilon=self.variance_epsilon)
 
 
 class FalconMambaBlock(MambaBlock):
