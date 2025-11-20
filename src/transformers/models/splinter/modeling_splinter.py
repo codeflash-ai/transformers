@@ -99,13 +99,21 @@ def eager_attention_forward(
     dropout: float = 0.0,
     **kwargs,
 ):
-    attn_weights = torch.matmul(query, key.transpose(2, 3)) * scaling
+    # Precompute key transpose, reusing for both mask slicing and matmul
+    key_t = key.transpose(2, 3)
+    attn_weights = torch.matmul(query, key_t)
+    if scaling != 1.0:
+        attn_weights.mul_(scaling)
     if attention_mask is not None:
         causal_mask = attention_mask[:, :, :, : key.shape[-2]]
-        attn_weights = attn_weights + causal_mask
-
-    attn_weights = nn.functional.softmax(attn_weights, dim=-1, dtype=torch.float32).to(query.dtype)
-    attn_weights = nn.functional.dropout(attn_weights, p=dropout, training=module.training)
+        attn_weights.add_(causal_mask)
+    # Move softmax dtype conversion before dropout for effiency; avoid redundant .to()
+    attn_weights = nn.functional.softmax(attn_weights, dim=-1, dtype=torch.float32)
+    if attn_weights.dtype != query.dtype:
+        attn_weights = attn_weights.to(query.dtype)
+    # Avoidn unnecessary copy if dropout == 0.0 or not training
+    if dropout > 0.0 and module.training:
+        attn_weights = nn.functional.dropout(attn_weights, p=dropout, training=True)
 
     attn_output = torch.matmul(attn_weights, value)
     attn_output = attn_output.transpose(1, 2).contiguous()
