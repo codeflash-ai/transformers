@@ -339,13 +339,16 @@ class BasicTokenizer:
 
     def _run_strip_accents(self, text):
         """Strips accents from a piece of text."""
-        text = unicodedata.normalize("NFD", text)
-        output = []
-        for char in text:
-            cat = unicodedata.category(char)
-            if cat == "Mn":
-                continue
-            output.append(char)
+
+        # Optimization: use a list comprehension instead of per-char append/continue;
+        # This saves Python interpreter overhead in the loop and avoids unnecessary branching.
+        # pre-binding function call for minor speedup
+        normalize = unicodedata.normalize
+        category = unicodedata.category
+
+        text = normalize("NFD", text)
+        # Use list comprehension: much faster than the explicit loop with append/continue
+        output = [char for char in text if category(char) != "Mn"]
         return "".join(output)
 
     def _run_split_on_punc(self, text, never_split=None):
