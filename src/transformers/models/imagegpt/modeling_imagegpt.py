@@ -184,9 +184,14 @@ class ImageGPTAttention(nn.Module):
         """
         Splits hidden_size dim into attn_head_size and num_heads
         """
-        new_shape = tensor.size()[:-1] + (num_heads, attn_head_size)
-        tensor = tensor.view(*new_shape)
-        return tensor.permute(0, 2, 1, 3)  # (batch, head, seq_length, head_features)
+        # Fast-path: Direct use of reshape and transpose for speed and memory efficiency
+        # This replaces view/permute with reshape/transpose which is more efficient for contiguous tensors,
+        # and avoids some overhead of dynamic argument expansion with *new_shape.
+        batch_size, seq_length, _ = tensor.shape  # Assumes input in (batch, seq_length, hidden_size)
+        # Will raise if shape doesn't match, as in the original implementation
+        tensor = tensor.reshape(batch_size, seq_length, num_heads, attn_head_size)
+        # (batch, seq_length, head, head_features) -> (batch, head, seq_length, head_features)
+        return tensor.transpose(1, 2)
 
     def _merge_heads(self, tensor, num_heads, attn_head_size):
         """
