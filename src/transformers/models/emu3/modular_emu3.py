@@ -338,17 +338,20 @@ class Emu3VQVAEResnetBlock(nn.Module):
 
         residual = hidden_states
         hidden_states = self.norm1(hidden_states, *norm_args)
-        hidden_states *= torch.sigmoid(hidden_states)
+        sig1 = torch.sigmoid(hidden_states)
+        hidden_states = hidden_states * sig1
         hidden_states = self.conv1(hidden_states)
 
         hidden_states = self.norm2(hidden_states, *norm_args)
-        hidden_states *= torch.sigmoid(hidden_states)
+        sig2 = torch.sigmoid(hidden_states)
+        hidden_states = hidden_states * sig2
         hidden_states = self.conv2(hidden_states)
 
         if self.in_channels != self.out_channels:
             residual = self.nin_shortcut(residual)
 
-        return residual + hidden_states
+        # Use torch.add for potential speedup and memory efficiency
+        return torch.add(residual, hidden_states)
 
 
 class Emu3VQVAEAttentionBlock(SiglipAttention):
