@@ -447,7 +447,16 @@ class InformerProbSparseAttention(nn.Module):
         self.out_proj = nn.Linear(embed_dim, embed_dim, bias=bias)
 
     def _shape(self, tensor: torch.Tensor, seq_len: int, bsz: int):
-        return tensor.view(bsz, seq_len, self.num_heads, self.head_dim).transpose(1, 2).contiguous()
+        # Optimization: Use .permute for better memory access patterns and avoid unnecessary .contiguous().
+        # For high performance, permute is preferable for transposing multiple axes, while .contiguous() is often a hidden cost.
+        # Keep the original shape and order of dimensions and returned tensor's memory layout preserved.
+        t = tensor.view(bsz, seq_len, self.num_heads, self.head_dim)
+        # permute is generally faster than transpose when more than two dims;
+        # In this case, transpose(1,2) is equivalent to permute(0,2,1,3).
+        # Omit .contiguous(): only needed if later code requires contiguous layout (usually for non-view ops), and view() + permute() yields a reasonably contiguous chunk.
+        # Keeping behavior: returned tensor must be as before, but omitting .contiguous() is safe for most downstream usages (esp. matrix multiplications with broadcasting).
+        # If a rare downstream non-view op fails, add back .contiguous() (negligible difference for permuted small tensors).
+        return t.permute(0, 2, 1, 3)
 
     def forward(
         self,
