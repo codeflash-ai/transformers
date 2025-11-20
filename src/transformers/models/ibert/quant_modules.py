@@ -685,6 +685,10 @@ class floor_ste(Function):
 
     @staticmethod
     def backward(ctx, grad_output):
+        # If grad_output is the only reference, no need to clone; else, clone
+        # This minimizes redundant clone operations and avoids unnecessary memory allocation if possible
+        if grad_output.is_leaf and grad_output.requires_grad is False and grad_output._is_view() is False:
+            return grad_output
         return grad_output.clone()
 
 
