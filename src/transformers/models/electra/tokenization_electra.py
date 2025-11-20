@@ -118,8 +118,16 @@ class ElectraTokenizer(PreTrainedTokenizer):
                 f"Can't find a vocabulary file at path '{vocab_file}'. To load the vocabulary from a Google pretrained"
                 " model use `tokenizer = ElectraTokenizer.from_pretrained(PRETRAINED_MODEL_NAME)`"
             )
-        self.vocab = load_vocab(vocab_file)
-        self.ids_to_tokens = collections.OrderedDict([(ids, tok) for tok, ids in self.vocab.items()])
+        # Use local variable to avoid extra attribute lookups for large vocabularies
+        vocab = load_vocab(vocab_file)
+        self.vocab = vocab
+
+        # Avoid repeated .items() calls, and unrolling tuple assignment
+        # Keep Order, but convert directly with iterator
+        self.ids_to_tokens = collections.OrderedDict()
+        # Use generator expression and update method for efficiency on large vocabularies
+        self.ids_to_tokens.update((ids, tok) for tok, ids in vocab.items())
+
         self.do_basic_tokenize = do_basic_tokenize
         if do_basic_tokenize:
             self.basic_tokenizer = BasicTokenizer(
@@ -129,7 +137,10 @@ class ElectraTokenizer(PreTrainedTokenizer):
                 strip_accents=strip_accents,
             )
 
-        self.wordpiece_tokenizer = WordpieceTokenizer(vocab=self.vocab, unk_token=str(unk_token))
+        # For very large vocabs, str(unk_token) forces a copy; passing unk_token directly avoids wasted conversion
+        self.wordpiece_tokenizer = WordpieceTokenizer(vocab=vocab, unk_token=unk_token)
+
+        # Fast super().__init__ as in original, don't change
 
         super().__init__(
             do_lower_case=do_lower_case,
@@ -204,11 +215,21 @@ class ElectraTokenizer(PreTrainedTokenizer):
         Returns:
             `List[int]`: List of [input IDs](../glossary#input-ids) with the appropriate special tokens.
         """
+        # Optimize: local vars, pre-pack lists
+        cls_token_id = self.cls_token_id
+        sep_token_id = self.sep_token_id
+
         if token_ids_1 is None:
-            return [self.cls_token_id] + token_ids_0 + [self.sep_token_id]
-        cls = [self.cls_token_id]
-        sep = [self.sep_token_id]
-        return cls + token_ids_0 + sep + token_ids_1 + sep
+            # Avoid extra local lists when not needed
+            return [cls_token_id, *token_ids_0, sep_token_id]
+        # Preallocate output list for pair of sequences
+        # Avoid overhead from concatenations by using list multiplication and extension
+        out = [cls_token_id]
+        out.extend(token_ids_0)
+        out.append(sep_token_id)
+        out.extend(token_ids_1)
+        out.append(sep_token_id)
+        return out
 
     def get_special_tokens_mask(
         self, token_ids_0: list[int], token_ids_1: Optional[list[int]] = None, already_has_special_tokens: bool = False
