@@ -1136,7 +1136,13 @@ class Gemma3nTextAltUp(nn.Module):
         (which is a nn.Parameter, not a Module) between devices when offloading. It is otherwise only used in
         `scale_corrected_output`
         """
-        return (corrected.type_as(self.correct_output_scale) * self.correct_output_scale).type_as(corrected)
+        if corrected.dtype == self.correct_output_scale.dtype:
+            out = corrected * self.correct_output_scale
+        else:
+            out = corrected.to(self.correct_output_scale.dtype) * self.correct_output_scale
+        if out.dtype == corrected.dtype:
+            return out
+        return out.to(corrected.dtype)
 
     def scale_corrected_output(self, corrected: torch.Tensor) -> torch.Tensor:
         """Scales the provided 3D tensor of shape [batch_size, num_tokens, hidden_size]."""
