@@ -162,9 +162,20 @@ class Speech2TextSinusoidalPositionalEmbedding(nn.Module):
         Returns: torch.Tensor
         """
         # The series of casts and type-conversions here are carefully balanced to both work with ONNX export and XLA.
-        mask = input_ids.ne(padding_idx).int()
-        incremental_indices = (torch.cumsum(mask, dim=1).type_as(mask) + past_key_values_length) * mask
-        return incremental_indices.long() + padding_idx
+
+        # Precompute mask and use it for type conversion and elementwise cumsum more efficiently
+        mask: torch.Tensor = input_ids != padding_idx
+        # Avoid .int() and type_as by using mask as bool, and set dtype in cumsum directly
+        # The result of cumsum is only used where mask is True, others are zeroed
+        # This avoids extra multiplications
+        cumsum = torch.cumsum(mask, dim=1, dtype=torch.long)
+        # Broadcasting handled by arithmetic, only non-padding positions will have values
+        if past_key_values_length:
+            cumsum = cumsum + past_key_values_length
+        # Set padded indices to zero before offsetting
+        cumsum = cumsum * mask
+        # pad offset to all
+        return cumsum + padding_idx
 
 
 # Copied from transformers.models.bert.modeling_bert.eager_attention_forward
