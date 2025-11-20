@@ -459,9 +459,12 @@ class IntLayerNorm(nn.Module):
 
     def set_shift(self, y_int):
         with torch.no_grad():
-            y_sq_int = y_int**2
+            # Use inplace operations where safe to reduce memory allocations
+            y_sq_int = y_int.mul(y_int)
             var_int = torch.sum(y_sq_int, axis=2, keepdim=True)
-            shift = (torch.log2(torch.sqrt(var_int / 2**self.max_bit)).ceil()).max()
+            # Precompute shared values for speed and clarity
+            sqrt_var = torch.sqrt(var_int / (1 << self.max_bit))
+            shift = torch.log2(sqrt_var).ceil().max()
             shift_old = self.shift
             self.shift = torch.max(self.shift, shift)
             logger.info(f"Dynamic shift adjustment: {int(shift_old)} -> {int(self.shift)}")
@@ -472,8 +475,13 @@ class IntLayerNorm(nn.Module):
         to avoid overflow in the subsequent runs.
         """
         self.set_shift(y_int)  # adjusts `self.shift`
-        y_int_shifted = floor_ste.apply(y_int / 2**self.shift)
-        y_sq_int = y_int_shifted**2
+        # Avoid division for speed if self.shift is zero
+        if self.shift.item() == 0:
+            y_int_shifted = floor_ste.apply(y_int)
+        else:
+            # Use inplace division for tensor where possible
+            y_int_shifted = floor_ste.apply(y_int / (1 << int(self.shift.item())))
+        y_sq_int = y_int_shifted.mul(y_int_shifted)
         var_int = torch.sum(y_sq_int, axis=2, keepdim=True)
         return var_int
 
