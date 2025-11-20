@@ -21,6 +21,7 @@ import itertools
 import re
 import unicodedata
 from collections import OrderedDict
+from functools import lru_cache
 from typing import Any, Optional, Union, overload
 
 from .tokenization_utils_base import (
@@ -363,6 +364,7 @@ def _is_control(char):
     return False
 
 
+@lru_cache(maxsize=256)
 def _is_punctuation(char):
     """Checks whether `char` is a punctuation character."""
     cp = ord(char)
