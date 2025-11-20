@@ -89,15 +89,19 @@ class QuantEmbedding(nn.Module):
                 None,
             )
 
-        w = self.weight
-        w_transform = w.data.detach()
-        w_min = w_transform.min().expand(1)
-        w_max = w_transform.max().expand(1)
+        # Use in-place min/max for reduced allocations and memory access
+        w_transform = self.weight.detach()
+        # Avoid extra .data and .expand calls by evaluating min/max directly and keeping as scalar tensor
+        w_min = torch.min(w_transform)
+        w_max = torch.max(w_transform)
 
-        self.weight_scaling_factor = symmetric_linear_quantization_params(self.weight_bit, w_min, w_max, False)
-        self.weight_integer = self.weight_function(
-            self.weight, self.weight_bit, self.percentile_mode, self.weight_scaling_factor
-        )
+        # Compute quantization scaling factor and integer weights
+        scaling_factor = symmetric_linear_quantization_params(self.weight_bit, w_min, w_max, False)
+        integer_weight = self.weight_function(self.weight, self.weight_bit, self.percentile_mode, scaling_factor)
+
+        # Update buffers using .copy_ to avoid unnecessary computation graph issues, and keep dtype/device correct
+        self.weight_scaling_factor.copy_(scaling_factor)
+        self.weight_integer.copy_(integer_weight)
 
         emb_int = nn.functional.embedding(
             x,
@@ -619,11 +623,15 @@ def symmetric_linear_quantization_params(num_bits, saturation_min, saturation_ma
         n = 2 ** (num_bits - 1) - 1
 
         if per_channel:
-            scale, _ = torch.max(torch.stack([saturation_min.abs(), saturation_max.abs()], dim=1), dim=1)
+            # Fast path: torch.maximum is faster than torch.stack + max
+            abs_min = saturation_min.abs()
+            abs_max = saturation_max.abs()
+            scale = torch.maximum(abs_min, abs_max)
             scale = torch.clamp(scale, min=1e-8) / n
 
         else:
-            scale = max(saturation_min.abs(), saturation_max.abs())
+            # Inline max uses torch.maximum
+            scale = torch.maximum(saturation_min.abs(), saturation_max.abs())
             scale = torch.clamp(scale, min=1e-8) / n
 
     return scale
