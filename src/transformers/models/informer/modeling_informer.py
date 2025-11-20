@@ -797,7 +797,8 @@ class InformerDecoderLayer(GradientCheckpointingLayer):
             output_attentions=output_attentions,
             cache_position=cache_position,
         )
-        hidden_states = nn.functional.dropout(hidden_states, p=self.dropout, training=self.training)
+        # Use inplace dropout to reduce memory usage
+        hidden_states = nn.functional.dropout(hidden_states, p=self.dropout, training=self.training, inplace=True)
         hidden_states = residual + hidden_states
         hidden_states = self.self_attn_layer_norm(hidden_states)
 
@@ -814,16 +815,18 @@ class InformerDecoderLayer(GradientCheckpointingLayer):
                 output_attentions=output_attentions,
                 cache_position=cache_position,
             )
-            hidden_states = nn.functional.dropout(hidden_states, p=self.dropout, training=self.training)
+            hidden_states = nn.functional.dropout(hidden_states, p=self.dropout, training=self.training, inplace=True)
             hidden_states = residual + hidden_states
             hidden_states = self.encoder_attn_layer_norm(hidden_states)
 
         # Fully Connected
         residual = hidden_states
         hidden_states = self.activation_fn(self.fc1(hidden_states))
-        hidden_states = nn.functional.dropout(hidden_states, p=self.activation_dropout, training=self.training)
+        hidden_states = nn.functional.dropout(
+            hidden_states, p=self.activation_dropout, training=self.training, inplace=True
+        )
         hidden_states = self.fc2(hidden_states)
-        hidden_states = nn.functional.dropout(hidden_states, p=self.dropout, training=self.training)
+        hidden_states = nn.functional.dropout(hidden_states, p=self.dropout, training=self.training, inplace=True)
         hidden_states = residual + hidden_states
         hidden_states = self.final_layer_norm(hidden_states)
 
