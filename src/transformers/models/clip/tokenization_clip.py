@@ -26,6 +26,9 @@ from ...tokenization_utils import AddedToken, PreTrainedTokenizer, _is_control, 
 from ...utils import logging
 
 
+_WS_RE = re.compile(r"\s+")
+
+
 logger = logging.get_logger(__name__)
 
 VOCAB_FILES_NAMES = {
@@ -74,7 +77,7 @@ def get_pairs(word):
 
 
 def whitespace_clean(text):
-    text = re.sub(r"\s+", " ", text)
+    text = _WS_RE.sub(" ", text)
     text = text.strip()
     return text
 
