@@ -68,17 +68,25 @@ def load_original_state_dict(model_id):
 
 
 def convert_state_dict_to_hf(state_dict):
+    # Prepare items in order of descending key_to_modify length for greedy longest match
+    mapping = sorted(KEYS_TO_MODIFY_MAPPING.items(), key=lambda kv: -len(kv[0]))
+
     new_state_dict = {}
-    for key, value in state_dict.items():
+    # Use locals inside loop for faster global lookups
+    state_dict_items = state_dict.items()
+    for key, value in state_dict_items:
         if key.endswith(".inv_freq"):
             continue
-        for key_to_modify, new_key in KEYS_TO_MODIFY_MAPPING.items():
+        orig_key = key
+        for key_to_modify, new_key in mapping:
             if key_to_modify in key:
                 key = key.replace(key_to_modify, new_key)
 
         new_state_dict[key] = value
-    new_state_dict["vision_tower.post_layernorm.weight"] = torch.zeros((1152,))
-    new_state_dict["vision_tower.post_layernorm.bias"] = torch.zeros((1152,))
+    # Only create zeros tensors once and avoid redundant calls
+    zeros1152 = torch.zeros((1152,))
+    new_state_dict["vision_tower.post_layernorm.weight"] = zeros1152
+    new_state_dict["vision_tower.post_layernorm.bias"] = zeros1152
 
     return new_state_dict
 
