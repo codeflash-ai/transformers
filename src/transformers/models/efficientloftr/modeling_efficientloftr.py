@@ -292,10 +292,10 @@ class EfficientLoFTRAggregationLayer(nn.Module):
 # Copied from transformers.models.cohere.modeling_cohere.rotate_half
 def rotate_half(x):
     # Split and rotate. Note that this function is different from e.g. Llama.
-    x1 = x[..., ::2]
-    x2 = x[..., 1::2]
-    rot_x = torch.stack([-x2, x1], dim=-1).flatten(-2)
-    return rot_x
+    out = torch.empty_like(x)
+    out[..., ::2] = x[..., 1::2].neg()
+    out[..., 1::2] = x[..., ::2]
+    return out
 
 
 # Copied from transformers.models.cohere.modeling_cohere.apply_rotary_pos_emb
