@@ -636,11 +636,13 @@ class InformerConvLayer(GradientCheckpointingLayer):
         self.maxPool = nn.MaxPool1d(kernel_size=3, stride=2, padding=1)
 
     def forward(self, x):
-        x = self.downConv(x.permute(0, 2, 1))
+        # Avoid unnecessary copies and use contiguous when permuting/transposing
+        x = x.permute(0, 2, 1).contiguous()
+        x = self.downConv(x)
         x = self.norm(x)
         x = self.activation(x)
         x = self.maxPool(x)
-        x = x.transpose(1, 2)
+        x = x.transpose(1, 2).contiguous()
         return x
 
 
