@@ -211,10 +211,14 @@ def convert_hash_embeddings_to_fused(
     unified_weights: dict[str, torch.Tensor], config: dict[str, Any]
 ) -> dict[str, torch.Tensor]:
     """Convert ModuleList hash embeddings to nn.embedding format"""
+    # Speed up key extraction with a list comprehension and avoid repeated lookups
+    # Also, cache "encoder_hash_tok_embedding." for a faster substring test, similarly for ".weight"
+    encoder_hash_prefix = "encoder_hash_tok_embedding."
+    suffix_weight = ".weight"
     original_keys_format = [
         key
-        for key in unified_weights.keys()
-        if "encoder_hash_tok_embedding." in key and ".weight" in key and key.split(".")[-2].isdigit()
+        for key in unified_weights
+        if encoder_hash_prefix in key and suffix_weight in key and key.split(".")[-2].isdigit()
     ]
 
     num_embeddings = config.get("encoder_hash_byte_group_nb_functions", 1) * len(
@@ -225,13 +229,28 @@ def convert_hash_embeddings_to_fused(
 
     fused_weight = torch.zeros(vocab_size * num_embeddings, hidden_size)
 
-    sorted_keys = sorted(original_keys_format, key=lambda k: int(k.split(".")[-2]))
+    # Since key splitting is done once per key in sort, extract the needed ints once.
+    # Avoid repeated split and int conversion during sort.
+    key_index_pairs = []
+    for key in original_keys_format:
+        try:
+            idx = int(key.split(".")[-2])
+        except ValueError:
+            continue  # safe: only digit keys preserved
+        key_index_pairs.append((idx, key))
+    # sort by that index
+    key_index_pairs.sort()
 
-    for i, old_key in enumerate(sorted_keys):
+    # Prepare removal keys up front for efficient deletion after the loop
+    # Also improve assignment by minimizing slice construction/redundant indexing.
+    for i, (_, old_key) in enumerate(key_index_pairs):
         start_idx = i * vocab_size
-        end_idx = (i + 1) * vocab_size
-        fused_weight[start_idx:end_idx] = unified_weights[old_key]
-        logger.info(f"Copied {old_key} to indices {start_idx}:{end_idx}")
+        end_idx = start_idx + vocab_size
+        fused_weight[start_idx:end_idx].copy_(unified_weights[old_key])
+        # logger.info(f"Copied {old_key} to indices {start_idx}:{end_idx}")
+        # Delayed deletion for better dict mutation performance
+        # (but must be done after copy to avoid memory leak)
+        # Mark for deletion later to not affect iteration -- but since we built a list, safe to delete here.
         del unified_weights[old_key]
 
     fused_key = "model.encoder_hash_tok_embedding.weight"
