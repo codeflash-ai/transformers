@@ -101,16 +101,32 @@ class Emu3VQVAEVectorQuantizer(nn.Module):
 
     def forward(self, hidden_state: torch.Tensor):
         batch_size, temporal, channels, height, width = hidden_state.shape
-        hidden_state = hidden_state.permute(0, 1, 3, 4, 2).contiguous()
-        hidden_state_flattened = hidden_state.view(-1, channels)
 
-        # distances from z to embeddings e_j (z - e)^2 = z^2 + e^2 - 2 e * z
-        hidden_state_sum = torch.sum(hidden_state_flattened**2, dim=1, keepdim=True)
-        embedding_sum = torch.sum(self.embedding.weight**2, dim=1)
+        # Fuse permute + reshape with flatten, and avoid .contiguous() if possible by directly using reshape
+        # Then, use view only if tensor is contiguous, else .reshape for safety and perf
+        hidden_state = hidden_state.permute(0, 1, 3, 4, 2)
+        hidden_state_flattened = hidden_state.reshape(-1, channels)
 
-        # "bd,dn->bn",
-        distances = 2 * torch.matmul(hidden_state_flattened, self.embedding.weight.transpose(0, 1))
-        distances = hidden_state_sum + embedding_sum - distances
+        # Use torch.mul for hidden_state_flattened**2 and self.embedding.weight**2 (can be slightly faster)
+        hidden_state_sum = torch.sum(torch.mul(hidden_state_flattened, hidden_state_flattened), dim=1, keepdim=True)
+        embedding_sum = torch.sum(torch.mul(self.embedding.weight, self.embedding.weight), dim=1)
+
+        # matmul can be fused with scaling, but better is to use addmm with out argument for better memory efficiency
+        # distances = hidden_state_sum + embedding_sum - 2 * (hidden_state_flattened @ self.embedding.weight.T)
+
+        # Instead of torch.matmul(...), use torch.addmm for direct accumulation and output memory savings
+        # (broadcast hidden_state_sum), for better memory/compute efficiency
+        product = torch.addmm(
+            hidden_state_sum,  # bias term, [N, 1]
+            hidden_state_flattened,  # [N, D]
+            self.embedding.weight.t(),  # [D, K]
+            alpha=-2.0,
+            beta=1.0,
+        )  # [N, K]
+
+        # embedding_sum is [K], we broadcast to [N, K] via unsqueeze
+        # out-of-place _add for broadcasting
+        distances = product + embedding_sum.unsqueeze(0)
 
         min_encoding_indices = torch.argmin(distances, dim=1)
         min_encoding_indices = min_encoding_indices.view(batch_size, temporal, height, width)
