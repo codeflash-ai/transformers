@@ -1620,17 +1620,22 @@ class Gemma3nRotaryEmbedding(nn.Module):
 
         self.config = config
 
-        self.layer_types = list(set(config.layer_types))
+        # Optimize: Use a set comprehension and avoid explicit list/set conversion
+        self.layer_types = list({lt for lt in config.layer_types})
+
         self.rope_type = {}
+        rope_parameters = self.config.rope_parameters
+        # Optimize: Avoid repeated dictionary lookups and temporary variable creation in loop
         for layer_type in self.layer_types:
-            rope_params = self.config.rope_parameters[layer_type]
+            rope_params = rope_parameters[layer_type]
             if rope_params is None:
                 continue
 
-            self.rope_type[layer_type] = rope_params["rope_type"]
+            rope_type_value = rope_params["rope_type"]
+            self.rope_type[layer_type] = rope_type_value
             rope_init_fn: Callable = self.compute_default_rope_parameters
-            if self.rope_type[layer_type] != "default":
-                rope_init_fn = ROPE_INIT_FUNCTIONS[self.rope_type[layer_type]]
+            if rope_type_value != "default":
+                rope_init_fn = ROPE_INIT_FUNCTIONS[rope_type_value]
             curr_inv_freq, curr_attention_scaling = rope_init_fn(self.config, device, layer_type=layer_type)
             self.register_buffer(f"{layer_type}_inv_freq", curr_inv_freq, persistent=False)
             setattr(self, f"{layer_type}_original_inv_freq", curr_inv_freq)
@@ -1662,14 +1667,21 @@ class Gemma3nRotaryEmbedding(nn.Module):
         """
         # For backward compatibility standardize the `rope_parameters_dict` if it uses old format
         base = config.rope_parameters[layer_type]["rope_theta"]
-        dim = getattr(config, "head_dim", None) or config.hidden_size // config.num_attention_heads
+        # Optimize: Avoid getattr and fallback by using if-else, only evaluate once
+        head_dim = getattr(config, "head_dim", None)
+        if head_dim is not None:
+            dim = head_dim
+        else:
+            dim = config.hidden_size // config.num_attention_heads
 
         attention_factor = 1.0  # Unused in this type of RoPE
 
-        # Compute the inverse frequencies
-        inv_freq = 1.0 / (
-            base ** (torch.arange(0, dim, 2, dtype=torch.int64).to(device=device, dtype=torch.float) / dim)
-        )
+        # Optimize: Construct float index arange directly with correct dtype for improved efficiency
+        # Only one to() call, avoid intermediate casting
+        arange = torch.arange(0, dim, 2, dtype=torch.float, device=device)
+        # Optimize: Use .pow() for potentially faster base exponentiation on tensors
+        exponent = arange / dim
+        inv_freq = 1.0 / torch.pow(base, exponent)
         return inv_freq, attention_factor
 
     @torch.no_grad()
