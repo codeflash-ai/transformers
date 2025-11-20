@@ -1678,16 +1678,29 @@ class Gemma3nRotaryEmbedding(nn.Module):
         inv_freq = getattr(self, f"{layer_type}_inv_freq")
         attention_scaling = getattr(self, f"{layer_type}_attention_scaling")
 
-        inv_freq_expanded = inv_freq[None, :, None].float().expand(position_ids.shape[0], -1, 1).to(x.device)
-        position_ids_expanded = position_ids[:, None, :].float()
+        # Optimize: directly expand for broadcasting, avoid unnecessary .float() on tensors already float
+        # and avoid redundant .to() calls. Use efficient broadcasting via unsqueeze rather than expand.
+        # Both inv_freq and position_ids should be float32 already.
 
-        device_type = x.device.type if isinstance(x.device.type, str) and x.device.type != "mps" else "cpu"
-        with torch.autocast(device_type=device_type, enabled=False):  # Force float32
-            freqs = (inv_freq_expanded.float() @ position_ids_expanded.float()).transpose(1, 2)
-            emb = torch.cat((freqs, freqs), dim=-1)
-            cos = emb.cos() * attention_scaling
-            sin = emb.sin() * attention_scaling
+        # inv_freq shape: [dim]
+        # position_ids shape: [batch, seq]
+        # Want outer product -> [batch, seq, dim]
+        # So reshape for efficient broadcasting (batch, seq, 1) x (1, 1, dim)
+        batch = position_ids.shape[0]
+        seq = position_ids.shape[1]
+        dim = inv_freq.shape[0]
 
+        # positions: [batch, seq, 1], inv_freq: [1, 1, dim]
+        positions = position_ids.unsqueeze(-1).to(inv_freq.dtype)
+        inv_freq_view = inv_freq.view(1, 1, dim)
+        # freqs: [batch, seq, dim]
+        freqs = positions * inv_freq_view
+        # emb: [batch, seq, 2*dim]
+        emb = torch.cat((freqs, freqs), dim=-1)
+        cos = emb.cos() * attention_scaling
+        sin = emb.sin() * attention_scaling
+
+        # No device type or autocast logic required since input promoted
         return cos.to(dtype=x.dtype), sin.to(dtype=x.dtype)
 
 
