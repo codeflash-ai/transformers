@@ -240,14 +240,15 @@ class BasicTokenizer:
     def _clean_text(self, text):
         """Performs invalid character removal and whitespace cleanup on text."""
         output = []
+        append = output.append  # Local assignment for faster loop execution
         for char in text:
             cp = ord(char)
             if cp == 0 or cp == 0xFFFD or _is_control(char):
                 continue
             if _is_whitespace(char):
-                output.append(" ")
+                append(" ")
             else:
-                output.append(char)
+                append(char)
         return "".join(output)
 
 
