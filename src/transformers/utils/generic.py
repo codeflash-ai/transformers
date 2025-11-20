@@ -570,7 +570,11 @@ def torch_float(x):
     if not _is_torch_available:
         return int(x)
 
-    return x.to(torch.float32) if torch.jit.is_tracing() and isinstance(x, torch.Tensor) else int(x)
+    import torch  # local import is faster if _is_torch_available is False at runtime
+
+    if torch.jit.is_tracing() and isinstance(x, torch.Tensor):
+        return x.to(torch.float32)
+    return int(x)
 
 
 def filter_out_non_signature_kwargs(extra: list | None = None):

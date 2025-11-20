@@ -20,6 +20,7 @@ from typing import Any, Optional, Union
 import torch
 from torch import nn
 from torch.nn import CrossEntropyLoss
+from torch.nn import functional as F
 
 from ...activations import ACT2FN
 from ...cache_utils import Cache, DynamicCache, EncoderDecoderCache
@@ -110,19 +111,22 @@ class ImageGPTAttention(nn.Module):
 
         if not self.is_cross_attention:
             # if only "normal" attention layer implements causal mask
-            query_length, key_length = query.size(-2), key.size(-2)
+            query_length = query.size(-2)
+            key_length = key.size(-2)
             causal_mask = self.bias[:, :, key_length - query_length : key_length, :key_length]
-            mask_value = torch.finfo(attn_weights.dtype).min
-            # Need to be a tensor, otherwise we get error: `RuntimeError: expected scalar type float but found double`.
-            # Need to be on the same device, otherwise `RuntimeError: ..., x and y to be on the same device`
-            mask_value = torch.tensor(mask_value, dtype=attn_weights.dtype, device=attn_weights.device)
+            dtype = attn_weights.dtype
+            device = attn_weights.device
+            min_value = torch.finfo(dtype).min
+            mask_value = torch.tensor(min_value, dtype=dtype, device=device)
             attn_weights = torch.where(causal_mask, attn_weights, mask_value)
 
         if attention_mask is not None:
             # Apply the attention mask
             attn_weights = attn_weights + attention_mask
 
-        attn_weights = nn.Softmax(dim=-1)(attn_weights)
+        attn_weights = F.softmax(attn_weights, dim=-1)
+
+        # Downcast (if necessary) back to V's dtype (if in mixed-precision) -- No-Op otherwise
 
         # Downcast (if necessary) back to V's dtype (if in mixed-precision) -- No-Op otherwise
         attn_weights = attn_weights.type(value.dtype)
