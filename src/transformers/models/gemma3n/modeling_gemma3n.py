@@ -691,19 +691,27 @@ class Gemma3nAudioSSCPConvBlock(nn.Module):
         # Input audio_encodings is [B, C_in, T_in, F_in] (e.g., C_in=1)
         # manual_padding is (pad_F_left, pad_F_right, pad_T_top, pad_T_bottom)
         # F.pad applies to last two dims: F_in then T_in
-        audio_encodings_padded = F.pad(audio_encodings, self.manual_padding, mode="constant", value=0.0).to(
-            self.conv.weight.dtype
-        )
+
+        # Optimize padding to avoid unnecessary .to() if dtype already matches
+        if audio_encodings.dtype == self.conv.weight.dtype:
+            audio_encodings_padded = F.pad(audio_encodings, self.manual_padding, mode="constant", value=0.0)
+        else:
+            audio_encodings_padded = F.pad(audio_encodings, self.manual_padding, mode="constant", value=0.0)
+            audio_encodings_padded = audio_encodings_padded.to(self.conv.weight.dtype)
+
+        # Expected padded shape for F_in, k_w=3, pad_F=(1,1) -> F_padded = F_in+2
+        # Expected padded shape for T_in, k_h=3, pad_T=(0,2) -> T_padded = T_in+2
         # Expected padded shape for F_in, k_w=3, pad_F=(1,1) -> F_padded = F_in+2
         # Expected padded shape for T_in, k_h=3, pad_T=(0,2) -> T_padded = T_in+2
         audio_encodings_conv = self.conv(audio_encodings_padded)
         # Expected conv output shape: [B, C_out, T_out, F_out]
         # Input to norm is [B, T_out, F_out, C_out]
-        x_for_norm = audio_encodings_conv.permute(0, 2, 3, 1).contiguous()
-        x_normed = self.norm(x_for_norm)
+
+        # Combine permute and contiguous into a single line and reuse variable
+        x_normed = self.norm(audio_encodings_conv.permute(0, 2, 3, 1).contiguous())
         # Output of norm is [B, T_out, F_out, C_out], permute back to [B, C_out, T_out, F_out]
-        audio_encodings_normed = x_normed.permute(0, 3, 1, 2).contiguous()
-        return self.activation(audio_encodings_normed)
+        # Compose permute and contiguous, directly return the activated tensor
+        return self.activation(x_normed.permute(0, 3, 1, 2).contiguous())
 
 
 class Gemma3nAudioSubSampleConvProjection(nn.Module):
