@@ -663,15 +663,21 @@ class SymmetricQuantFunction(Function):
     @staticmethod
     def backward(ctx, grad_output):
         scale = ctx.scale
-        if len(grad_output.shape) == 4:
-            scale = scale.view(-1, 1, 1, 1)
-        # reshape scale and zeropoint for linear weights
-        elif len(grad_output.shape) == 2:
-            scale = scale.view(-1, 1)
-        else:
-            scale = scale.view(-1)
 
-        return grad_output.clone() / scale, None, None, None, None
+        grad_shape = grad_output.shape
+        if len(grad_shape) == 4:
+            # Avoid view if scale is already the right shape for broadcasting
+            if scale.shape != (grad_shape[0], 1, 1, 1):
+                scale = scale.view(-1, 1, 1, 1)
+        elif len(grad_shape) == 2:
+            if scale.shape != (grad_shape[0], 1):
+                scale = scale.view(-1, 1)
+        else:
+            if scale.shape != (grad_shape[0],):
+                scale = scale.view(-1)
+
+        # grad_output.clone() is not necessary as the division produces a new tensor and backward() shouldn't mutate inputs.
+        return grad_output / scale, None, None, None, None
 
 
 class floor_ste(Function):
