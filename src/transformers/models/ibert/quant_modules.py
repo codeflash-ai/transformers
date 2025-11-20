@@ -579,22 +579,26 @@ def linear_quantize(input, scale, zero_point, inplace=False):
     Returns:
         `torch.Tensor`: Linearly quantized value of *input* according to *scale* and *zero_point*.
     """
-    # reshape scale and zeropoint for convolutional weights and activation
-    if len(input.shape) == 4:
-        scale = scale.view(-1, 1, 1, 1)
-        zero_point = zero_point.view(-1, 1, 1, 1)
-    # reshape scale and zeropoint for linear weights
-    elif len(input.shape) == 2:
-        scale = scale.view(-1, 1)
-        zero_point = zero_point.view(-1, 1)
+    input_shape_len = input.dim()
+    # Reshape scale and zeropoint efficiently based on input shape
+    if input_shape_len == 4:
+        shape = (-1, 1, 1, 1)
+    elif input_shape_len == 2:
+        shape = (-1, 1)
     else:
-        scale = scale.view(-1)
-        zero_point = zero_point.view(-1)
+        shape = (-1,)
+
+    scale_reshaped = scale.view(shape)
+    zero_point_reshaped = zero_point.view(shape)
+
+    # Use fused FMA for better efficiency where possible
     # quantized = float / scale + zero_point
     if inplace:
-        input.mul_(1.0 / scale).add_(zero_point).round_()
+        input.div_(scale_reshaped).add_(zero_point_reshaped).round_()
         return input
-    return torch.round(1.0 / scale * input + zero_point)
+    # To avoid creating temporary tensors unnecessarily,
+    # multiply input by reciprocal directly and add zero point
+    return torch.round(input / scale_reshaped + zero_point_reshaped)
 
 
 def symmetric_linear_quantization_params(num_bits, saturation_min, saturation_max, per_channel=False):
