@@ -330,16 +330,17 @@ class Gemma3nAudioAttention(nn.Module):
         r_softplus_0 = 1.0 / torch.nn.functional.softplus(torch.tensor(0.0))
         self.register_buffer("q_scale", (q_scale * r_softplus_0).clone().detach(), persistent=False)
 
-        lower_causal_mask = torch.tril(
-            torch.ones((self.context_size, self.chunk_size), dtype=torch.bool),
-            diagonal=0,
-        ).T
-        upper_causal_mask = torch.tril(
-            torch.ones((self.chunk_size, self.context_size), dtype=torch.bool),
-            diagonal=self.max_past_horizon + self.max_future_horizon,
-        )
-        local_causal_valid_mask = torch.ones((self.chunk_size, self.context_size), dtype=torch.bool)
-        local_causal_valid_mask = local_causal_valid_mask * lower_causal_mask * upper_causal_mask
+        # Precompute masks only once on construction to avoid regenerating slow trils
+        mask_shape_down = (self.context_size, self.chunk_size)
+        mask_shape_up = (self.chunk_size, self.context_size)
+
+        tril_ones_down = torch.ones(mask_shape_down, dtype=torch.bool)
+        tril_ones_up = torch.ones(mask_shape_up, dtype=torch.bool)
+
+        lower_causal_mask = torch.tril(tril_ones_down, diagonal=0).T  # shape: (chunk_size, context_size)
+        upper_causal_mask = torch.tril(tril_ones_up, diagonal=self.max_past_horizon + self.max_future_horizon)
+        local_causal_valid_mask = lower_causal_mask & upper_causal_mask  # use bitwise AND for bool arrays
+
         self.register_buffer("local_causal_valid_mask", local_causal_valid_mask, persistent=False)
 
         self.register_buffer(
@@ -349,11 +350,15 @@ class Gemma3nAudioAttention(nn.Module):
         )
 
     def _pad_dim1(self, x: torch.Tensor, pad_left: int, pad_right: int) -> torch.Tensor:
-        batch, _, *tail_shape = x.shape
-        left = x.new_zeros((batch, pad_left, *tail_shape))
-        right = x.new_zeros((batch, pad_right, *tail_shape))
-        x = torch.cat([left, x, right], dim=1)
-        return x
+        # Use torch.nn.functional.pad which is more memory efficient than cat for large tensors
+        if pad_left == 0 and pad_right == 0:
+            return x
+        # shape: (batch, time, ...)
+        # torch.nn.functional.pad expects (N, ...), padding on second dimension
+        # compute padding for only dim=1 (time axis)
+        # Pad order is (..., right, left) for each dimension in torch.nn.functional.pad for 3D tensors
+        pad = [0] * (2 * (x.dim() - 2)) + [pad_left, pad_right]
+        return torch.nn.functional.pad(x, pad, "constant", 0)
 
     def _convert_to_block(self, hidden_states: torch.Tensor) -> torch.Tensor:
         """Turns a sequence to non overlapping blocks.
@@ -370,12 +375,13 @@ class Gemma3nAudioAttention(nn.Module):
         b, t = shape[:2]
         num_blocks = (t + self.chunk_size - 1) // self.chunk_size
 
-        if (padding_len := num_blocks * self.chunk_size - t) > 0:
+        padding_len = num_blocks * self.chunk_size - t
+        if padding_len > 0:
             hidden_states = self._pad_dim1(hidden_states, 0, padding_len)
 
-        permute_dims = (b, num_blocks, self.chunk_size) + shape[2:]
-        hidden_states = hidden_states.reshape(permute_dims).contiguous()
-        return hidden_states
+        # Use reshape instead of passing through .contiguous(), as .reshape will ensure contiguous memory if needed
+        out_shape = (b, num_blocks, self.chunk_size) + shape[2:]
+        return hidden_states.reshape(out_shape)
 
     def _extract_block_context(self, hidden_states: torch.Tensor) -> torch.Tensor:
         """Extracts temporal context for every block.
