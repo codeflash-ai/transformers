@@ -252,17 +252,22 @@ class Speech2TextAttention(nn.Module):
         # for the decoder
         is_cross_attention = key_value_states is not None
 
-        # determine input shapes
-        bsz, tgt_len = hidden_states.shape[:-1]
+        hidden_states_shape = hidden_states.shape
+        bsz, tgt_len = hidden_states_shape[0], hidden_states_shape[1]
         src_len = key_value_states.shape[1] if is_cross_attention else tgt_len
 
-        q_input_shape = (bsz, tgt_len, -1, self.head_dim)
-        kv_input_shape = (bsz, src_len, -1, self.head_dim)
+        num_heads = self.num_heads
+        head_dim = self.head_dim
+        q_input_shape = (bsz, tgt_len, num_heads, head_dim)
+        kv_input_shape = (bsz, src_len, num_heads, head_dim)
+
+        # get query proj
 
         # get query proj
         query_states = self.q_proj(hidden_states).view(*q_input_shape).transpose(1, 2)
 
         is_updated = False
+        curr_past_key_values = None
         if past_key_values is not None:
             if isinstance(past_key_values, EncoderDecoderCache):
                 is_updated = past_key_values.is_updated.get(self.layer_idx)
@@ -284,18 +289,18 @@ class Speech2TextAttention(nn.Module):
             value_states = self.v_proj(current_states).view(*kv_input_shape).transpose(1, 2)
 
             if past_key_values is not None:
-                # save all key/value_states to cache to be re-used for fast auto-regressive generation
-                cache_position = cache_position if not is_cross_attention else None
+                cache_position_value = cache_position if not is_cross_attention else None
                 key_states, value_states = curr_past_key_values.update(
-                    key_states, value_states, self.layer_idx, {"cache_position": cache_position}
+                    key_states, value_states, self.layer_idx, {"cache_position": cache_position_value}
                 )
                 # set flag that curr layer for cross-attn is already updated so we can re-use in subsequent calls
                 if is_cross_attention and isinstance(past_key_values, EncoderDecoderCache):
                     past_key_values.is_updated[self.layer_idx] = True
 
-        attention_interface: Callable = eager_attention_forward
-        if self.config._attn_implementation != "eager":
-            attention_interface = ALL_ATTENTION_FUNCTIONS[self.config._attn_implementation]
+        cfg_attn_impl = self.config._attn_implementation
+        attention_interface: Callable = (
+            eager_attention_forward if cfg_attn_impl == "eager" else ALL_ATTENTION_FUNCTIONS[cfg_attn_impl]
+        )
 
         attn_output, attn_weights = attention_interface(
             self,
