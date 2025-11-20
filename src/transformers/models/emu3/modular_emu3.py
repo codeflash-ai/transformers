@@ -143,10 +143,16 @@ class Emu3VQVAEConv3d(nn.Module):
         super().__init__()
 
         padding_sizes = [one_kernel - one_stride for one_kernel, one_stride in zip(kernel_size[1:], stride[1:])]
-        self.padding = ()
-        for pad_size in padding_sizes[::-1]:
-            self.padding += (pad_size // 2 + pad_size % 2, pad_size // 2)
-        self.padding += (2, 0)
+
+        # Compute padding using tuple/list concatenation for improved clarity and slight speedup
+        # (single allocation of list, then cast to tuple)
+        reversed_pads = [(pad_size // 2 + pad_size % 2, pad_size // 2) for pad_size in reversed(padding_sizes)]
+        # Flatten pairs and append (2, 0)
+        padding = []
+        for p in reversed_pads:
+            padding.extend(p)
+        padding.extend((2, 0))
+        self.padding = tuple(padding)
 
         self.conv = nn.Conv3d(
             in_channel,
