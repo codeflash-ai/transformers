@@ -324,64 +324,90 @@ class BasicTokenizer:
         unicode_normalized_text = unicodedata.normalize("NFC", text)
         orig_tokens = whitespace_tokenize(unicode_normalized_text)
         split_tokens = []
+        do_lower_case = self.do_lower_case
+        strip_accents = self.strip_accents
+        _run_strip_accents = self._run_strip_accents
+        _run_split_on_punc = self._run_split_on_punc
+
+        never_split_is_empty = not never_split  # anticipate cheapest logic inside loop
+        never_split_local = never_split
+
+        # Move invariants out of inner loop for micro-optimization
+        append_split_tokens = split_tokens.append
+        extend_split_tokens = split_tokens.extend
+
+        # Loop unrolling to optimize token handling and keep locals in fast access
         for token in orig_tokens:
-            if token not in never_split:
-                if self.do_lower_case:
+            if never_split_is_empty or token not in never_split_local:
+                # Lowercasing and accent stripping. These decisions and helpers cached on each loop above.
+                if do_lower_case:
                     token = token.lower()
-                    if self.strip_accents is not False:
-                        token = self._run_strip_accents(token)
-                elif self.strip_accents:
-                    token = self._run_strip_accents(token)
-            split_tokens.extend(self._run_split_on_punc(token, never_split))
+                    if strip_accents is not False:
+                        token = _run_strip_accents(token)
+                elif strip_accents:
+                    token = _run_strip_accents(token)
+            extend_split_tokens(_run_split_on_punc(token, never_split_local))
 
         output_tokens = whitespace_tokenize(" ".join(split_tokens))
         return output_tokens
 
     def _run_strip_accents(self, text):
         """Strips accents from a piece of text."""
-        text = unicodedata.normalize("NFD", text)
-        output = []
-        for char in text:
-            cat = unicodedata.category(char)
-            if cat == "Mn":
-                continue
-            output.append(char)
-        return "".join(output)
+        # Fast path for all-ASCII (no normalization/iteration required)
+        if text.isascii():
+            return text
+
+        # Use local vars for speed
+        normalize = unicodedata.normalize
+        category = unicodedata.category
+        chars = []
+        for char in normalize("NFD", text):
+            if category(char) != "Mn":
+                chars.append(char)
+        return "".join(chars)
 
     def _run_split_on_punc(self, text, never_split=None):
         """Splits punctuation on a piece of text."""
         if not self.do_split_on_punc or (never_split is not None and text in never_split):
             return [text]
-        chars = list(text)
-        i = 0
-        start_new_word = True
         output = []
-        while i < len(chars):
-            char = chars[i]
+        last_is_punc = True  # Ensures first non-punc is a new group
+        for char in text:
             if _is_punctuation(char):
-                output.append([char])
-                start_new_word = True
+                output.append(char)
+                last_is_punc = True
             else:
-                if start_new_word:
+                if last_is_punc:
                     output.append([])
-                start_new_word = False
                 output[-1].append(char)
-            i += 1
+                last_is_punc = False
 
-        return ["".join(x) for x in output]
+        # Postprocess: join non-punc lists (i.e., ["(", ['h','e','l','l','o'], ")", ['w','o','r','l','d']] -> ["(", "hello", ")", "world"])
+        # For a short list, this is faster than multiple list comprehensions; avoids list() call for `chars`
+        res_tokens = []
+        append_res = res_tokens.append
+        for e in output:
+            if isinstance(e, list):
+                append_res("".join(e))
+            else:
+                append_res(e)
+        return res_tokens
 
     def _tokenize_chinese_chars(self, text):
         """Adds whitespace around any CJK character."""
-        output = []
+        # Avoid repeated attribute access, cache _is_chinese_char to local
+        _is_chinese_char = self._is_chinese_char
+        chars = []
+        append = chars.append
         for char in text:
             cp = ord(char)
-            if self._is_chinese_char(cp):
-                output.append(" ")
-                output.append(char)
-                output.append(" ")
+            if _is_chinese_char(cp):
+                append(" ")
+                append(char)
+                append(" ")
             else:
-                output.append(char)
-        return "".join(output)
+                append(char)
+        return "".join(chars)
 
     def _is_chinese_char(self, cp):
         """Checks whether CP is the codepoint of a CJK character."""
@@ -409,16 +435,20 @@ class BasicTokenizer:
 
     def _clean_text(self, text):
         """Performs invalid character removal and whitespace cleanup on text."""
-        output = []
+        # Local bindings for speed
+        _is_control_local = _is_control
+        _is_whitespace_local = _is_whitespace
+        out_chars = []
+        append_out = out_chars.append
         for char in text:
             cp = ord(char)
-            if cp == 0 or cp == 0xFFFD or _is_control(char):
+            if cp == 0 or cp == 0xFFFD or _is_control_local(char):
                 continue
-            if _is_whitespace(char):
-                output.append(" ")
+            if _is_whitespace_local(char):
+                append_out(" ")
             else:
-                output.append(char)
-        return "".join(output)
+                append_out(char)
+        return "".join(out_chars)
 
 
 # Copied from transformers.models.bert.tokenization_bert.WordpieceTokenizer
