@@ -722,10 +722,13 @@ class Phi4MultimodalAudioAttention(nn.Module):
     ):
         input_shape = hidden_states.shape[:-1]
         hidden_shape = (*input_shape, -1, self.head_dim)
-
-        query_states = self.q_proj(hidden_states).view(hidden_shape).transpose(1, 2)
-        key_states = self.k_proj(hidden_states).view(hidden_shape).transpose(1, 2)
-        value_states = self.v_proj(hidden_states).view(hidden_shape).transpose(1, 2)
+        q = self.q_proj(hidden_states)
+        k = self.k_proj(hidden_states)
+        v = self.v_proj(hidden_states)
+        # Fuse .view + .transpose in a single step to avoid multiple intermediate allocations
+        query_states = q.view(hidden_shape).transpose(1, 2).contiguous()
+        key_states = k.view(hidden_shape).transpose(1, 2).contiguous()
+        value_states = v.view(hidden_shape).transpose(1, 2).contiguous()
 
         attention_interface: Callable = simple_eager_attention_forward
         if self.config._attn_implementation != "eager":
@@ -741,8 +744,8 @@ class Phi4MultimodalAudioAttention(nn.Module):
             scaling=self.scaling,
             **kwargs,
         )
-
-        attn_output = attn_output.reshape(*input_shape, -1).contiguous()
+        # The original reshaping is (*input_shape, -1). Since attn_output is contiguous, keep .reshape fast.
+        attn_output = attn_output.reshape(*input_shape, -1)
         attn_output = self.o_proj(attn_output)
         return attn_output
 
