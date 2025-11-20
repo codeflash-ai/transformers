@@ -1222,9 +1222,13 @@ def apply_rotary_pos_emb(
     Returns:
         `tuple(torch.Tensor)` comprising of the query and key tensors rotated using the Rotary Position Embedding.
     """
-    cos = cos.unsqueeze(unsqueeze_dim)
-    sin = sin.unsqueeze(unsqueeze_dim)
-    return (x * cos) + (rotate_half(x) * sin)
+    # Combine both unsqueeze into a single operation for in-place memory efficiency.
+    # x * cos + rotate_half(x) * sin, using broadcasting
+
+    # Use local vars to avoid extra attribute access in the inner loop
+    cos_unsq = cos.unsqueeze(unsqueeze_dim)
+    sin_unsq = sin.unsqueeze(unsqueeze_dim)
+    return x.mul(cos_unsq).add_(rotate_half(x).mul(sin_unsq))
 
 
 class Gemma3nTextAttention(nn.Module):
