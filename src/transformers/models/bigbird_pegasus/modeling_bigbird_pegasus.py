@@ -811,21 +811,34 @@ class BigBirdPegasusBlockSparseAttention(nn.Module):
             each block
         """
 
-        plan_from_length = []
-        plan_num_rand_blocks = []
-        if (2 * num_rand_blocks + 5) < (from_seq_length // from_block_size):
-            plan_from_length.append(int((2 * num_rand_blocks + 5) * from_block_size))
-            plan_num_rand_blocks.append(num_rand_blocks)
-            plan_from_length.append(from_seq_length)
-            plan_num_rand_blocks.append(0)
-        elif (num_rand_blocks + 5) < (from_seq_length // from_block_size):
-            plan_from_length.append(int((num_rand_blocks + 5) * from_block_size))
-            plan_num_rand_blocks.append(num_rand_blocks // 2)
-            plan_from_length.append(from_seq_length)
-            plan_num_rand_blocks.append(num_rand_blocks - (num_rand_blocks // 2))
+        # Avoid repeated attribute lookups and calculations by storing them in local variables
+        block_count = from_seq_length // from_block_size
+        double_rand_plus_five = 2 * num_rand_blocks + 5
+        rand_plus_five = num_rand_blocks + 5
+
+        # Preallocate lists since lengths are known (max 2 elements). This reduces dynamic memory reallocation in append.
+        if double_rand_plus_five < block_count:
+            plan_from_length = [
+                double_rand_plus_five * from_block_size,
+                from_seq_length,
+            ]
+            plan_num_rand_blocks = [
+                num_rand_blocks,
+                0,
+            ]
+        elif rand_plus_five < block_count:
+            half_num_rand_blocks = num_rand_blocks // 2
+            plan_from_length = [
+                rand_plus_five * from_block_size,
+                from_seq_length,
+            ]
+            plan_num_rand_blocks = [
+                half_num_rand_blocks,
+                num_rand_blocks - half_num_rand_blocks,
+            ]
         else:
-            plan_from_length.append(from_seq_length)
-            plan_num_rand_blocks.append(num_rand_blocks)
+            plan_from_length = [from_seq_length]
+            plan_num_rand_blocks = [num_rand_blocks]
 
         return plan_from_length, plan_num_rand_blocks
 
