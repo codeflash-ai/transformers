@@ -284,9 +284,21 @@ class BigBirdPegasusBlockSparseAttention(nn.Module):
     def torch_bmm_nd(inp_1, inp_2, ndim=None):
         """Fast nd matrix multiplication"""
         # faster replacement of torch.einsum ("bhqk,bhkd->bhqd")
-        return torch.bmm(inp_1.reshape((-1,) + inp_1.shape[-2:]), inp_2.reshape((-1,) + inp_2.shape[-2:])).view(
-            inp_1.shape[: ndim - 2] + (inp_1.shape[ndim - 2], inp_2.shape[ndim - 1])
-        )
+        # Optimize memory layout and reduce view/reshape overhead by reusing intermediate shapes.
+        shape1 = inp_1.shape
+        shape2 = inp_2.shape
+        last2_1 = shape1[-2:]
+        last2_2 = shape2[-2:]
+
+        leading_dims = shape1[: ndim - 2]
+        result_shape = leading_dims + (shape1[ndim - 2], shape2[ndim - 1])
+
+        # Avoid computing these twice and reuse them
+        inp_1_flat = inp_1.reshape(-1, last2_1[0], last2_1[1])
+        inp_2_flat = inp_2.reshape(-1, last2_2[0], last2_2[1])
+
+        res = torch.bmm(inp_1_flat, inp_2_flat)
+        return res.view(result_shape)
 
     @staticmethod
     def torch_bmm_nd_transpose(inp_1, inp_2, ndim=None):
