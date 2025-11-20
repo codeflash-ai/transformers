@@ -690,12 +690,13 @@ class Cache:
 
     def __init__(
         self,
-        layers: Optional[list[CacheLayerMixin]] = None,
-        layer_class_to_replicate: Optional[type[CacheLayerMixin]] = None,
+        layers: Optional[list["CacheLayerMixin"]] = None,
+        layer_class_to_replicate: Optional[type["CacheLayerMixin"]] = None,
         offloading: bool = False,
         offload_only_non_sliding: bool = True,
     ):
-        if layers is not None and layer_class_to_replicate is not None:
+        both_args_provided = layers is not None and layer_class_to_replicate is not None
+        if both_args_provided:
             raise ValueError(
                 "You can construct a Cache either from a list `layers` of all the predefined `CacheLayer`, or from a "
                 "`layer_class_to_replicate`, in which case the Cache will append a new layer corresponding to "
@@ -710,7 +711,15 @@ class Cache:
         self.offloading = offloading
         if self.offloading:
             self.only_non_sliding = offload_only_non_sliding
-            self.prefetch_stream = torch.Stream() if _is_torch_greater_or_equal_than_2_7 else torch.cuda.Stream()
+            # Avoid attribute lookup on each Stream instantiation
+            _stream_modern = getattr(torch, "Stream", None)
+            self.prefetch_stream = (
+                _stream_modern()
+                if _stream_modern
+                and "_is_torch_greater_or_equal_than_2_7" in globals()
+                and _is_torch_greater_or_equal_than_2_7
+                else torch.cuda.Stream()
+            )
 
     def __repr__(self):
         return f"{self.__class__.__name__}(layers={self.layers})"
@@ -768,17 +777,22 @@ class Cache:
         Return:
             A tuple containing the updated key and value states.
         """
-        # In this case, the `layers` were not provided, and we must append as much as `layer_idx`
-        if self.layer_class_to_replicate is not None:
-            while len(self.layers) <= layer_idx:
-                self.layers.append(self.layer_class_to_replicate())
+        # Efficiently extend layers in bulk if needed
+        layers = self.layers
+        layer_class = self.layer_class_to_replicate
+        if layer_class is not None:
+            n_needed = layer_idx + 1 - len(layers)
+            if n_needed > 0:
+                layers.extend(layer_class() for _ in range(n_needed))
 
         if self.offloading:
-            # Wait for the stream to finish if needed, and start prefetching the next layer
-            torch.cuda.default_stream(key_states.device).wait_stream(self.prefetch_stream)
+            # Cache attribute/method for reuse inside performance-sensitive branch
+            prefetch_stream = self.prefetch_stream
+            torch_cuda_default_stream = torch.cuda.default_stream
+            torch_cuda_default_stream(key_states.device).wait_stream(prefetch_stream)
             self.prefetch(layer_idx + 1, self.only_non_sliding)
 
-        keys, values = self.layers[layer_idx].update(key_states, value_states, cache_kwargs)
+        keys, values = layers[layer_idx].update(key_states, value_states, cache_kwargs)
 
         if self.offloading:
             self.offload(layer_idx, self.only_non_sliding)
