@@ -168,26 +168,25 @@ class QuantAct(nn.Module):
         if self.training:
             assert not self.percentile, "percentile mode is not currently supported for activation."
             assert not self.per_channel, "per-channel mode is not currently supported for activation."
-            x_min = x_act.data.min()
-            x_max = x_act.data.max()
+            x_min = torch.amin(x_act)
+            x_max = torch.amax(x_act)
 
-            assert x_max.isnan().sum() == 0 and x_min.isnan().sum() == 0, (
-                "NaN detected when computing min/max of the activation"
-            )
+            if torch.isnan(x_max) or torch.isnan(x_min):
+                raise AssertionError("NaN detected when computing min/max of the activation")
 
             # Initialization
-            if self.x_min.min() > -1.1e-5 and self.x_max.max() < 1.1e-5:
-                self.x_min = self.x_min + x_min
-                self.x_max = self.x_max + x_max
+            if self.x_min.item() > -1.1e-5 and self.x_max.item() < 1.1e-5:
+                self.x_min.add_(x_min)
+                self.x_max.add_(x_max)
 
             # exponential moving average (EMA)
             # use momentum to prevent the quantized values change greatly every iteration
             elif self.act_range_momentum == -1:
-                self.x_min = torch.min(self.x_min, x_min)
-                self.x_max = torch.max(self.x_max, x_max)
+                self.x_min.copy_(torch.min(self.x_min, x_min))
+                self.x_max.copy_(torch.max(self.x_max, x_max))
             else:
-                self.x_min = self.x_min * self.act_range_momentum + x_min * (1 - self.act_range_momentum)
-                self.x_max = self.x_max * self.act_range_momentum + x_max * (1 - self.act_range_momentum)
+                self.x_min.mul_(self.act_range_momentum).add_(x_min * (1 - self.act_range_momentum))
+                self.x_max.mul_(self.act_range_momentum).add_(x_max * (1 - self.act_range_momentum))
 
         if not self.quant_mode:
             return x_act, None
@@ -623,7 +622,14 @@ def symmetric_linear_quantization_params(num_bits, saturation_min, saturation_ma
             scale = torch.clamp(scale, min=1e-8) / n
 
         else:
-            scale = max(saturation_min.abs(), saturation_max.abs())
+            # optimize abs/max computation: prefer torch.maximum if both are tensors
+            abs_min = saturation_min.abs()
+            abs_max = saturation_max.abs()
+            scale = (
+                torch.maximum(abs_min, abs_max)
+                if isinstance(abs_min, torch.Tensor) and isinstance(abs_max, torch.Tensor)
+                else max(abs_min, abs_max)
+            )
             scale = torch.clamp(scale, min=1e-8) / n
 
     return scale
