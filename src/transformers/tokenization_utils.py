@@ -343,8 +343,11 @@ def _is_whitespace(char):
     """Checks whether `char` is a whitespace character."""
     # \t, \n, and \r are technically control characters but we treat them
     # as whitespace since they are generally considered as such.
-    if char == " " or char == "\t" or char == "\n" or char == "\r":
+    if char in (" ", "\t", "\n", "\r"):
         return True
+    # Fast path for basic ASCII
+    if ord(char) < 128:
+        return False
     cat = unicodedata.category(char)
     if cat == "Zs":
         return True
@@ -355,7 +358,14 @@ def _is_control(char):
     """Checks whether `char` is a control character."""
     # These are technically control characters but we count them as whitespace
     # characters.
-    if char == "\t" or char == "\n" or char == "\r":
+    if char in ("\t", "\n", "\r"):
+        return False
+    # Fast path for basic ASCII
+    cp = ord(char)
+    if cp < 128:
+        # C0 control block: [0x00, 0x1F] (excluding handled whitespace above), and 0x7F
+        if (0 <= cp < 32) or (cp == 127):
+            return True
         return False
     cat = unicodedata.category(char)
     if cat.startswith("C"):
