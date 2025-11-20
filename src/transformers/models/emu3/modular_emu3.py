@@ -191,9 +191,12 @@ class Emu3VQVAESpatialNorm(nn.Module):
         )
 
     def forward(self, hidden_states: torch.Tensor, quant_states: torch.Tensor):
-        quant_states = F.interpolate(quant_states, size=hidden_states.shape[-2:], mode="nearest")
+        if quant_states.shape[-2:] != hidden_states.shape[-2:]:
+            quant_states = F.interpolate(quant_states, size=hidden_states.shape[-2:], mode="nearest")
+        conv_y_out = self.conv_y(quant_states)
+        conv_b_out = self.conv_b(quant_states)
         hidden_states = self.norm_layer(hidden_states)
-        hidden_states = hidden_states * self.conv_y(quant_states) + self.conv_b(quant_states)
+        hidden_states = hidden_states.mul_(conv_y_out).add_(conv_b_out)
         return hidden_states
 
 
