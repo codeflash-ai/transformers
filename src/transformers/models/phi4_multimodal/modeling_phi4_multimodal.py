@@ -750,20 +750,27 @@ class Phi4MultimodalAudioAttention(nn.Module):
 class Phi4MultimodalAudioDepthWiseSeparableConv1d(nn.Module):
     def __init__(self, config: Phi4MultimodalAudioConfig, padding: int = 0):
         super().__init__()
+        hidden_size = config.hidden_size
+        depthwise_multiplier = config.depthwise_multiplier
+        kernel_size = config.kernel_size
+        out_channels = config.depthwise_separable_out_channel
+
+        # Cache computation to local variables for slightly faster initialization.
+        dw_out_channels = hidden_size * depthwise_multiplier
         self.dw_conv = nn.Conv1d(
-            config.hidden_size,
-            config.hidden_size * config.depthwise_multiplier,
-            config.kernel_size,
+            hidden_size,
+            dw_out_channels,
+            kernel_size,
             1,
             padding=padding,
-            groups=config.hidden_size,
+            groups=hidden_size,
         )
-        self.pw_conv = nn.Conv1d(
-            config.hidden_size * config.depthwise_multiplier, config.depthwise_separable_out_channel, 1, 1, 0
-        )
+        self.pw_conv = nn.Conv1d(dw_out_channels, out_channels, 1, 1, 0)
 
     def forward(self, hidden_states):
-        return self.pw_conv(self.dw_conv(hidden_states))
+        x = self.dw_conv(hidden_states)
+        # Avoid chaining module calls for better clarity and to help PyTorch JIT optimization.
+        return self.pw_conv(x)
 
 
 class Phi4MultimodalAudioGluPointWiseConv(nn.Module):
