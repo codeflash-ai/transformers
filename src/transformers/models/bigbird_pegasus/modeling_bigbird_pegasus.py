@@ -292,9 +292,34 @@ class BigBirdPegasusBlockSparseAttention(nn.Module):
     def torch_bmm_nd_transpose(inp_1, inp_2, ndim=None):
         """Fast nd matrix multiplication with transpose"""
         # faster replacement of torch.einsum (bhqd,bhkd->bhqk)
-        return torch.bmm(
-            inp_1.reshape((-1,) + inp_1.shape[-2:]), inp_2.reshape((-1,) + inp_2.shape[-2:]).transpose(1, 2)
-        ).view(inp_1.shape[: ndim - 2] + (inp_1.shape[ndim - 2], inp_2.shape[ndim - 2]))
+
+        # Optimize by reducing repeated shape calculations and intermediate objects.
+        # Pre-compute reshaped arguments and group calculation to minimize Python-level overhead.
+
+        # Grab the shapes only once
+        shape_1 = inp_1.shape
+        shape_2 = inp_2.shape
+
+        # Save ndim lookups
+        nd_2 = ndim - 2
+
+        # Only build the reshapes once and only for each tensor once, avoiding repeated work
+        leading_shape = shape_1[:nd_2]
+
+        # Non-overlapping memory, so allow using out arguments for some speedup if supported
+        # (not possible here without mutability side effects so omitted for safety)
+
+        # Directly reshape and transpose without chaining
+        inp1_rs = inp_1.reshape(-1, shape_1[-2], shape_1[-1])
+        inp2_rs = inp_2.reshape(-1, shape_2[-2], shape_2[-1]).transpose(1, 2)
+
+        # Compute bmm
+        out = torch.bmm(inp1_rs, inp2_rs)
+
+        # Only do shape computation once
+        new_shape = leading_shape + (shape_1[nd_2], shape_2[nd_2])
+
+        return out.view(new_shape)
 
     def bigbird_block_sparse_attention(
         self,
