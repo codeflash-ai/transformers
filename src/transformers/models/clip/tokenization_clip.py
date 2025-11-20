@@ -169,13 +169,15 @@ class BasicTokenizer:
 
     def _run_strip_accents(self, text):
         """Strips accents from a piece of text."""
-        text = unicodedata.normalize("NFD", text)
-        output = []
-        for char in text:
-            cat = unicodedata.category(char)
-            if cat == "Mn":
-                continue
-            output.append(char)
+        # Minor runtime win: localize frequently called C-level functions
+        # Output allocation via list comprehension for a single if condition
+        normalize = unicodedata.normalize
+        category = unicodedata.category
+        text = normalize("NFD", text)
+
+        # Use list comprehension, avoids manual iteration & repeated lookups
+        output = [char for char in text if category(char) != "Mn"]
+
         return "".join(output)
 
     def _run_split_on_punc(self, text, never_split=None):
