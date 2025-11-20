@@ -294,7 +294,10 @@ def rotate_half(x):
     # Split and rotate. Note that this function is different from e.g. Llama.
     x1 = x[..., ::2]
     x2 = x[..., 1::2]
-    rot_x = torch.stack([-x2, x1], dim=-1).flatten(-2)
+    shape = x.shape[:-1] + (x1.shape[-1] * 2,)
+    rot_x = torch.empty(shape, dtype=x.dtype, device=x.device)
+    rot_x[..., ::2] = -x2
+    rot_x[..., 1::2] = x1
     return rot_x
 
 
@@ -320,12 +323,17 @@ def apply_rotary_pos_emb(q, k, cos, sin, position_ids=None, unsqueeze_dim=1):
         `tuple(torch.Tensor)` comprising of the query and key tensors rotated using the Rotary Position Embedding.
     """
     dtype = q.dtype
-    q = q.float()
-    k = k.float()
+    # Use .to(torch.float32) for slight speed if possible, minimizing datatype conversion overhead with float32.
+    q = q.to(torch.float32)
+    k = k.to(torch.float32)
+    # Use .unsqueeze with inplace broadcasting where possible
     cos = cos.unsqueeze(unsqueeze_dim)
     sin = sin.unsqueeze(unsqueeze_dim)
-    q_embed = (q * cos) + (rotate_half(q) * sin)
-    k_embed = (k * cos) + (rotate_half(k) * sin)
+    # Eliminate redundant intermediate allocations by directly computing into variables.
+    rq = rotate_half(q)
+    rk = rotate_half(k)
+    q_embed = q.mul(cos).add_(rq.mul(sin))
+    k_embed = k.mul(cos).add_(rk.mul(sin))
     return q_embed.to(dtype=dtype), k_embed.to(dtype=dtype)
 
 
