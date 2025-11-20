@@ -328,18 +328,14 @@ class Gemma3nAudioAttention(nn.Module):
 
         q_scale = self.head_dim**-0.5
         r_softplus_0 = 1.0 / torch.nn.functional.softplus(torch.tensor(0.0))
-        self.register_buffer("q_scale", (q_scale * r_softplus_0).clone().detach(), persistent=False)
+        self.register_buffer("q_scale", torch.tensor(q_scale * r_softplus_0), persistent=False)
 
-        lower_causal_mask = torch.tril(
-            torch.ones((self.context_size, self.chunk_size), dtype=torch.bool),
-            diagonal=0,
-        ).T
-        upper_causal_mask = torch.tril(
-            torch.ones((self.chunk_size, self.context_size), dtype=torch.bool),
-            diagonal=self.max_past_horizon + self.max_future_horizon,
-        )
-        local_causal_valid_mask = torch.ones((self.chunk_size, self.context_size), dtype=torch.bool)
-        local_causal_valid_mask = local_causal_valid_mask * lower_causal_mask * upper_causal_mask
+        ones_context_chunk = torch.ones((self.context_size, self.chunk_size), dtype=torch.bool)
+        lower_causal_mask = torch.tril(ones_context_chunk, diagonal=0).T
+
+        ones_chunk_context = torch.ones((self.chunk_size, self.context_size), dtype=torch.bool)
+        upper_causal_mask = torch.tril(ones_chunk_context, diagonal=self.max_past_horizon + self.max_future_horizon)
+        local_causal_valid_mask = ones_chunk_context & lower_causal_mask & upper_causal_mask
         self.register_buffer("local_causal_valid_mask", local_causal_valid_mask, persistent=False)
 
         self.register_buffer(
@@ -350,10 +346,11 @@ class Gemma3nAudioAttention(nn.Module):
 
     def _pad_dim1(self, x: torch.Tensor, pad_left: int, pad_right: int) -> torch.Tensor:
         batch, _, *tail_shape = x.shape
+        if pad_left == 0 and pad_right == 0:
+            return x
         left = x.new_zeros((batch, pad_left, *tail_shape))
         right = x.new_zeros((batch, pad_right, *tail_shape))
-        x = torch.cat([left, x, right], dim=1)
-        return x
+        return torch.cat((left, x, right), dim=1)
 
     def _convert_to_block(self, hidden_states: torch.Tensor) -> torch.Tensor:
         """Turns a sequence to non overlapping blocks.
