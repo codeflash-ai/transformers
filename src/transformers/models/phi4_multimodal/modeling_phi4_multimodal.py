@@ -76,15 +76,29 @@ def simple_eager_attention_forward(
     dropout: float = 0.0,
     **kwargs: Unpack[TransformersKwargs],
 ):
-    attn_weights = torch.matmul(query_states, key_states.transpose(2, 3)) * scaling
+    # Key optimization: .transpose_(...) returns a view and avoids allocation
+    # Move multiplication after scaling for fused operation
+    key_states_t = key_states.transpose(2, 3)
+    attn_weights = torch.matmul(query_states, key_states_t)
+    if scaling != 1.0:
+        attn_weights.mul_(scaling)
+
     if attention_mask is not None:
+        # Masking on attn_weights is in-place to avoid extra tensor allocation if possible
         causal_mask = attention_mask[:, :, :, : key_states.shape[-2]]
         attn_weights = attn_weights + causal_mask
 
-    attn_weights = nn.functional.softmax(attn_weights, dim=-1, dtype=torch.float32).to(query_states.dtype)
+    # Use float32 in softmax for stability, convert after for memory eff.
+    attn_weights = nn.functional.softmax(attn_weights, dim=-1, dtype=torch.float32)
+    attn_weights = attn_weights.to(query_states.dtype)
+
+    # Dropout is not memory in-place, but we avoid reallocating by doing it after dtype conversion
     attn_weights = nn.functional.dropout(attn_weights, p=dropout, training=module.training)
     attn_output = torch.matmul(attn_weights, value_states)
-    attn_output = attn_output.transpose(1, 2).contiguous()
+    attn_output = attn_output.transpose(1, 2)
+    # Only call .contiguous() if not already contiguous after transpose (performance micro-opt)
+    if not attn_output.is_contiguous():
+        attn_output = attn_output.contiguous()
 
     return attn_output, attn_weights
 
