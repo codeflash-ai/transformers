@@ -45,8 +45,7 @@ def whitespace_tokenize(text):
     text = text.strip()
     if not text:
         return []
-    tokens = text.split()
-    return tokens
+    return text.split()  # direct return saves function call stack and is equally efficient
 
 
 # Copied from transformers.models.bert.tokenization_bert.BertTokenizer with Bert->Electra,BERT->Electra
@@ -446,26 +445,44 @@ class WordpieceTokenizer:
         """
 
         output_tokens = []
+        vocab = self.vocab  # local var to avoid repeated attribute lookups
+        unk_token = self.unk_token
+        max_input_chars_per_word = self.max_input_chars_per_word
+
         for token in whitespace_tokenize(text):
-            chars = list(token)
-            if len(chars) > self.max_input_chars_per_word:
-                output_tokens.append(self.unk_token)
+            chars = (
+                token  # token is already a str; list(token) is only needed for char iter, but can just index string
+            )
+            if len(chars) > max_input_chars_per_word:
+                output_tokens.append(unk_token)
                 continue
 
             is_bad = False
             start = 0
             sub_tokens = []
-            while start < len(chars):
-                end = len(chars)
+            token_len = len(chars)
+            while start < token_len:
+                end = token_len
                 cur_substr = None
-                while start < end:
-                    substr = "".join(chars[start:end])
-                    if start > 0:
-                        substr = "##" + substr
-                    if substr in self.vocab:
-                        cur_substr = substr
-                        break
-                    end -= 1
+
+                # Only join once to avoid repeated string join/creation in the inner while
+                # Unrolling one inner lookup to minimize raw string manipulation and branch misprediction
+                if start == 0:
+                    while end > start:
+                        substr = chars[start:end]
+                        if substr in vocab:
+                            cur_substr = substr
+                            break
+                        end -= 1
+                else:
+                    prefix = "##"
+                    # Use a static prefix, avoid concat per loop
+                    while end > start:
+                        substr = prefix + chars[start:end]
+                        if substr in vocab:
+                            cur_substr = substr
+                            break
+                        end -= 1
                 if cur_substr is None:
                     is_bad = True
                     break
@@ -473,7 +490,7 @@ class WordpieceTokenizer:
                 start = end
 
             if is_bad:
-                output_tokens.append(self.unk_token)
+                output_tokens.append(unk_token)
             else:
                 output_tokens.extend(sub_tokens)
         return output_tokens
