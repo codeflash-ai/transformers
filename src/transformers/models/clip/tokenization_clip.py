@@ -482,7 +482,14 @@ class CLIPTokenizer(PreTrainedTokenizer):
     def convert_tokens_to_string(self, tokens):
         """Converts a sequence of tokens (string) in a single string."""
         text = "".join(tokens)
-        byte_array = bytearray([self.byte_decoder[c] for c in text])
+
+        # STEP 2: Instead of list comprehension, use map for slightly better performance
+        # Also, pre-bind the local function to avoid attribute lookup in loop
+        decoder = self.byte_decoder
+        # Use a generator version, to avoid building a large temporary list in memory (bytearray accepts iterable)
+        byte_array = bytearray(map(decoder.__getitem__, text))
+
+        # STEP 3: Decode and post-process as in the original
         text = byte_array.decode("utf-8", errors=self.errors).replace("</w>", " ").strip()
         return text
 
