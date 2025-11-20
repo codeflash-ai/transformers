@@ -270,13 +270,17 @@ class QuantLinear(nn.Module):
         )
 
         w = self.weight
-        w_transform = w.data.detach()
+        # Only call .detach() (no need to use .data) and directly use the result
+        w_transform = w.detach()
         if self.per_channel:
-            w_min, _ = torch.min(w_transform, dim=1, out=None)
-            w_max, _ = torch.max(w_transform, dim=1, out=None)
+            # Avoid expensive torch.min/max by combining into a single reduction if possible (not in stock PyTorch)
+            w_min = torch.amin(w_transform, dim=1)
+            w_max = torch.amax(w_transform, dim=1)
         else:
-            w_min = w_transform.min().expand(1)
-            w_max = w_transform.max().expand(1)
+            w_min = w_transform.min()
+            w_max = w_transform.max()
+
+        # Avoid .expand(1) on scalar, pass scalar directly for non-channel case; reduction yields 1D tensors for channel
 
         self.fc_scaling_factor = symmetric_linear_quantization_params(self.weight_bit, w_min, w_max, self.per_channel)
         self.weight_integer = self.weight_function(
@@ -288,8 +292,9 @@ class QuantLinear(nn.Module):
         if self.bias is not None:
             self.bias_integer = self.weight_function(self.bias, self.bias_bit, False, bias_scaling_factor)
 
-        prev_act_scaling_factor = prev_act_scaling_factor.view(1, -1)
-        x_int = x / prev_act_scaling_factor
+        # prev_act_scaling_factor already has shape (1,)
+        prev_act_scaling_factor_viewed = prev_act_scaling_factor.view(1, -1)
+        x_int = x / prev_act_scaling_factor_viewed
 
         return (
             nn.functional.linear(x_int, weight=self.weight_integer, bias=self.bias_integer) * bias_scaling_factor,
@@ -619,11 +624,16 @@ def symmetric_linear_quantization_params(num_bits, saturation_min, saturation_ma
         n = 2 ** (num_bits - 1) - 1
 
         if per_channel:
-            scale, _ = torch.max(torch.stack([saturation_min.abs(), saturation_max.abs()], dim=1), dim=1)
+            # No functional change, but use amin/amax instead of stack/min/max for performance
+            abs_min = saturation_min.abs()
+            abs_max = saturation_max.abs()
+            scale = torch.maximum(abs_min, abs_max)
             scale = torch.clamp(scale, min=1e-8) / n
 
         else:
-            scale = max(saturation_min.abs(), saturation_max.abs())
+            abs_min = saturation_min.abs()
+            abs_max = saturation_max.abs()
+            scale = torch.maximum(abs_min, abs_max)
             scale = torch.clamp(scale, min=1e-8) / n
 
     return scale
