@@ -114,16 +114,31 @@ class GraniteMoeRotaryEmbedding(nn.Module):
     @torch.no_grad()
     @dynamic_rope_update  # power user: used with advanced RoPE types (e.g. dynamic rope)
     def forward(self, x, position_ids):
-        inv_freq_expanded = self.inv_freq[None, :, None].float().expand(position_ids.shape[0], -1, 1).to(x.device)
-        position_ids_expanded = position_ids[:, None, :].float()
+        # Reduce temporary tensor allocations by combining/matching shapes efficiently
+        # and by using in-place arithmetic when possible
+        inv_freq = self.inv_freq  # (d//2,)
+        batch, seqlen = position_ids.shape
+        device = x.device
 
-        device_type = x.device.type if isinstance(x.device.type, str) and x.device.type != "mps" else "cpu"
-        with torch.autocast(device_type=device_type, enabled=False):  # Force float32
-            freqs = (inv_freq_expanded.float() @ position_ids_expanded.float()).transpose(1, 2)
-            emb = torch.cat((freqs, freqs), dim=-1)
-            cos = emb.cos() * self.attention_scaling
-            sin = emb.sin() * self.attention_scaling
+        # Expand inv_freq and position_ids efficiently for broadcasting
+        # inv_freq_expanded: (1, d//2), position_ids: (batch, seqlen)
+        # Compute outer product -> (batch, seqlen, d//2)
+        # Note: torch.outer and torch.einsum introduce unnecessary overhead here,
+        # Opt for broadcasting addition and multiplication directly
 
+        # (batch, seqlen, 1) * (1, 1, d//2) => (batch, seqlen, d//2)
+        freqs = position_ids.float().unsqueeze(-1) * inv_freq.to(dtype=torch.float, device=device)
+
+        # Concatenate to match output format, along last dim -> (batch, seqlen, d)
+        emb = torch.cat((freqs, freqs), dim=-1)
+
+        # Always run in float32 (forced by autocast=False in the original)
+        # For 'cos' and 'sin', operate in float32 and use self.attention_scaling
+        emb = emb.float()
+        cos = emb.cos().mul_(self.attention_scaling)
+        sin = emb.sin().mul_(self.attention_scaling)
+
+        # Convert result back to match input dtype
         return cos.to(dtype=x.dtype), sin.to(dtype=x.dtype)
 
 
