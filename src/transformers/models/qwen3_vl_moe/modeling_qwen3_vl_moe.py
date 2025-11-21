@@ -819,9 +819,14 @@ class Qwen3VLMoeTextRotaryEmbedding(nn.Module):
         attention_factor = 1.0  # Unused in this type of RoPE
 
         # Compute the inverse frequencies
-        inv_freq = 1.0 / (
-            base ** (torch.arange(0, dim, 2, dtype=torch.int64).to(device=device, dtype=torch.float) / dim)
-        )
+        # Optimization: Avoid multiple dtype/device conversions in arange,
+        # and use torch.pow for potentially more efficiency.
+        idx = torch.arange(0, dim, 2, device=device, dtype=torch.float)
+        exponent = idx / dim
+        # torch.pow uses float values directly, base is already a float typically
+        freq_pow = torch.pow(base, exponent)
+        inv_freq = 1.0 / freq_pow
+
         return inv_freq, attention_factor
 
     @torch.no_grad()
