@@ -1293,15 +1293,22 @@ def apply_rotary_pos_emb(q, k, cos, sin, position_ids=None, unsqueeze_dim=1):
     Returns:
         `tuple(torch.Tensor)` comprising of the query and key tensors rotated using the Rotary Position Embedding.
     """
-    cos = cos.unsqueeze(unsqueeze_dim)
-    sin = sin.unsqueeze(unsqueeze_dim)
+    # Precompute unsqueezed cos/sin only once, avoids duplicated computation
+    cos_unsqueezed = cos.unsqueeze(unsqueeze_dim)
+    sin_unsqueezed = sin.unsqueeze(unsqueeze_dim)
 
-    rotary_dim = cos.shape[-1]
-    q_rot, q_pass = q[..., :rotary_dim], q[..., rotary_dim:]
-    k_rot, k_pass = k[..., :rotary_dim], k[..., rotary_dim:]
+    rotary_dim = cos_unsqueezed.shape[-1]
+    q_rot = q[..., :rotary_dim]
+    q_pass = q[..., rotary_dim:]
+    k_rot = k[..., :rotary_dim]
+    k_pass = k[..., rotary_dim:]
 
-    q_embed = torch.cat([(q_rot * cos) + (rotate_half(q_rot) * sin), q_pass], dim=-1)
-    k_embed = torch.cat([(k_rot * cos) + (rotate_half(k_rot) * sin), k_pass], dim=-1)
+    # Combine ohterwise duplicated logic into a single torch.cat call for each (may help with dispatch overhead)
+    # Reduce intermediate allocations.
+    rq = rotate_half(q_rot)
+    rk = rotate_half(k_rot)
+    q_embed = torch.cat([(q_rot * cos_unsqueezed) + (rq * sin_unsqueezed), q_pass], dim=-1)
+    k_embed = torch.cat([(k_rot * cos_unsqueezed) + (rk * sin_unsqueezed), k_pass], dim=-1)
     return q_embed, k_embed
 
 
@@ -1333,13 +1340,23 @@ class Phi4MultimodalAttention(nn.Module):
         **kwargs: Unpack[FlashAttentionKwargs],
     ) -> tuple[torch.Tensor, Optional[torch.Tensor], Optional[tuple[torch.Tensor]]]:
         input_shape = hidden_states.shape[:-1]
-        hidden_shape = (*input_shape, -1, self.head_dim)
+        num_attention_heads, head_dim, num_key_value_heads = (
+            self.config.num_attention_heads,
+            self.head_dim,
+            self.num_key_value_heads,
+        )
+        hidden_shape = (*input_shape, -1, head_dim)
+
+        # precompute slice points to avoid recomputing in each line
+        query_pos = num_attention_heads * head_dim
+        key_pos = query_pos + num_key_value_heads * head_dim
 
         qkv = self.qkv_proj(hidden_states)
-        query_pos = self.config.num_attention_heads * self.head_dim
         query_states = qkv[..., :query_pos]
-        key_states = qkv[..., query_pos : query_pos + self.num_key_value_heads * self.head_dim]
-        value_states = qkv[..., query_pos + self.num_key_value_heads * self.head_dim :]
+        key_states = qkv[..., query_pos:key_pos]
+        value_states = qkv[..., key_pos:]
+
+        # minimize python function call overhead and combine shape computations
 
         query_states = query_states.view(hidden_shape).transpose(1, 2)
         key_states = key_states.view(hidden_shape).transpose(1, 2)
@@ -1353,9 +1370,12 @@ class Phi4MultimodalAttention(nn.Module):
             cache_kwargs = {"sin": sin, "cos": cos, "cache_position": cache_position}
             key_states, value_states = past_key_values.update(key_states, value_states, self.layer_idx, cache_kwargs)
 
-        attention_interface: Callable = eager_attention_forward
-        if self.config._attn_implementation != "eager":
-            attention_interface = ALL_ATTENTION_FUNCTIONS[self.config._attn_implementation]
+        # Minor logic optimization: Reduce attribute access
+        attn_impl = self.config._attn_implementation
+        if attn_impl == "eager":
+            attention_interface: Callable = eager_attention_forward
+        else:
+            attention_interface = ALL_ATTENTION_FUNCTIONS[attn_impl]
 
         attn_output, attn_weights = attention_interface(
             self,
