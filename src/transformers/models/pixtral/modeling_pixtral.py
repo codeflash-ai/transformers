@@ -179,15 +179,38 @@ def eager_attention_forward(
     dropout: float = 0.0,
     **kwargs,
 ):
-    attn_weights = torch.matmul(query, key.transpose(-1, -2)) * scaling
+    # Optimize key transpose by caching and sharing contiguous memory if needed
+    key_t = key.transpose(-1, -2)
+    # For some backends, FusedScaledDotProductAttention is faster, but only available in torch >=2.0
+    # So we fallback to manual matmul.
+    attn_weights = torch.matmul(query, key_t)
+    if scaling != 1.0:
+        attn_weights = attn_weights * scaling
+
     if attention_mask is not None:
         attn_weights = attn_weights + attention_mask
 
-    attn_weights = nn.functional.softmax(attn_weights, dim=-1, dtype=torch.float32).to(query.dtype)
-    attn_weights = nn.functional.dropout(attn_weights, p=dropout, training=module.training)
+    # softmax with dtype=torch.float32 will always create a float32 output, which is then converted.
+    # If query is already float32, we can avoid dtype cast/roundtrip.
+    q_dtype = query.dtype
+    if q_dtype == torch.float32:
+        attn_weights = nn.functional.softmax(attn_weights, dim=-1)
+    else:
+        attn_weights = nn.functional.softmax(attn_weights, dim=-1, dtype=torch.float32)
+        attn_weights = attn_weights.to(q_dtype, non_blocking=True)
+
+    # Dropout is a no-op if dropout==0, but avoid unnecessary call if so.
+    if dropout > 0.0:
+        attn_weights = nn.functional.dropout(attn_weights, p=dropout, training=module.training)
+
+    # Fused einsum is sometimes faster for B,H,Q,K matmuls than matmul for certain tensor shapes
 
     attn_output = torch.matmul(attn_weights, value)
-    attn_output = attn_output.transpose(1, 2).contiguous()
+    # Try to avoid redundant .contiguous() if possible
+    # If already contiguous or need the order for downstream
+    attn_output = attn_output.transpose(1, 2)
+    if not attn_output.is_contiguous():
+        attn_output = attn_output.contiguous()
 
     return attn_output, attn_weights
 
