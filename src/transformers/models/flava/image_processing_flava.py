@@ -181,6 +181,7 @@ class FlavaMaskingGenerator:
 
     def _mask(self, mask, max_mask_patches):
         delta = 0
+        arr_mask = mask
         for _attempt in range(10):
             target_area = random.uniform(self.mask_group_min_patches, max_mask_patches)
             aspect_ratio = math.exp(random.uniform(*self.log_aspect_ratio))
@@ -190,14 +191,17 @@ class FlavaMaskingGenerator:
                 top = random.randint(0, self.height - height)
                 left = random.randint(0, self.width - width)
 
-                num_masked = mask[top : top + height, left : left + width].sum()
-                # Overlap
-                if 0 < height * width - num_masked <= max_mask_patches:
-                    for i in range(top, top + height):
-                        for j in range(left, left + width):
-                            if mask[i, j] == 0:
-                                mask[i, j] = 1
-                                delta += 1
+                # Use numpy for mask block operations
+                block = arr_mask[top : top + height, left : left + width]
+                num_masked = np.count_nonzero(block)
+                candidate = height * width - num_masked
+                if 0 < candidate <= max_mask_patches:
+                    # Vectorized assignment for speed
+                    update_mask = block == 0
+                    num_to_set = np.count_nonzero(update_mask)
+                    block[update_mask] = 1
+                    arr_mask[top : top + height, left : left + width] = block
+                    delta += num_to_set
 
                 if delta > 0:
                     break
@@ -217,6 +221,10 @@ class FlavaMaskingGenerator:
                 mask_count += delta
 
         return mask
+
+    def get_shape(self):
+        # Added for compatibility with reference's __call__ usage
+        return (self.height, self.width)
 
 
 @requires(backends=("vision",))
