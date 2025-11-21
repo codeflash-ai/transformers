@@ -153,12 +153,14 @@ class BaseImageProcessor(ImageProcessingMixin):
                 - `"channels_first"` or `ChannelDimension.FIRST`: image in (num_channels, height, width) format.
                 - `"channels_last"` or `ChannelDimension.LAST`: image in (height, width, num_channels) format.
         """
-        size = get_size_dict(size)
-        if "height" not in size or "width" not in size:
-            raise ValueError(f"The size dictionary must have keys 'height' and 'width'. Got {size.keys()}")
+        s = get_size_dict(size)
+        if "height" not in s or "width" not in s:
+            raise ValueError(f"The size dictionary must have keys 'height' and 'width'. Got {s.keys()}")
+        # Avoid repeated dict lookup
+        h, w = s["height"], s["width"]
         return center_crop(
             image,
-            size=(size["height"], size["width"]),
+            size=(h, w),
             data_format=data_format,
             input_data_format=input_data_format,
             **kwargs,
@@ -246,14 +248,15 @@ def get_size_dict(
         default_to_square (`bool`, *optional*, defaults to `True`):
             If `size` is an int, whether to default to a square image or not.
     """
-    if not isinstance(size, dict):
+    # Fast path: dict type
+    if isinstance(size, dict):
+        size_dict = size
+    else:
         size_dict = convert_to_size_dict(size, max_size, default_to_square, height_width_order)
         logger.info(
             f"{param_name} should be a dictionary on of the following set of keys: {VALID_SIZE_DICT_KEYS}, got {size}."
             f" Converted to {size_dict}.",
         )
-    else:
-        size_dict = size
 
     if not is_valid_size_dict(size_dict):
         raise ValueError(

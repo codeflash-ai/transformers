@@ -472,7 +472,10 @@ class FlavaImageProcessor(BaseImageProcessor):
         )
 
     def map_pixels(self, image: np.ndarray) -> np.ndarray:
-        return (1 - 2 * LOGIT_LAPLACE_EPS) * image + LOGIT_LAPLACE_EPS
+        # Cache scale factor for repeated use
+        laplace_eps = LOGIT_LAPLACE_EPS
+        linear_scale = 1 - 2 * laplace_eps
+        return linear_scale * image + laplace_eps
 
     def _preprocess_image(
         self,
@@ -515,27 +518,29 @@ class FlavaImageProcessor(BaseImageProcessor):
                 " images have pixel values between 0 and 1, set `do_rescale=False` to avoid rescaling them again."
             )
 
-        if input_data_format is None:
+        # Local variable avoids repeated attribute lookup
+        inp_data_fmt = input_data_format
+        if inp_data_fmt is None:
             # We assume that all images have the same channel dimension format.
-            input_data_format = infer_channel_dimension_format(image)
+            inp_data_fmt = infer_channel_dimension_format(image)
 
         if do_resize:
-            image = self.resize(image=image, size=size, resample=resample, input_data_format=input_data_format)
+            image = self.resize(image=image, size=size, resample=resample, input_data_format=inp_data_fmt)
 
         if do_center_crop:
-            image = self.center_crop(image=image, size=crop_size, input_data_format=input_data_format)
+            image = self.center_crop(image=image, size=crop_size, input_data_format=inp_data_fmt)
 
         if do_rescale:
-            image = self.rescale(image=image, scale=rescale_factor, input_data_format=input_data_format)
+            image = self.rescale(image=image, scale=rescale_factor, input_data_format=inp_data_fmt)
 
         if do_normalize:
-            image = self.normalize(image=image, mean=image_mean, std=image_std, input_data_format=input_data_format)
+            image = self.normalize(image=image, mean=image_mean, std=image_std, input_data_format=inp_data_fmt)
 
         if do_map_pixels:
             image = self.map_pixels(image)
 
         if data_format is not None:
-            image = to_channel_dimension_format(image, data_format, input_channel_dim=input_data_format)
+            image = to_channel_dimension_format(image, data_format, input_channel_dim=inp_data_fmt)
         return image
 
     @filter_out_non_signature_kwargs()

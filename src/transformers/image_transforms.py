@@ -67,18 +67,31 @@ def to_channel_dimension_format(
     if not isinstance(image, np.ndarray):
         raise TypeError(f"Input image must be of type np.ndarray, got {type(image)}")
 
-    if input_channel_dim is None:
-        input_channel_dim = infer_channel_dimension_format(image)
+    icd = input_channel_dim
+    if icd is None:
+        icd = infer_channel_dimension_format(image)
 
-    target_channel_dim = ChannelDimension(channel_dim)
-    if input_channel_dim == target_channel_dim:
+    tcd = ChannelDimension(channel_dim)
+    if icd == tcd:
         return image
 
-    if target_channel_dim == ChannelDimension.FIRST:
-        axes = list(range(image.ndim - 3)) + [image.ndim - 1, image.ndim - 3, image.ndim - 2]
+    # Fast-path for default 3D images
+    if image.ndim == 3:
+        # (C, H, W) <-> (H, W, C)
+        if tcd == ChannelDimension.FIRST and icd == ChannelDimension.LAST:
+            # (H, W, C) -> (C, H, W)
+            return np.transpose(image, (2, 0, 1))
+        elif tcd == ChannelDimension.LAST and icd == ChannelDimension.FIRST:
+            # (C, H, W) -> (H, W, C)
+            return np.transpose(image, (1, 2, 0))
+
+    # Generic case for ND
+    base_axes = list(range(image.ndim - 3))
+    if tcd == ChannelDimension.FIRST:
+        axes = base_axes + [image.ndim - 1, image.ndim - 3, image.ndim - 2]
         image = image.transpose(axes)
-    elif target_channel_dim == ChannelDimension.LAST:
-        axes = list(range(image.ndim - 3)) + [image.ndim - 2, image.ndim - 1, image.ndim - 3]
+    elif tcd == ChannelDimension.LAST:
+        axes = base_axes + [image.ndim - 2, image.ndim - 1, image.ndim - 3]
         image = image.transpose(axes)
     else:
         raise ValueError(f"Unsupported channel dimension format: {channel_dim}")
