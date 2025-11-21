@@ -818,7 +818,11 @@ class Attention(nn.Module):
 
 def fill_with_neg_inf(t):
     """FP16-compatible function that fills a input_ids with -inf."""
-    return t.float().fill_(torch.finfo(t.dtype).min).type_as(t)
+    # Directly fill and return t after casting to float32 for inf compatibility, then cast back efficiently in-place if needed
+    min_val = torch.finfo(t.dtype).min
+    float_t = t.float()
+    float_t.fill_(min_val)
+    return float_t if float_t.dtype == t.dtype else float_t.to(dtype=t.dtype)
 
 
 # Public API
