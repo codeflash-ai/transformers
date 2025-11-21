@@ -21,6 +21,15 @@ import numpy as np
 import torch
 import torch.nn as nn
 
+from transformers.generation.configuration_utils import GenerationConfig
+from transformers.generation.logits_process import (
+    LogitsProcessorList,
+    MinLengthLogitsProcessor,
+    SuppressTokensLogitsProcessor,
+)
+from transformers.modeling_utils import PreTrainedModel
+from transformers.tokenization_utils_base import PreTrainedTokenizerBase
+
 from ..pytorch_utils import prune_linear_layer
 from ..utils import is_sklearn_available
 
@@ -127,9 +136,15 @@ class AssistedCandidateGenerator(CandidateGenerator):
         assistant_kwargs = {}
         for key, value in model_kwargs.items():  # deepcopy crashes if we attempt to copy encoder outputs with grads
             if key not in ("encoder_outputs", "past_key_values"):
-                assistant_kwargs[key] = (
-                    value.detach().to(device) if isinstance(value, torch.Tensor) else copy.deepcopy(value)
-                )
+                if isinstance(value, torch.Tensor):
+                    assistant_kwargs[key] = value.detach().to(device)
+                elif isinstance(value, (list, dict, tuple)):
+                    # Only copy if it's not a tensor, skip copy for immutables or primitives
+                    assistant_kwargs[key] = copy.deepcopy(value)
+                else:
+                    assistant_kwargs[key] = value
+
+        # Remove potential default "logits_to_keep" key
 
         # Remove potential default "logits_to_keep" key
         if "logits_to_keep" in assistant_kwargs and not assistant_model._supports_logits_to_keep():
@@ -281,8 +296,11 @@ class AssistedCandidateGenerator(CandidateGenerator):
     def _calculate_new_tokens(self, input_ids: torch.LongTensor) -> tuple[int, int]:
         """Calculate the minimum and maximum number of new tokens to generate."""
         new_cur_len = input_ids.shape[-1]
-        max_new_tokens = min(int(self.num_assistant_tokens), self.generation_config.max_length - new_cur_len - 1)
-        min_new_tokens = max(min(max_new_tokens, self.main_model_min_length - new_cur_len), 0)
+        max_length = self.generation_config.max_length
+        num_assistant_tokens = int(self.num_assistant_tokens)
+        max_new_tokens = min(num_assistant_tokens, max_length - new_cur_len - 1)
+        min_length = self.main_model_min_length
+        min_new_tokens = max(min(max_new_tokens, min_length - new_cur_len), 0)
         return min_new_tokens, max_new_tokens
 
     def _update_past_and_masks(
@@ -975,17 +993,27 @@ class UniversalSpeculativeDecodingGenerator(AssistedCandidateGeneratorDifferentT
         # Convert the new tokens
         assistant_new_ids = None
         if self._target_seq_len_with_candidates > 0:
-            # we have only one new token and we can directly convert it
-            assistant_new_ids = self._atm_translator.target_to_assistant_input_ids.get(target_new_ids[0].item())
+            # Try "get" with item for single new token
+            token_id = target_new_ids[0].item()
+            assistant_new_id = self._atm_translator.target_to_assistant_input_ids.get(token_id)
+            if assistant_new_id is not None:
+                assistant_new_ids = torch.tensor(
+                    [[assistant_new_id]], device=self.assistant_model.device, dtype=torch.long
+                )
+
+        # Fallback to batch_decode + encoding for any situation not covered above (initial prompt or unmapped token)
         if assistant_new_ids is None:
             target_new_text = self.target_tokenizer.batch_decode(
                 target_new_ids, skip_special_tokens=True, clean_up_tokenization_spaces=True
             )
-            assistant_new_ids = self.assistant_tokenizer(
-                target_new_text, add_special_tokens=False, return_tensors="pt"
-            )["input_ids"].to(self.assistant_model.device)
-        else:
-            assistant_new_ids = torch.tensor([[assistant_new_ids]], device=self.assistant_model.device)
+            # always add_special_tokens=False, as we want only the new token representations. Request returned tensor.
+            # Optimization: avoid unnecessary repeated .to() if device is correct already
+            encoded = self.assistant_tokenizer(target_new_text, add_special_tokens=False, return_tensors="pt")[
+                "input_ids"
+            ]
+            assistant_new_ids = encoded.to(self.assistant_model.device, dtype=torch.long)
+
+        # Compose new input IDs with previous if needed
 
         # Update or initialize assistant IDs
         if self._prev_assistant_ids is None:
@@ -994,11 +1022,13 @@ class UniversalSpeculativeDecodingGenerator(AssistedCandidateGeneratorDifferentT
             tokens_to_remove = self._target_seq_len_with_candidates + 1 - target_seq_len
             # If the number of new tokens is greater than zero, truncate the previous assistant IDs
             if tokens_to_remove > 0:
-                self._prev_assistant_ids = self._prev_assistant_ids[:, :-tokens_to_remove]
+                # Avoid Python slicing overhead, use .narrow for contiguous tensors
+                self._prev_assistant_ids = self._prev_assistant_ids.narrow(
+                    1, 0, self._prev_assistant_ids.size(1) - tokens_to_remove
+                )
             assistant_input_ids = torch.cat([self._prev_assistant_ids, assistant_new_ids], dim=-1)
-        assistant_input_ids = assistant_input_ids.to(dtype=torch.long)
         self._atm_translator.unmap_input_ids()
-        return assistant_input_ids, len(assistant_new_ids[0])
+        return assistant_input_ids, assistant_new_ids.size(1)
 
 
 class PromptLookupCandidateGenerator(CandidateGenerator):
