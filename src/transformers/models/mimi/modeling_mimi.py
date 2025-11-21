@@ -554,16 +554,27 @@ class MimiRotaryEmbedding(nn.Module):
     @torch.no_grad()
     @dynamic_rope_update  # power user: used with advanced RoPE types (e.g. dynamic rope)
     def forward(self, x, position_ids):
-        inv_freq_expanded = self.inv_freq[None, :, None].float().expand(position_ids.shape[0], -1, 1).to(x.device)
-        position_ids_expanded = position_ids[:, None, :].float()
+        # Optimize allocation and computation (memory & runtime)
+        batch = position_ids.shape[0]
+        seq_len = position_ids.shape[1]
+        dim = self.inv_freq.shape[0]
 
-        device_type = x.device.type if isinstance(x.device.type, str) and x.device.type != "mps" else "cpu"
-        with torch.autocast(device_type=device_type, enabled=False):  # Force float32
-            freqs = (inv_freq_expanded.float() @ position_ids_expanded.float()).transpose(1, 2)
-            emb = torch.cat((freqs, freqs), dim=-1)
-            cos = emb.cos() * self.attention_scaling
-            sin = emb.sin() * self.attention_scaling
+        # Compute frequencies using broadcasting
+        # position_ids: [batch, seq_len] -> [batch, seq_len, 1]
+        # inv_freq: [dim] -> [1, 1, dim]
+        position_ids_float = position_ids.to(dtype=torch.float32)
+        inv_freq_float = self.inv_freq.to(dtype=torch.float32, device=x.device)
+        freqs = torch.einsum("bs, d -> bsd", position_ids_float, inv_freq_float)
+        # freqs: [batch, seq_len, dim]
 
+        # Concatenate to double the last dim (RoPE expects this)
+        emb = torch.cat((freqs, freqs), dim=-1)  # [batch, seq_len, 2 * dim]
+
+        # Use torch.cos/sin (native fused, fast)
+        cos = emb.cos().mul_(self.attention_scaling)
+        sin = emb.sin().mul_(self.attention_scaling)
+
+        # Return with proper dtype
         return cos.to(dtype=x.dtype), sin.to(dtype=x.dtype)
 
 
