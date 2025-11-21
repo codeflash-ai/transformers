@@ -85,17 +85,18 @@ class Phi4MultimodalImageProcessorFast(BaseImageProcessorFast):
 
         w_crop_num = math.ceil(orig_width / float(image_size))
         h_crop_num = math.ceil(orig_height / float(image_size))
-        if w_crop_num * h_crop_num > max_num:
+        w_h_product = w_crop_num * h_crop_num
+        if w_h_product > max_num:
             aspect_ratio = orig_width / orig_height
 
             # calculate the existing image aspect ratio
-            target_ratios = {
+            target_ratios = [
                 (i, j)
                 for n in range(min_num, max_num + 1)
                 for i in range(1, n + 1)
                 for j in range(1, n + 1)
                 if i * j <= max_num and i * j >= min_num
-            }
+            ]
             target_ratios = sorted(target_ratios, key=lambda x: x[0] * x[1])
 
             # find the closest aspect ratio to the target
@@ -133,7 +134,10 @@ class Phi4MultimodalImageProcessorFast(BaseImageProcessorFast):
             raise ValueError(f"the aspect ratio is very extreme {new_size}")
 
         image = F.resize(image, [new_size[1], new_size[0]])
-        resized_img = F.pad(image, [0, 0, padding_width, padding_height], fill=[255, 255, 255])
+        if padding_width or padding_height:
+            resized_img = F.pad(image, [0, 0, padding_width, padding_height], fill=[255, 255, 255])
+        else:
+            resized_img = image
 
         return resized_img, attention_mask
 
