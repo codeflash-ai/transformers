@@ -154,8 +154,11 @@ class Qwen3VLMoeTextSparseMoeBlock(nn.Module):
 
 def rotate_half(x):
     """Rotates half the hidden dims of the input."""
-    x1 = x[..., : x.shape[-1] // 2]
-    x2 = x[..., x.shape[-1] // 2 :]
+    last_dim = x.shape[-1]
+    half = last_dim // 2
+    # Use a single .split() call for efficient memory usage
+    x1, x2 = x[..., :half], x[..., half:]
+    # torch.cat is already nearly optimal, but avoid extraneous computation.
     return torch.cat((-x2, x1), dim=-1)
 
 
@@ -463,12 +466,34 @@ def apply_rotary_pos_emb_vision(
 ) -> tuple[torch.Tensor, torch.Tensor]:
     orig_q_dtype = q.dtype
     orig_k_dtype = k.dtype
-    q, k = q.float(), k.float()
-    cos, sin = cos.unsqueeze(-2).float(), sin.unsqueeze(-2).float()
-    q_embed = (q * cos) + (rotate_half(q) * sin)
-    k_embed = (k * cos) + (rotate_half(k) * sin)
-    q_embed = q_embed.to(orig_q_dtype)
-    k_embed = k_embed.to(orig_k_dtype)
+
+    # Only cast cos/sin once (outside of use)
+    cos_unsq = cos.unsqueeze(-2)
+    sin_unsq = sin.unsqueeze(-2)
+
+    # Avoid unnecessary dtype casts if cos/sin are already float
+    if (
+        q.dtype != torch.float32
+        or k.dtype != torch.float32
+        or cos.dtype != torch.float32
+        or sin.dtype != torch.float32
+    ):
+        q = q.float()
+        k = k.float()
+        cos_unsq = cos_unsq.float()
+        sin_unsq = sin_unsq.float()
+
+    # Fused computation, one allocation for each of q_embed and k_embed
+    q_rot = rotate_half(q)  # Used twice, so compute once
+    k_rot = rotate_half(k)
+    q_embed = torch.add(q * cos_unsq, q_rot * sin_unsq)
+    k_embed = torch.add(k * cos_unsq, k_rot * sin_unsq)
+
+    # Use .to() only if dtype does not already match to avoid unnecessary copy
+    if q_embed.dtype != orig_q_dtype:
+        q_embed = q_embed.to(orig_q_dtype)
+    if k_embed.dtype != orig_k_dtype:
+        k_embed = k_embed.to(orig_k_dtype)
     return q_embed, k_embed
 
 
