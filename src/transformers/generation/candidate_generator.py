@@ -21,6 +21,10 @@ import numpy as np
 import torch
 import torch.nn as nn
 
+from transformers.generation.configuration_utils import GenerationConfig
+from transformers.generation.logits_process import LogitsProcessorList, MinLengthLogitsProcessor
+from transformers.modeling_utils import PreTrainedModel
+
 from ..pytorch_utils import prune_linear_layer
 from ..utils import is_sklearn_available
 
@@ -127,9 +131,17 @@ class AssistedCandidateGenerator(CandidateGenerator):
         assistant_kwargs = {}
         for key, value in model_kwargs.items():  # deepcopy crashes if we attempt to copy encoder outputs with grads
             if key not in ("encoder_outputs", "past_key_values"):
-                assistant_kwargs[key] = (
-                    value.detach().to(device) if isinstance(value, torch.Tensor) else copy.deepcopy(value)
-                )
+                if isinstance(value, torch.Tensor):
+                    assistant_kwargs[key] = value.detach().to(device)
+                else:
+                    # use direct assignment for builtins (str, int, float, bool, None) instead of deepcopy
+                    # as those are immutable and deepcopy is slow for them
+                    if isinstance(value, (str, int, float, bool, type(None))):
+                        assistant_kwargs[key] = value
+                    else:
+                        assistant_kwargs[key] = copy.deepcopy(value)
+
+        # Remove potential default "logits_to_keep" key
 
         # Remove potential default "logits_to_keep" key
         if "logits_to_keep" in assistant_kwargs and not assistant_model._supports_logits_to_keep():
@@ -280,9 +292,28 @@ class AssistedCandidateGenerator(CandidateGenerator):
 
     def _calculate_new_tokens(self, input_ids: torch.LongTensor) -> tuple[int, int]:
         """Calculate the minimum and maximum number of new tokens to generate."""
+        # This localize attributes and minimize fetches
+        num_assistant_tokens = self.num_assistant_tokens
+        max_length = self.generation_config.max_length
+        main_model_min_length = self.main_model_min_length
+
+        # These are extremely trivial but attribute lookup can cause extra time in a tight loop
         new_cur_len = input_ids.shape[-1]
-        max_new_tokens = min(int(self.num_assistant_tokens), self.generation_config.max_length - new_cur_len - 1)
-        min_new_tokens = max(min(max_new_tokens, self.main_model_min_length - new_cur_len), 0)
+        max_new_tokens_candidate = max_length - new_cur_len - 1
+        # avoid int() function within min
+        if num_assistant_tokens < max_new_tokens_candidate:
+            max_new_tokens = int(num_assistant_tokens)
+        else:
+            max_new_tokens = max_new_tokens_candidate
+
+        min_candidate = main_model_min_length - new_cur_len
+        if max_new_tokens < min_candidate:
+            min_new_tokens = max(0, max_new_tokens)
+        elif min_candidate > 0:
+            min_new_tokens = min_candidate
+        else:
+            min_new_tokens = 0
+
         return min_new_tokens, max_new_tokens
 
     def _update_past_and_masks(
