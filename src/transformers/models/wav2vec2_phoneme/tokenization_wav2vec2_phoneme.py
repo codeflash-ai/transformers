@@ -384,16 +384,10 @@ class Wav2Vec2PhonemeCTCTokenizer(PreTrainedTokenizer):
         start_indices = np.concatenate(([0], end_indices[:-1]))
 
         offsets = [
-            {"char": t, "start_offset": s, "end_offset": e} for t, s, e in zip(chars, start_indices, end_indices)
+            {"char": t, "start_offset": s, "end_offset": e}
+            for t, s, e in zip(chars, start_indices, end_indices)
+            if t != ctc_token and (word_delimiter_token is None or t != word_delimiter_token)
         ]
-
-        # filter out CTC token
-        offsets = list(filter(lambda offsets: offsets["char"] != ctc_token, offsets))
-
-        # filter out word delimiter token if necessary
-        if word_delimiter_token is not None:
-            offsets = list(filter(lambda offsets: offsets["char"] != word_delimiter_token, offsets))
-
         return offsets
 
     def _decode(
