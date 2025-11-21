@@ -130,6 +130,7 @@ class Wav2Vec2PhonemeCTCTokenizer(PreTrainedTokenizer):
         with open(vocab_file, encoding="utf-8") as vocab_handle:
             self.encoder = json.load(vocab_handle)
         self.decoder = {v: k for k, v in self.encoder.items()}
+        self._unk_token = unk_token
 
         super().__init__(
             unk_token=unk_token,
@@ -323,8 +324,7 @@ class Wav2Vec2PhonemeCTCTokenizer(PreTrainedTokenizer):
 
     def _convert_id_to_token(self, index: int) -> str:
         """Converts an index (integer) in a token (str) using the vocab."""
-        result = self.decoder.get(index, self.unk_token)
-        return result
+        return self.decoder.get(index, self._unk_token)
 
     def convert_tokens_to_string(
         self,
