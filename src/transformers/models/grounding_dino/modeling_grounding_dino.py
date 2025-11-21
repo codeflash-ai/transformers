@@ -2369,27 +2369,39 @@ def build_label_maps(logits: torch.FloatTensor, input_ids: torch.LongTensor) -> 
     delimiter_token_masks = torch.isin(input_ids, delimiter_tokens)
     label_groups = torch.cumsum(delimiter_token_masks, dim=1) * (~delimiter_token_masks).to(torch.int32)
 
-    label_maps = ()
+    label_maps = []
+
+    # Pre-allocate a tensor for padding, will be reused for every possible shape less than max_seq_len
+    # Not possible as label_map may vary in num_labels, but we can optimize the in-loop
 
     # Iterate over batch dimension as we can have different number of labels
     for label_group in label_groups:
-        # `label_group` is a tensor of shape `(seq_len,)` with zeros for non-label tokens and integers for label tokens
-        # label tokens with same integer value are part of the same label group
-
         # Get unique labels and exclude 0 (i.e. non-label tokens)
-        unique_labels = torch.unique(label_group)[1:, None]
+        unique_labels = torch.unique(label_group, sorted=True)
+        if unique_labels.shape[0] <= 1:
+            # No label regions found, skip (shouldn't typically happen)
+            label_maps.append(torch.zeros((0, max_seq_len), dtype=torch.long, device=label_group.device))
+            continue
+
+        unique_labels = unique_labels[1:]
         num_labels = unique_labels.shape[0]
 
-        # Create one-hot encoding for each label group
-        label_map = label_group.unsqueeze(0).repeat(num_labels, 1)
-        label_map = torch.where(label_map == unique_labels, 1, 0)
+        # vectorized construction of label_map: shape (num_labels, seq_len)
+        # Use broadcasting to compare in one go and move direct comparison to the first device array.
+        # unique_labels is (num_labels, 1), label_group is (1, seq_len)
+        # This is significantly faster than repeat+where
 
-        # Pad label_map to match `max_seq_len`
-        label_map = F.pad(label_map, (0, max_seq_len - label_map.shape[1]), value=0)
+        label_map = (label_group.unsqueeze(0) == unique_labels.unsqueeze(1)).to(torch.long)
 
-        label_maps += (label_map,)
+        # Only pad if needed
+        seq_len = label_group.shape[0]
+        if seq_len != max_seq_len:
+            # avoid calling pad if things are already equal in shape
+            label_map = F.pad(label_map, (0, max_seq_len - seq_len), value=0)
 
-    return label_maps
+        label_maps.append(label_map)
+
+    return tuple(label_maps)
 
 
 def build_text_mask(logits, attention_mask):
