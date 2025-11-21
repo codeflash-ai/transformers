@@ -128,14 +128,29 @@ class LlavaNextVideoPooler(nn.Module):
             raise ValueError(f"Unknown pooling mode: {mode}. Has to be one of [`average`, `max`, `conv`]")
 
     def forward(self, image_features):
-        ori_width = int(math.sqrt(image_features.shape[1] * self.image_size // self.image_size))
-        ori_height = int(ori_width * self.image_size // self.image_size)
+        # Fast path: avoid recomputing same values
+        image_size = self.image_size
+        seq_len = image_features.shape[1]
+        dim = image_features.shape[2]
+        batch_size = image_features.shape[0]
 
-        batch_size, _, dim = image_features.shape
-        image_features_spatial = image_features.view(batch_size, ori_height, ori_height, dim).permute(0, 3, 1, 2)
+        # Compute spatial size only once, and avoid redundant calculation
+        # By construction, ori_width = sqrt(seq_len)
+        ori_height = ori_width = int(math.isqrt(seq_len))
+        # Defensive: but if patch model varies, retain old logic
+        if ori_width * ori_width != seq_len:
+            ori_width = int(math.sqrt(seq_len * image_size // image_size))
+            ori_height = int(ori_width * image_size // image_size)
+
+        # Combine .view(...).permute(...) for performance by using .reshape if possible
+        # PyTorch .reshape is faster if a contiguous memory layout is present and is safe as .view
+        image_features_spatial = image_features.reshape(batch_size, ori_height, ori_width, dim).permute(0, 3, 1, 2)
         image_features_spatial_pool = self.pool(image_features_spatial)
-
-        return image_features_spatial_pool.flatten(2).transpose(1, 2).contiguous()
+        # Merge flatten(2), transpose(1,2) with .reshape for better memory access
+        b, c, h, w = image_features_spatial_pool.shape
+        # Instead of .flatten(2).transpose(1,2).contiguous(), use .permute + .reshape in a single step
+        out = image_features_spatial_pool.permute(0, 2, 3, 1).reshape(b, h * w, c).contiguous()
+        return out
 
 
 class LlavaNextVideoMultiModalProjector(nn.Module):
