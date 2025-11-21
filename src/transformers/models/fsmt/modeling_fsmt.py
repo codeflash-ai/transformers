@@ -1116,12 +1116,13 @@ class SinusoidalPositionalEmbedding(nn.Embedding):
         super().__init__(num_positions, embedding_dim, padding_idx)
 
     def make_weight(self, num_positions, embedding_dim, padding_idx):
+        device = self.weight.device
+        dtype = self.weight.dtype
         weight = self.get_embedding(num_positions, embedding_dim, padding_idx)
-        # in forward put the weights on the correct dtype and device of the param
-        weight = weight.to(dtype=self.weight.dtype, device=self.weight.device)
-        self.weight = nn.Parameter(weight)
-        self.weight.detach_()
-        self.weight.requires_grad = False
+        # Only move if necessary
+        if weight.device != device or weight.dtype != dtype:
+            weight = weight.to(dtype=dtype, device=device)
+        self.weight = nn.Parameter(weight, requires_grad=False)
 
     @staticmethod
     def get_embedding(num_embeddings, embedding_dim, padding_idx):
@@ -1154,8 +1155,12 @@ class SinusoidalPositionalEmbedding(nn.Embedding):
         # balanced to both work with ONNX export and XLA. In particular XLA
         # prefers ints, cumsum defaults to output longs, and ONNX doesn't know
         # how to handle the dtype kwarg in cumsum.
-        mask = tensor.ne(padding_idx).int()
-        return (torch.cumsum(mask, dim=1).type_as(mask) * mask).long() + padding_idx
+        mask = tensor.ne(padding_idx)
+        out = torch.empty_like(tensor, dtype=torch.long)
+        torch.cumsum(mask, dim=1, out=out)
+        out.mul_(mask)
+        out.add_(padding_idx)
+        return out
 
     def forward(
         self,
