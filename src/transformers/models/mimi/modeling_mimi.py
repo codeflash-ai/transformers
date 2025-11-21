@@ -120,31 +120,22 @@ class MimiConv1dPaddingCache:
         Returns:
             `torch.Tensor` or `None`, the current padding cache.
         """
-        batch_size, dtype, device = hidden_states.shape[0], hidden_states.dtype, hidden_states.device
+        batch_size = hidden_states.shape[0]
+        dtype = hidden_states.dtype
+        device = hidden_states.device
         padding = self.per_layer_padding[layer_idx]
         padding_mode = self.per_layer_padding_mode[layer_idx]
         in_channels = self.per_layer_in_channels[layer_idx]
 
         if self.padding_cache[layer_idx] is None:
             if padding_mode == "constant":
-                current_cache = torch.zeros(
-                    batch_size,
-                    in_channels,
-                    padding,
-                    device=device,
-                    dtype=dtype,
-                )
+                current_cache = torch.zeros(batch_size, in_channels, padding, device=device, dtype=dtype)
             elif padding_mode == "replicate":
-                current_cache = (
-                    torch.ones(
-                        batch_size,
-                        in_channels,
-                        padding,
-                        device=device,
-                        dtype=dtype,
-                    )
-                    * hidden_states[..., :1]
-                )
+                # More memory-efficient and performant way: use expand, not multiply
+                # hidden_states[..., :1] shape: (batch, in_channels, 1)
+                base_slice = hidden_states[..., :1]
+                # Use expand rather than multiply for broadcasting
+                current_cache = base_slice.expand(batch_size, in_channels, padding)
         else:
             current_cache = self.padding_cache[layer_idx]
 
@@ -152,7 +143,10 @@ class MimiConv1dPaddingCache:
         if padding > 0:
             padding_states = hidden_states[:, :, -padding:]
         else:
-            padding_states = torch.empty(batch_size, in_channels, padding, dtype=dtype, device=device)
+            # No padding; avoid allocation by reusing a cached empty tensor per dtype-device-in_channels
+            # For performance, since the return value is always ignored when padding == 0,
+            # we can return the same empty tensor each time with matching properties.
+            padding_states = torch.empty(batch_size, in_channels, 0, dtype=dtype, device=device)
         self.padding_cache[layer_idx] = padding_states
 
         return current_cache
