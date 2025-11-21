@@ -123,13 +123,25 @@ class PixtralRotaryEmbedding(nn.Module):
     @torch.no_grad()
     @dynamic_rope_update  # power user: used with advanced RoPE types (e.g. dynamic rope)
     def forward(self, x, position_ids):
-        freqs = self.inv_freq[position_ids]
-        device_type = x.device.type if isinstance(x.device.type, str) and x.device.type != "mps" else "cpu"
-        with torch.autocast(device_type=device_type, enabled=False):  # Force float32
-            emb = freqs
-            cos = emb.cos()
-            sin = emb.sin()
+        # Optimization: Use torch.take for efficient position indexing if possible, else advanced indexing
+        # However, .take only works for 1D, and inv_freq is typically [num_positions, dim]
+        # Optimal: gather frequencies in a single op; use them directly for cos/sin
 
+        # position_ids expected to be of shape [batch, seq_len] or [seq_len]
+        # If position_ids is not contiguous, make it contiguous for indexing efficiency
+        position_ids = position_ids.contiguous()
+        freqs = self.inv_freq[position_ids]
+
+        # Avoid device.type string and autocast check per call; use float32 explicitly
+        # Torch autocast disables mixed precision for RoPE math even on GPU for correct precision
+        # Faster: just cast freqs once if needed
+        emb = freqs.to(torch.float32) if freqs.dtype != torch.float32 else freqs
+
+        # Compute cos/sin in float32, then cast to output type
+        cos = torch.cos(emb)
+        sin = torch.sin(emb)
+
+        # .to(x.dtype) ensures correct return dtype, as original
         return cos.to(dtype=x.dtype), sin.to(dtype=x.dtype)
 
 
