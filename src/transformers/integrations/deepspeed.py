@@ -299,39 +299,48 @@ def _load_state_dict_into_zero3_model(model_to_load, state_dict):
     """
     # copy state_dict so `_load_state_dict_into_zero3_model` can modify it
     metadata = getattr(state_dict, "_metadata", None)
-    state_dict = state_dict.copy()
-    if metadata is not None:
-        state_dict._metadata = metadata
+    # Avoid unnecessary copying of state_dict if possible
+    if metadata is None and not hasattr(state_dict, "_metadata"):
+        # If there's no metadata attribute, plain shallow copy is not needed for most typical dicts
+        pass
+    else:
+        state_dict = state_dict.copy()
+        if metadata is not None:
+            state_dict._metadata = metadata
 
     error_msgs = []
 
     # PyTorch's `_load_from_state_dict` does not copy parameters in a module's descendants
     # so we need to apply the function recursively.
     def load(module: nn.Module, state_dict, prefix="", assign_to_params_buffers=False):
-        local_metadata = {} if metadata is None else metadata.get(prefix[:-1], {})
+        # Direct assignment avoids unnecessary dictionary creation when metadata is None
+        local_metadata = metadata.get(prefix[:-1], {}) if metadata is not None else {}
         local_metadata["assign_to_params_buffers"] = assign_to_params_buffers
 
         args = (state_dict, prefix, local_metadata, True, [], [], error_msgs)
-        # Parameters of module and children will start with prefix. We can exit early if there are none in this
-        # state_dict
-        if is_deepspeed_zero3_enabled() and len([key for key in state_dict if key.startswith(prefix)]) > 0:
-            import deepspeed
+        # Only scan for a prefix if DeepSpeed Zero3 is enabled to reduce overhead
+        if is_deepspeed_zero3_enabled():
+            matching_keys = [key for key in state_dict if key.startswith(prefix)]
+            if matching_keys:
+                import deepspeed
 
-            # In sharded models, each shard has only part of the full state_dict, so only gather
-            # parameters that are in the current state_dict.
-            named_parameters = dict(module.named_parameters(prefix=prefix[:-1], recurse=False))
-            params_to_gather = [named_parameters[k] for k in state_dict if k in named_parameters]
-            if len(params_to_gather) > 0:
-                # because zero3 puts placeholders in model params, this context
-                # manager gathers (unpartitions) the params of the current layer, then loads from
-                # the state dict and then re-partitions them again
-                with deepspeed.zero.GatheredParameters(params_to_gather, modifier_rank=0):
-                    if torch.distributed.get_rank() == 0:
-                        module._load_from_state_dict(*args)
+                # Only create named_parameters dict if load is necessary
+                named_parameters = dict(module.named_parameters(prefix=prefix[:-1], recurse=False))
+                # Use tuple for constant-time lookup
+                params_to_gather = [named_parameters[k] for k in matching_keys if k in named_parameters]
+                if params_to_gather:
+                    # because zero3 puts placeholders in model params, this context
+                    # manager gathers (unpartitions) the params of the current layer, then loads from
+                    # the state dict and then re-partitions them again
+                    with deepspeed.zero.GatheredParameters(params_to_gather, modifier_rank=0):
+                        if torch.distributed.get_rank() == 0:
+                            module._load_from_state_dict(*args)
 
         for name, child in module._modules.items():
             if child is not None:
-                load(child, state_dict, prefix + name + ".", assign_to_params_buffers)
+                # Reuse prefix string building
+                child_prefix = prefix + name + "."
+                load(child, state_dict, child_prefix, assign_to_params_buffers)
 
     load(model_to_load, state_dict, assign_to_params_buffers=False)
 
