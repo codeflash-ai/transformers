@@ -21,6 +21,10 @@ import numpy as np
 import torch
 import torch.nn as nn
 
+from transformers.generation.logits_process import LogitsProcessorList, SuppressTokensLogitsProcessor
+from transformers.modeling_utils import PreTrainedModel
+from transformers.tokenization_utils_base import PreTrainedTokenizerBase
+
 from ..pytorch_utils import prune_linear_layer
 from ..utils import is_sklearn_available
 
@@ -775,11 +779,20 @@ class AssistantToTargetTranslator:
         max_assistant_index = max(assistant_vocab.values())
         assistant_to_target_input_ids = torch.full((max_assistant_index + 1,), self.SUPPRESS_TOKEN_ID, dtype=int)
         target_to_assistant_input_ids: dict[int, int] = {}
+
+        # Collect matching ids (these lists are generally much smaller than vocab size)
+        matched_aid = []
+        matched_tid = []
         for tok, assistant_id in assistant_vocab.items():
             target_id = target_vocab.get(tok)
             if target_id is not None:
-                assistant_to_target_input_ids[assistant_id] = target_id
+                matched_aid.append(assistant_id)
+                matched_tid.append(target_id)
                 target_to_assistant_input_ids[target_id] = assistant_id
+        if matched_aid:
+            idx = torch.tensor(matched_aid, device=assistant_to_target_input_ids.device, dtype=torch.long)
+            vals = torch.tensor(matched_tid, device=assistant_to_target_input_ids.device, dtype=torch.long)
+            assistant_to_target_input_ids[idx] = vals
         return assistant_to_target_input_ids.to(self._assistant_model_device), target_to_assistant_input_ids
 
     def _get_suppress_input_ids(self) -> list[int]:
