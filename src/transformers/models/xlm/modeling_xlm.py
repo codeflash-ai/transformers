@@ -558,7 +558,7 @@ class MultiHeadAttention(nn.Module):
                 if is_cross_attention:
                     cache.is_updated[self.layer_id] = True
 
-        q = q / math.sqrt(self.head_dim)  # (bs, n_heads, qlen, head_dim)
+        q /= math.sqrt(self.head_dim)  # (bs, n_heads, qlen, head_dim)
         scores = torch.matmul(q, k.transpose(2, 3))  # (bs, n_heads, qlen, klen)
         mask = (mask == 0).view(mask_reshape).expand_as(scores)  # (bs, n_heads, qlen, klen)
         scores.masked_fill_(mask, torch.finfo(scores.dtype).min)  # (bs, n_heads, qlen, klen)
