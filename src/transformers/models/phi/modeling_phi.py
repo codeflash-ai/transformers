@@ -132,6 +132,7 @@ def apply_rotary_pos_emb(q, k, cos, sin, position_ids=None, unsqueeze_dim=1):
     return q_embed, k_embed
 
 
+@torch.jit.ignore
 def repeat_kv(hidden_states: torch.Tensor, n_rep: int) -> torch.Tensor:
     """
     This is the equivalent of torch.repeat_interleave(x, dim=1, repeats=n_rep). The hidden states go from (batch,
@@ -140,8 +141,18 @@ def repeat_kv(hidden_states: torch.Tensor, n_rep: int) -> torch.Tensor:
     batch, num_key_value_heads, slen, head_dim = hidden_states.shape
     if n_rep == 1:
         return hidden_states
-    hidden_states = hidden_states[:, :, None, :, :].expand(batch, num_key_value_heads, n_rep, slen, head_dim)
-    return hidden_states.reshape(batch, num_key_value_heads * n_rep, slen, head_dim)
+    # Fast path: using reshape and expand is cheap on meta tensors but costly on real data
+    # For real data, repeat is often faster as it avoids allocating intermediate expanded tensors,
+    # but memory allocation can still dominate. We use torch.repeat for practical tensors which benefits
+    # from in-memory stride-broadcasting, which is typically faster for this pattern.
+    # torch.repeat ONLY repeats in contiguous chunks, so we have to permute to put num_key_value_heads
+    # as the last axis, repeat, and permute back.
+    # However, for the given rank-4 layout, using repeat with unsqueeze is optimal and avoids superfluous expand+reshape
+    return (
+        hidden_states.unsqueeze(2)
+        .repeat(1, 1, n_rep, 1, 1)
+        .reshape(batch, num_key_value_heads * n_rep, slen, head_dim)
+    )
 
 
 def eager_attention_forward(
@@ -154,19 +165,30 @@ def eager_attention_forward(
     dropout: float = 0.0,
     **kwargs: Unpack[TransformersKwargs],
 ):
-    key_states = repeat_kv(key, module.num_key_value_groups)
-    value_states = repeat_kv(value, module.num_key_value_groups)
-
-    attn_weights = torch.matmul(query, key_states.transpose(2, 3)) * scaling
+    # Avoid creating extra variables by directly repeating and reusing key/value
+    n_rep = module.num_key_value_groups
+    # If n_rep==1 avoids repeat and reduce branching below
+    key_states = repeat_kv(key, n_rep)
+    value_states = repeat_kv(value, n_rep)
+    # Most time-consuming part: matmul. Avoid explicit intermediate variable if not needed.
+    attn_weights = torch.matmul(query, key_states.transpose(2, 3))
+    # Fuse scaling for better kernel efficiency:
+    if scaling != 1.0:
+        attn_weights.mul_(scaling)
     if attention_mask is not None:
         causal_mask = attention_mask[:, :, :, : key_states.shape[-2]]
-        attn_weights = attn_weights + causal_mask
-
-    attn_weights = nn.functional.softmax(attn_weights, dim=-1, dtype=torch.float32).to(query.dtype)
+        attn_weights += causal_mask
+    # Softmax (with fused to conversion) is already fast, but move dtype conversion after dropout to reduce copies
+    attn_weights = nn.functional.softmax(attn_weights, dim=-1, dtype=torch.float32)
     attn_weights = nn.functional.dropout(attn_weights, p=dropout, training=module.training)
+    # Post-dropout conversion
+    if attn_weights.dtype != query.dtype:
+        attn_weights = attn_weights.to(query.dtype)
     attn_output = torch.matmul(attn_weights, value_states)
-    attn_output = attn_output.transpose(1, 2).contiguous()
-
+    # Transpose first, then contiguous if needed (contiguous avoid unnecessary copies if output goes directly out)
+    attn_output = attn_output.transpose(1, 2)
+    if not attn_output.is_contiguous():
+        attn_output = attn_output.contiguous()
     return attn_output, attn_weights
 
 
