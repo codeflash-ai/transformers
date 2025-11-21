@@ -68,7 +68,8 @@ def get_masks(slen, lengths, causal, padding_mask=None):
     # attention mask is the same as mask, or triangular inferior attention (causal)
     bs = lengths.size(0)
     if causal:
-        attn_mask = alen[None, None, :].repeat(bs, slen, 1) <= alen[None, :, None]
+        attn_mask = alen[None, :] <= alen[:, None]
+        attn_mask = attn_mask.expand(bs, slen, slen)
     else:
         attn_mask = mask
 
