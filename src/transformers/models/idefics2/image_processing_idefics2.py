@@ -149,7 +149,11 @@ def convert_to_rgb(image: ImageInput) -> ImageInput:
     if image.mode == "RGB":
         return image
 
-    image_rgba = image.convert("RGBA")
+    if image.mode == "RGBA":
+        image_rgba = image
+    else:
+        image_rgba = image.convert("RGBA")
+
     background = Image.new("RGBA", image_rgba.size, (255, 255, 255))
     alpha_composite = Image.alpha_composite(background, image_rgba)
     alpha_composite = alpha_composite.convert("RGB")
