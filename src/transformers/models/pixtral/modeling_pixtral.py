@@ -101,16 +101,30 @@ class PixtralRotaryEmbedding(nn.Module):
 
         # Here is the diff from Llama RoPE
         max_patches_per_side = config.image_size // config.patch_size
-        h = torch.arange(max_patches_per_side)
-        w = torch.arange(max_patches_per_side)
 
-        freqs = 1.0 / (base ** (torch.arange(0, dim, 2).float() / dim))
-        freqs_h = torch.outer(h, freqs[::2]).float()
-        freqs_w = torch.outer(w, freqs[1::2]).float()
+        # Precompute all indices and frequencies at once, ensure device usage up front to minimize later transfers
+        dtype = torch.float32
+        device = device or torch.device("cpu")
+
+        h = torch.arange(max_patches_per_side, dtype=dtype, device=device)
+        w = torch.arange(max_patches_per_side, dtype=dtype, device=device)
+        arange_dim = torch.arange(0, dim, 2, dtype=dtype, device=device)
+
+        freqs = 1.0 / (base ** (arange_dim / dim))
+        # Pre-allocate both frequency arrays in one pass
+        freqs_h = torch.outer(h, freqs[::2])
+        freqs_w = torch.outer(w, freqs[1::2])
+
+        # Avoid repeat (which creates a copy) by reshaping and expanding efficiently
+        # Each position combines a height index and a width index; we construct the mesh with broadcasting
+        freqs_h_exp = freqs_h[:, None, :]  # (patch_side, 1, dim//4)
+        freqs_w_exp = freqs_w[None, :, :]  # (1, patch_side, dim//4)
+
+        # The first frequency block is from height, the second from width
         inv_freq = torch.cat(
             [
-                freqs_h[:, None, :].repeat(1, max_patches_per_side, 1),
-                freqs_w[None, :, :].repeat(max_patches_per_side, 1, 1),
+                freqs_h_exp.expand(max_patches_per_side, max_patches_per_side, -1),
+                freqs_w_exp.expand(max_patches_per_side, max_patches_per_side, -1),
             ],
             dim=-1,
         ).reshape(-1, dim // 2)  # we reshape to only index on the position indexes, not tuple of indexes
