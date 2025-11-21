@@ -545,10 +545,12 @@ class MimiRotaryEmbedding(nn.Module):
 
         attention_factor = 1.0  # Unused in this type of RoPE
 
-        # Compute the inverse frequencies
-        inv_freq = 1.0 / (
-            base ** (torch.arange(0, dim, 2, dtype=torch.int64).to(device=device, dtype=torch.float) / dim)
-        )
+        # Avoid dtype conversions in torch.arange followed by .to; instead, use correct dtype/device directly.
+        device_arg = torch.device(device) if device is not None else None
+        arange_indices = torch.arange(0, dim, 2, dtype=torch.float, device=device_arg)
+        # Remove unnecessary int64→float cast and avoid intermediate Python float exponentials by using torch.pow.
+        exponents = arange_indices / dim
+        inv_freq = torch.pow(base, -exponents)
         return inv_freq, attention_factor
 
     @torch.no_grad()
