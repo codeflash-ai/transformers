@@ -690,8 +690,8 @@ class Cache:
 
     def __init__(
         self,
-        layers: Optional[list[CacheLayerMixin]] = None,
-        layer_class_to_replicate: Optional[type[CacheLayerMixin]] = None,
+        layers: Optional[list["CacheLayerMixin"]] = None,
+        layer_class_to_replicate: Optional[type["CacheLayerMixin"]] = None,
         offloading: bool = False,
         offload_only_non_sliding: bool = True,
     ):
@@ -710,6 +710,9 @@ class Cache:
         self.offloading = offloading
         if self.offloading:
             self.only_non_sliding = offload_only_non_sliding
+            # _is_torch_greater_or_equal_than_2_7 is already imported in file scope of reference code
+            from transformers.cache_utils import _is_torch_greater_or_equal_than_2_7
+
             self.prefetch_stream = torch.Stream() if _is_torch_greater_or_equal_than_2_7 else torch.cuda.Stream()
 
     def __repr__(self):
@@ -768,17 +771,25 @@ class Cache:
         Return:
             A tuple containing the updated key and value states.
         """
+        # Cache local variables for small speedup in strict loops:
+        layers = self.layers
+        layer_class_to_replicate = self.layer_class_to_replicate
+
         # In this case, the `layers` were not provided, and we must append as much as `layer_idx`
-        if self.layer_class_to_replicate is not None:
-            while len(self.layers) <= layer_idx:
-                self.layers.append(self.layer_class_to_replicate())
+        if layer_class_to_replicate is not None:
+            current_len = len(layers)
+            if layer_idx >= current_len:
+                # Use extend + list comprehension to reduce Python-level list ops
+                layers.extend(layer_class_to_replicate() for _ in range(current_len, layer_idx + 1))
 
         if self.offloading:
+            prefetch_stream = self.prefetch_stream
             # Wait for the stream to finish if needed, and start prefetching the next layer
-            torch.cuda.default_stream(key_states.device).wait_stream(self.prefetch_stream)
+            torch.cuda.default_stream(key_states.device).wait_stream(prefetch_stream)
             self.prefetch(layer_idx + 1, self.only_non_sliding)
 
-        keys, values = self.layers[layer_idx].update(key_states, value_states, cache_kwargs)
+        update_method = layers[layer_idx].update
+        keys, values = update_method(key_states, value_states, cache_kwargs)
 
         if self.offloading:
             self.offload(layer_idx, self.only_non_sliding)
