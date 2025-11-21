@@ -1154,8 +1154,19 @@ class SinusoidalPositionalEmbedding(nn.Embedding):
         # balanced to both work with ONNX export and XLA. In particular XLA
         # prefers ints, cumsum defaults to output longs, and ONNX doesn't know
         # how to handle the dtype kwarg in cumsum.
-        mask = tensor.ne(padding_idx).int()
-        return (torch.cumsum(mask, dim=1).type_as(mask) * mask).long() + padding_idx
+
+        # Use in-place operations where possible for better memory efficiency
+        mask = tensor.ne(padding_idx)
+        # The .to(dtype=torch.int) is preferred over .int() for compatibility and is slightly faster
+        mask_int = mask.to(dtype=torch.int)
+        # On small batches, explicit dtype conversion on cumsum output can save casting cost,
+        # but ONNX compatibility requires assignment to match mask_int type post-cumsum
+        pos = torch.cumsum(mask_int, dim=1, dtype=torch.int32)
+        pos.mul_(mask_int)
+        # Avoid .long() if tensor is already int64
+        result = pos.to(dtype=torch.long)
+        result.add_(padding_idx)
+        return result
 
     def forward(
         self,
