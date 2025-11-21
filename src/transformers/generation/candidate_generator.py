@@ -21,6 +21,10 @@ import numpy as np
 import torch
 import torch.nn as nn
 
+from transformers.generation.logits_process import LogitsProcessorList, SuppressTokensLogitsProcessor
+from transformers.modeling_utils import PreTrainedModel
+from transformers.tokenization_utils_base import PreTrainedTokenizerBase
+
 from ..pytorch_utils import prune_linear_layer
 from ..utils import is_sklearn_available
 
@@ -797,7 +801,7 @@ class AssistantToTargetTranslator:
         Moreover, assistant ids of the original prompt does not necessarily appear in _assistant_to_target_input_ids.
         """
 
-        num_new_tokens = len(assistant_candidate_ids[0]) - assistant_input_ids.shape[1]
+        num_new_tokens = assistant_candidate_ids.size(1) - assistant_input_ids.shape[1]
         if num_new_tokens == 0:
             return target_input_ids
         else:
@@ -806,7 +810,7 @@ class AssistantToTargetTranslator:
             if self.assistant_prune_lm_head:
                 # Map assistant IDs -> target input IDs
                 last_candidate_ids = self.assistant_overlap_token_ids[last_candidate_ids]
-            transformed_slice = self._assistant_to_target_input_ids[last_candidate_ids]
+            transformed_slice = self._assistant_to_target_input_ids.index_select(0, last_candidate_ids)
             return torch.cat((target_input_ids, transformed_slice.unsqueeze(0)), dim=1)
 
     def get_target_logits(self, assistant_logits: torch.FloatTensor) -> torch.FloatTensor:
