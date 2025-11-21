@@ -185,32 +185,39 @@ class GPT2Tokenizer(PreTrainedTokenizer):
         return dict(self.encoder, **self.added_tokens_encoder)
 
     def bpe(self, token):
-        if token in self.cache:
-            return self.cache[token]
+        cache = self.cache
+        bpe_ranks = self.bpe_ranks
+
+        if token in cache:
+            return cache[token]
         word = tuple(token)
         pairs = get_pairs(word)
 
         if not pairs:
             return token
 
+        # PREALLOCATE frequently used builtins and attributes for speed
+        get = bpe_ranks.get
+        float_inf = float("inf")
         while True:
-            bigram = min(pairs, key=lambda pair: self.bpe_ranks.get(pair, float("inf")))
-            if bigram not in self.bpe_ranks:
+            # Minor optimization: avoid Python lambda
+            min_rank = float_inf
+            bigram = None
+            for pair in pairs:
+                rank = get(pair, float_inf)
+                if rank < min_rank:
+                    min_rank = rank
+                    bigram = pair
+            if bigram is None or bigram not in bpe_ranks:
                 break
             first, second = bigram
             new_word = []
             i = 0
-            while i < len(word):
-                try:
-                    j = word.index(first, i)
-                except ValueError:
-                    new_word.extend(word[i:])
-                    break
-                else:
-                    new_word.extend(word[i:j])
-                    i = j
-
-                if word[i] == first and i < len(word) - 1 and word[i + 1] == second:
+            end = len(word)
+            while i < end:
+                # Fast path: scan for the next `first`, but only if looking for a new pair
+                # Eliminate .index() overhead using linear scan
+                if i < end - 1 and word[i] == first and word[i + 1] == second:
                     new_word.append(first + second)
                     i += 2
                 else:
@@ -220,11 +227,10 @@ class GPT2Tokenizer(PreTrainedTokenizer):
             word = new_word
             if len(word) == 1:
                 break
-            else:
-                pairs = get_pairs(word)
-        word = " ".join(word)
-        self.cache[token] = word
-        return word
+            pairs = get_pairs(word)
+        word_str = " ".join(word)
+        cache[token] = word_str
+        return word_str
 
     def build_inputs_with_special_tokens(self, token_ids_0, token_ids_1=None):
         if self.add_bos_token:
@@ -274,11 +280,19 @@ class GPT2Tokenizer(PreTrainedTokenizer):
     def _tokenize(self, text):
         """Tokenize a string."""
         bpe_tokens = []
-        for token in re.findall(self.pat, text):
-            token = "".join(
-                self.byte_encoder[b] for b in token.encode("utf-8")
-            )  # Maps all our bytes to unicode strings, avoiding control tokens of the BPE (spaces in our case)
-            bpe_tokens.extend(bpe_token for bpe_token in self.bpe(token).split(" "))
+        pat_findall = self.pat.findall  # method lookup out of loop
+        byte_encoder = self.byte_encoder
+        bpe = self.bpe
+
+        # Fasten byte conversion with join/map rather than genexpr in join
+        for token in pat_findall(text):
+            # Instead of "".join(...), use bytes translation via bytearray for large tokens (faster)
+            encoded = token.encode("utf-8")
+            # Avoid repeated lookups
+            be = byte_encoder
+            mapped = map(be.__getitem__, encoded)
+            token_str = "".join(mapped)
+            bpe_tokens.extend(bpe(token_str).split(" "))
         return bpe_tokens
 
     def _convert_token_to_id(self, token):
