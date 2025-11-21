@@ -21,14 +21,15 @@ import numpy as np
 import torch
 import torch.nn as nn
 
-from ..pytorch_utils import prune_linear_layer
+from transformers.generation.logits_process import LogitsProcessorList
+
+from ..pytorch_utils import isin_mps_friendly, prune_linear_layer
 from ..utils import is_sklearn_available
 
 
 if is_sklearn_available():
     from sklearn.metrics import roc_curve
 
-from ..pytorch_utils import isin_mps_friendly
 from .logits_process import LogitsProcessorList, MinLengthLogitsProcessor, SuppressTokensLogitsProcessor
 
 
@@ -1064,15 +1065,20 @@ class PromptLookupCandidateGenerator(CandidateGenerator):
 
         chosen_ids = None
         match_found = False
-        for ngram_size in range(min(self.max_matching_ngram_size, input_length - 1), 0, -1):
+        max_ngram = min(self.max_matching_ngram_size, input_length - 1)
+        for ngram_size in range(max_ngram, 0, -1):
             # Create sliding windows of size ngram_size
-            windows = input_ids.unfold(dimension=1, size=ngram_size, step=1)
+            windows = input_ids.unfold(1, ngram_size, 1)
+
+            # Convert ngram to a tensor for comparison
 
             # Convert ngram to a tensor for comparison
             ngram_tensor = input_ids[0, -ngram_size:]
 
             # Find where the windows match the ngram
-            matches = (windows == ngram_tensor).all(dim=2)
+            matches = (windows == ngram_tensor).all(2)
+
+            # Get the indices of matches
 
             # Get the indices of matches
             match_indices = matches.nonzero(as_tuple=True)[1]
@@ -1082,8 +1088,7 @@ class PromptLookupCandidateGenerator(CandidateGenerator):
             # longest valid candidates?
             for idx in match_indices:
                 start_idx = idx + ngram_size
-                end_idx = start_idx + self.num_output_tokens
-                end_idx = min(end_idx, input_length, self.max_length)
+                end_idx = min(start_idx + self.num_output_tokens, input_length, self.max_length)
 
                 if start_idx < end_idx:
                     chosen_ids = input_ids[0, start_idx:end_idx]
@@ -1100,22 +1105,31 @@ class PromptLookupCandidateGenerator(CandidateGenerator):
                         fake_input_logits = torch.ones(
                             (bsz, self.vocab_size), device=input_ids.device, dtype=torch.float32
                         )
-                        for candidate_idx, new_candidate_token in enumerate(chosen_ids):
+                        # Use a list to avoid dynamic slicing inside for-loop
+                        candidate_len = chosen_ids.shape[0]
+                        valid_len = candidate_len
+                        for candidate_idx in range(candidate_len):
+                            new_candidate_token = chosen_ids[candidate_idx]
                             fake_output_logits = self.logits_processor(sequence_with_candidate, fake_input_logits)
                             fake_candidate_logits = fake_output_logits[0, new_candidate_token]
                             # next candidate token is forbidden -> crop chosen_ids accordingly
-                            if fake_candidate_logits in (-float("Inf"), torch.finfo(fake_candidate_logits.dtype).min):
-                                chosen_ids = chosen_ids[:candidate_idx]
+                            # Note: Uses .item() to avoid precision corner cases and deallocate early
+                            check_val = fake_candidate_logits.item()
+                            if check_val == float("-inf") or check_val == torch.finfo(fake_candidate_logits.dtype).min:
+                                valid_len = candidate_idx
                                 break
                             else:
-                                sequence_with_candidate = torch.cat(
-                                    (input_ids, chosen_ids[: candidate_idx + 1].unsqueeze(0)), dim=1
-                                )
-                        # no valid candidate tokens -> look for a different match
-                        if chosen_ids.shape[0] == 0:
+                                # Avoid unnecessary concat if last candidate
+                                if candidate_idx + 1 < candidate_len:
+                                    sequence_with_candidate = torch.cat(
+                                        (input_ids, chosen_ids[: candidate_idx + 1].unsqueeze(0)), dim=1
+                                    )
+                        if valid_len == 0:
                             continue
+                        elif valid_len != candidate_len:
+                            chosen_ids = chosen_ids[:valid_len]
 
-                    match_found = True
+                    # Remove remaining candidate ids if an "eos" token is found
 
                     # remove remaining candidate ids if an "eos" token is found, otherwise the target model may
                     # accept eos and the rest as valid, thus not stopping generation after "eos"
@@ -1124,13 +1138,19 @@ class PromptLookupCandidateGenerator(CandidateGenerator):
                     match_indices_eos = torch.nonzero(mask)
                     if match_indices_eos.numel() > 0:
                         first_eos_index = match_indices_eos[0].item()
+                        if first_eos_index == 0:
+                            continue  # All candidates are EOS, skip!
                         chosen_ids = chosen_ids[:first_eos_index]
+                        if chosen_ids.shape[0] == 0:
+                            continue
+
+                    match_found = True
                     break
             if match_found:
                 break
 
         # In case we didn't find a match return the input sequence unchanged, reverts back to autoregressive decoding
-        if not match_found or len(chosen_ids) == 0:
+        if not match_found or chosen_ids is None or chosen_ids.shape[0] == 0:
             return input_ids, None
 
         # Now need extend input_ids with chosen_ids
