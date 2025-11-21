@@ -65,12 +65,14 @@ class PerceiverImageProcessorFast(BaseImageProcessorFast):
         Returns:
             `torch.Tensor`: The center cropped image.
         """
-        if size.height is None or size.width is None:
+        height = size.height
+        width = size.width
+        if height is None or width is None:
             raise ValueError(f"The size dictionary must have keys 'height' and 'width'. Got {size.keys()}")
-        height, width = image.shape[-2:]
-        min_dim = min(height, width)
-        cropped_height = int((size.height / crop_size.height) * min_dim)
-        cropped_width = int((size.width / crop_size.width) * min_dim)
+        image_height, image_width = image.shape[-2:]
+        min_dim = min(image_height, image_width)
+        cropped_height = int((height / crop_size.height) * min_dim)
+        cropped_width = int((width / crop_size.width) * min_dim)
         return super().center_crop(image, SizeDict(height=cropped_height, width=cropped_width))
 
     def _preprocess(
