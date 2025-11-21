@@ -104,10 +104,8 @@ def get_max_height_width(
     if input_data_format is None:
         input_data_format = infer_channel_dimension_format(images_list[0][0])
 
-    image_sizes = []
-    for images in images_list:
-        for image in images:
-            image_sizes.append(get_image_size(image, channel_dim=input_data_format))
+    # Fast list comprehension to build image_sizes
+    image_sizes = [get_image_size(image, channel_dim=input_data_format) for images in images_list for image in images]
 
     max_height, max_width = max_across_indices(image_sizes)
     return (max_height, max_width)
