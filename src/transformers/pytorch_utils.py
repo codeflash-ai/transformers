@@ -164,41 +164,40 @@ def apply_chunking_to_forward(
         return apply_chunking_to_forward(self.forward_chunk, self.chunk_size_lm_head, self.seq_len_dim, hidden_states)
     ```"""
 
+    if chunk_size <= 0:
+        return forward_fn(*input_tensors)
+
     assert len(input_tensors) > 0, f"{input_tensors} has to be a tuple/list of tensors"
 
-    # inspect.signature exist since python 3.5 and is a python method -> no problem with backward compatibility
-    num_args_in_forward_chunk_fn = len(inspect.signature(forward_fn).parameters)
+    num_args_in_forward_chunk_fn = _cached_num_args_in_forward_chunk_fn(forward_fn)
     if num_args_in_forward_chunk_fn != len(input_tensors):
         raise ValueError(
             f"forward_chunk_fn expects {num_args_in_forward_chunk_fn} arguments, but only {len(input_tensors)} input "
             "tensors are given"
         )
 
-    if chunk_size > 0:
-        tensor_shape = input_tensors[0].shape[chunk_dim]
-        for input_tensor in input_tensors:
-            if input_tensor.shape[chunk_dim] != tensor_shape:
-                raise ValueError(
-                    f"All input tenors have to be of the same shape: {tensor_shape}, "
-                    f"found shape {input_tensor.shape[chunk_dim]}"
-                )
-
-        if input_tensors[0].shape[chunk_dim] % chunk_size != 0:
+    tensor_shape = input_tensors[0].shape[chunk_dim]
+    for input_tensor in input_tensors:
+        if input_tensor.shape[chunk_dim] != tensor_shape:
             raise ValueError(
-                f"The dimension to be chunked {input_tensors[0].shape[chunk_dim]} has to be a multiple of the chunk "
-                f"size {chunk_size}"
+                f"All input tenors have to be of the same shape: {tensor_shape}, "
+                f"found shape {input_tensor.shape[chunk_dim]}"
             )
 
-        num_chunks = input_tensors[0].shape[chunk_dim] // chunk_size
+    if input_tensors[0].shape[chunk_dim] % chunk_size != 0:
+        raise ValueError(
+            f"The dimension to be chunked {input_tensors[0].shape[chunk_dim]} has to be a multiple of the chunk "
+            f"size {chunk_size}"
+        )
 
-        # chunk input tensor into tuples
-        input_tensors_chunks = tuple(input_tensor.chunk(num_chunks, dim=chunk_dim) for input_tensor in input_tensors)
-        # apply forward fn to every tuple
-        output_chunks = tuple(forward_fn(*input_tensors_chunk) for input_tensors_chunk in zip(*input_tensors_chunks))
-        # concatenate output at same dimension
-        return torch.cat(output_chunks, dim=chunk_dim)
+    num_chunks = input_tensors[0].shape[chunk_dim] // chunk_size
 
-    return forward_fn(*input_tensors)
+    # chunk input tensor into tuples
+    input_tensors_chunks = tuple(input_tensor.chunk(num_chunks, dim=chunk_dim) for input_tensor in input_tensors)
+    # apply forward fn to every tuple
+    output_chunks = [forward_fn(*input_tensors_chunk) for input_tensors_chunk in zip(*input_tensors_chunks)]
+    # concatenate output at same dimension
+    return torch.cat(output_chunks, dim=chunk_dim)
 
 
 def meshgrid(*tensors: torch.Tensor | list[torch.Tensor], indexing: str | None = None) -> tuple[torch.Tensor, ...]:
@@ -282,3 +281,8 @@ def compile_compatible_method_lru_cache(*lru_args, **lru_kwargs):
         return wrapper
 
     return decorator
+
+
+@lru_cache(maxsize=32)
+def _cached_num_args_in_forward_chunk_fn(forward_fn):
+    return len(inspect.signature(forward_fn).parameters)
