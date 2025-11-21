@@ -180,13 +180,8 @@ def invert_mask(attention_mask):
 
 def triu_onnx(x, diagonal=0):
     l = x.shape[0]
-    arange = torch.arange(l, device=x.device)
-    mask = arange.expand(l, l)
-    arange = arange.unsqueeze(-1)
-    if diagonal:
-        arange = arange + diagonal
-    mask = mask >= arange
-    return x.masked_fill(mask == 0, 0)
+    mask = torch.triu(torch.ones((l, l), dtype=torch.bool, device=x.device), diagonal=diagonal)
+    return x.masked_fill(~mask, 0)
 
 
 def _prepare_fsmt_decoder_inputs(
