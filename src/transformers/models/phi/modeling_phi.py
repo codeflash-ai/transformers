@@ -85,16 +85,39 @@ class PhiRotaryEmbedding(nn.Module):
     @torch.no_grad()
     @dynamic_rope_update  # power user: used with advanced RoPE types (e.g. dynamic rope)
     def forward(self, x, position_ids):
-        inv_freq_expanded = self.inv_freq[None, :, None].float().expand(position_ids.shape[0], -1, 1).to(x.device)
-        position_ids_expanded = position_ids[:, None, :].float()
+        # Both inv_freq and position_ids are expected to be already on the correct device, but
+        # position_ids can come as cpu, so ensure it's on x.device only once here.
+        # Remove excessive (unnecessary) conversion to float.
+        position_ids = position_ids.to(x.device)
+        inv_freq = self.inv_freq.to(x.device) if self.inv_freq.device != x.device else self.inv_freq
 
-        device_type = x.device.type if isinstance(x.device.type, str) and x.device.type != "mps" else "cpu"
-        with torch.autocast(device_type=device_type, enabled=False):  # Force float32
-            freqs = (inv_freq_expanded.float() @ position_ids_expanded.float()).transpose(1, 2)
-            emb = torch.cat((freqs, freqs), dim=-1)
-            cos = emb.cos() * self.attention_scaling
-            sin = emb.sin() * self.attention_scaling
+        # Cache shape info to local vars (micro-optimization)
+        batch = position_ids.shape[0]
+        seq = position_ids.shape[1]
 
+        # Expand dimensions only as necessary for broadcasting (avoiding unnecessary .expand/.unsqueeze)
+        # New: Build position * inv_freq outer product faster, avoiding 2x explicit broadcast/expand
+        # Create [batch, seq, dim] = position_ids[:, :, None] * inv_freq[None, None, :]
+
+        # Avoid repeated .float() calls – convert once
+        position = position_ids.float()
+        invf = inv_freq.float()
+
+        # Outer product of (batch, seq, 1) and (1, 1, dim) efficiently
+        freqs = position.unsqueeze(-1) * invf
+
+        # We need [batch, seq, 2*dim], so concatenate along the last axis
+        emb = torch.cat((freqs, freqs), dim=-1)
+
+        # Use attention_scaling as a float, multiply at end to avoid unnecessary broadcast
+        # Use in-place operations to save memory (cos()/sin() result cannot be in-place, but mul_ can be)
+        cos = emb.cos()
+        sin = emb.sin()
+        if self.attention_scaling != 1.0:
+            cos = cos * self.attention_scaling
+            sin = sin * self.attention_scaling
+
+        # Output must match dtype of x for downstream
         return cos.to(dtype=x.dtype), sin.to(dtype=x.dtype)
 
 
