@@ -1544,15 +1544,20 @@ class Phi4MultimodalRotaryEmbedding(nn.Module):
         """
         base = config.rope_parameters["rope_theta"]
         partial_rotary_factor = getattr(config, "partial_rotary_factor", 1.0)
-        head_dim = getattr(config, "head_dim", None) or config.hidden_size // config.num_attention_heads
+        head_dim = getattr(config, "head_dim", None)
+        if head_dim is None:
+            head_dim = config.hidden_size // config.num_attention_heads
         dim = int(head_dim * partial_rotary_factor)
 
         attention_factor = 1.0  # Unused in this type of RoPE
 
-        # Compute the inverse frequencies
-        inv_freq = 1.0 / (
-            base ** (torch.arange(0, dim, 2, dtype=torch.int64).to(device=device, dtype=torch.float) / dim)
-        )
+        # Compute the inverse frequencies, optimizing tensor construction and dtype handling
+        # Avoid redundant .to(), use constructed dtype directly
+        # Use torch.arange directly with proper dtype on construction
+        arange_dtype = torch.float
+        arange_range = torch.arange(0, dim, 2, dtype=arange_dtype, device=device)
+        inv_freq = 1.0 / (base ** (arange_range / dim))
+
         return inv_freq, attention_factor
 
     @torch.no_grad()
