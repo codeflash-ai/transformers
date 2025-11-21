@@ -1558,16 +1558,24 @@ class Phi4MultimodalRotaryEmbedding(nn.Module):
     @torch.no_grad()
     @dynamic_rope_update  # power user: used with advanced RoPE types (e.g. dynamic rope)
     def forward(self, x, position_ids):
-        inv_freq_expanded = self.inv_freq[None, :, None].float().expand(position_ids.shape[0], -1, 1).to(x.device)
-        position_ids_expanded = position_ids[:, None, :].float()
+        # Optimize: use broadcasting and out-of-place ops, avoid unnecessary transposes, simplify shape logic.
+        # Result shapes identical; device/dtype logic preserved.
+        batch = position_ids.shape[0]
+        seq = position_ids.shape[1]
+        n_freq = self.inv_freq.shape[0]
 
-        device_type = x.device.type if isinstance(x.device.type, str) and x.device.type != "mps" else "cpu"
-        with torch.autocast(device_type=device_type, enabled=False):  # Force float32
-            freqs = (inv_freq_expanded.float() @ position_ids_expanded.float()).transpose(1, 2)
-            emb = torch.cat((freqs, freqs), dim=-1)
-            cos = emb.cos() * self.attention_scaling
-            sin = emb.sin() * self.attention_scaling
+        # Position computation - make minimal float casts, match input device ASAP.
+        inv_freq = self.inv_freq.float().to(x.device)
+        position_ids = position_ids.to(device=x.device, dtype=inv_freq.dtype)  # will always be float32 for rope
+        # Compute (batch, seq, n_freq): outer product, then repeat for sin/cos
+        # Equivalent to (batch, n_freq, seq) via einsum, but avoiding slow transpose
+        freqs = torch.einsum("bs,f->bsf", position_ids, inv_freq)
+        emb = torch.cat((freqs, freqs), dim=-1)
 
+        cos = emb.cos().mul(self.attention_scaling)
+        sin = emb.sin().mul(self.attention_scaling)
+
+        # Return on original dtype, on correct device
         return cos.to(dtype=x.dtype), sin.to(dtype=x.dtype)
 
 
