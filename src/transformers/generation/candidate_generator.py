@@ -21,6 +21,11 @@ import numpy as np
 import torch
 import torch.nn as nn
 
+from transformers.generation.configuration_utils import GenerationConfig
+from transformers.generation.logits_process import LogitsProcessorList, MinLengthLogitsProcessor
+from transformers.modeling_utils import PreTrainedModel
+from transformers.tokenization_utils_base import PreTrainedTokenizerBase
+
 from ..pytorch_utils import prune_linear_layer
 from ..utils import is_sklearn_available
 
@@ -125,11 +130,19 @@ class AssistedCandidateGenerator(CandidateGenerator):
 
         # Prepare the kwargs for the assistant model
         assistant_kwargs = {}
+        # Precompute set for improved "key not in (...)" check performance
+        _excluded_keys = {"encoder_outputs", "past_key_values"}
         for key, value in model_kwargs.items():  # deepcopy crashes if we attempt to copy encoder outputs with grads
-            if key not in ("encoder_outputs", "past_key_values"):
-                assistant_kwargs[key] = (
-                    value.detach().to(device) if isinstance(value, torch.Tensor) else copy.deepcopy(value)
-                )
+            if key not in _excluded_keys:
+                # Avoid unnecessary deepcopy for simple objects and None
+                if isinstance(value, torch.Tensor):
+                    assistant_kwargs[key] = value.detach().to(device)
+                elif value is None or isinstance(value, (str, int, float, bool)):
+                    assistant_kwargs[key] = value
+                else:
+                    assistant_kwargs[key] = copy.deepcopy(value)
+
+        # Remove potential default "logits_to_keep" key
 
         # Remove potential default "logits_to_keep" key
         if "logits_to_keep" in assistant_kwargs and not assistant_model._supports_logits_to_keep():
@@ -154,10 +167,12 @@ class AssistedCandidateGenerator(CandidateGenerator):
         elif "encoder_outputs" in assistant_kwargs:
             # special case for encoder-decoder with decoder-only assistant (like DistilWhisper)
             self.input_ids_key = "input_ids"
-            self.assistant_kwargs["attention_mask"] = self.assistant_kwargs.get(
-                "decoder_attention_mask",
-                torch.ones((input_ids.shape[0], 1), device=input_ids.device, dtype=torch.long),
-            )
+            if "decoder_attention_mask" in self.assistant_kwargs:
+                self.assistant_kwargs["attention_mask"] = self.assistant_kwargs.get("decoder_attention_mask")
+            else:
+                self.assistant_kwargs["attention_mask"] = torch.ones(
+                    (input_ids.shape[0], 1), device=input_ids.device, dtype=torch.long
+                )
         else:
             # both are decoder-only
             self.input_ids_key = "input_ids"
@@ -289,14 +304,20 @@ class AssistedCandidateGenerator(CandidateGenerator):
         self, input_ids: torch.LongTensor, remove_from_pkv: int = 0, num_added_tokens: int = 1
     ) -> bool:
         """Update past key values and attention masks for subsequent generation rounds."""
-        has_past_key_values = self.assistant_kwargs.get("past_key_values", None) is not None
+        pkv = self.assistant_kwargs.get("past_key_values", None)
+        has_past_key_values = pkv is not None
         if has_past_key_values:
-            new_cache_size = input_ids.shape[-1] - 1 - remove_from_pkv
-            self.assistant_kwargs["past_key_values"].crop(new_cache_size - num_added_tokens)
+            # Precompute shape/lengths up front for efficiency
+            seq_len = input_ids.shape[-1]
+            new_cache_size = seq_len - 1 - remove_from_pkv
+            pkv.crop(new_cache_size - num_added_tokens)
+            # These _prepare_* functions are external and may not be inlined for further optimization.
             self.assistant_kwargs = _prepare_attention_mask(
-                self.assistant_kwargs, input_ids.shape[-1], self.assistant_model.config.is_encoder_decoder
+                self.assistant_kwargs, seq_len, self.assistant_model.config.is_encoder_decoder
             )
-            self.assistant_kwargs = _prepare_token_type_ids(self.assistant_kwargs, input_ids.shape[-1])
+            self.assistant_kwargs = _prepare_token_type_ids(self.assistant_kwargs, seq_len)
+            # This unsets `dynamic_full`, needed to initialize a new cache for the assistant. After the first forward
+            # pass on each generation, we reuse the cache instead.
 
             # This unsets `dynamic_full`, needed to initialize a new cache for the assistant. After the first forward
             # pass on each generation, we reuse the cache instead.
@@ -1216,34 +1237,51 @@ def _prepare_attention_mask(model_kwargs: dict[str, Any], new_length: int, is_en
     """Expands or crops the model's mask for decoding purposes, to the defined length"""
 
     mask_key = "decoder_attention_mask" if is_encoder_decoder else "attention_mask"
-    if mask_key not in model_kwargs:
+    # Early exit if not present
+    mask = model_kwargs.get(mask_key)
+    if mask is None:
         return model_kwargs
 
-    mask = model_kwargs[mask_key]
-    mask_length_diff = new_length - mask.shape[1]
+    mask_length = mask.shape[1]
+    mask_length_diff = new_length - mask_length
 
-    if mask_length_diff < 0:
-        model_kwargs[mask_key] = mask[:, :mask_length_diff]
-    elif mask_length_diff > 0:
-        model_kwargs[mask_key] = torch.cat([mask, mask.new_ones((mask.shape[0], mask_length_diff))], dim=-1)
+    # Only edit if length changes
+    if mask_length_diff != 0:
+        # Reduce memory allocation on expansion by allocating once & slicing, instead of cat
+        if mask_length_diff > 0:
+            # Create a buffer of ones, slice view, and concatenate for mask
+            ones = mask.new_ones((mask.shape[0], mask_length_diff))
+            model_kwargs[mask_key] = torch.cat((mask, ones), dim=-1)
+        else:  # mask_length_diff < 0
+            model_kwargs[mask_key] = mask[:, :mask_length_diff]
+
+    # Optimize cross_attention/image_attention mask update by avoiding unnecessary computation if not needed
+    cross_mask = None
+    # Check both cross_attention_mask and image_attention_mask directly to avoid repeated key lookups
 
     # Handle cross attention models
     if "cross_attention_mask" in model_kwargs:
         # Mllama case
         cross_mask = model_kwargs["cross_attention_mask"]
-        if mask_length_diff < 0:
-            model_kwargs["cross_attention_mask"] = cross_mask[:, :mask_length_diff]
-        elif mask_length_diff > 0:
-            new_mask = cross_mask[:, -1:, :, :].repeat(1, mask_length_diff, 1, 1)
-            model_kwargs["cross_attention_mask"] = torch.cat([cross_mask, new_mask], dim=1)
+        cross_mask_shape = cross_mask.shape
+        if mask_length_diff != 0:
+            if mask_length_diff > 0:
+                # Only allocate and repeat if actually needed
+                new_mask = cross_mask[:, -1:, :, :].expand(-1, mask_length_diff, -1, -1)
+                model_kwargs["cross_attention_mask"] = torch.cat((cross_mask, new_mask), dim=1)
+            else:
+                model_kwargs["cross_attention_mask"] = cross_mask[:, :mask_length_diff]
     elif "image_attention_mask" in model_kwargs:
         # IDEFICS case
         cross_mask = model_kwargs["image_attention_mask"]
-        if mask_length_diff < 0:
-            model_kwargs["image_attention_mask"] = cross_mask[:, :mask_length_diff]
-        elif mask_length_diff > 0:
-            new_mask = cross_mask[:, -1:, :].repeat(1, mask_length_diff, 1)
-            model_kwargs["image_attention_mask"] = torch.cat([cross_mask, new_mask], dim=1)
+        cross_mask_shape = cross_mask.shape
+        if mask_length_diff != 0:
+            if mask_length_diff > 0:
+                # Only allocate and repeat if actually needed
+                new_mask = cross_mask[:, -1:, :].expand(-1, mask_length_diff, -1)
+                model_kwargs["image_attention_mask"] = torch.cat((cross_mask, new_mask), dim=1)
+            else:
+                model_kwargs["image_attention_mask"] = cross_mask[:, :mask_length_diff]
 
     return model_kwargs
 
