@@ -127,8 +127,11 @@ def make_pixel_mask(
             Output size of the mask.
     """
     input_height, input_width = get_image_size(image, channel_dim=input_data_format)
-    mask = np.zeros(output_size, dtype=np.int64)
-    mask[:input_height, :input_width] = 1
+    mask = np.ones(output_size, dtype=np.int64)
+    if input_height < output_size[0]:
+        mask[input_height:, :] = 0
+    if input_width < output_size[1]:
+        mask[:, input_width:] = 0
     return mask
 
 
