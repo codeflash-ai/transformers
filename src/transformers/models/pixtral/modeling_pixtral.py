@@ -460,8 +460,11 @@ def generate_block_attention_mask(patch_embeds_list, tensor):
 
     block_end_idx = torch.tensor(patch_embeds_list).cumsum(-1)
     block_start_idx = torch.tensor([0] + patch_embeds_list[:-1]).cumsum(-1)
-    for start, end in zip(block_start_idx, block_end_idx):
-        causal_mask[start:end, start:end] = 0
+
+    block_start_list = block_start_idx.tolist()
+    block_end_list = block_end_idx.tolist()
+    for start, end in zip(block_start_list, block_end_list):
+        causal_mask[start:end, start:end].fill_(0)
 
     causal_mask = causal_mask[None, None, :, :].expand(tensor.shape[0], 1, -1, -1)
     return causal_mask
