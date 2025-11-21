@@ -21,6 +21,10 @@ import numpy as np
 import torch
 import torch.nn as nn
 
+from transformers.generation.logits_process import LogitsProcessorList, SuppressTokensLogitsProcessor
+from transformers.modeling_utils import PreTrainedModel
+from transformers.tokenization_utils_base import PreTrainedTokenizerBase
+
 from ..pytorch_utils import prune_linear_layer
 from ..utils import is_sklearn_available
 
@@ -711,7 +715,12 @@ class AssistantToTargetTranslator:
         self._assistant_to_target_input_ids, self.target_to_assistant_input_ids = (
             self._get_assistant_to_target_input_ids()
         )
-        self._suppress_input_ids: list[int] = self._get_suppress_input_ids()
+
+        # Fast path: cache suppress mask and suppress ids at construction, they never change
+        suppress_mask = self._assistant_to_target_input_ids == self.SUPPRESS_TOKEN_ID
+        self._suppress_mask = suppress_mask
+        self._suppress_input_ids: list[int] = torch.nonzero(suppress_mask, as_tuple=True)[0]
+
         self.logits_processors: Optional[LogitsProcessorList] = None
         self.assistant_prune_lm_head = assistant_prune_lm_head and assistant_model is not None
         if len(self._suppress_input_ids) > 0:
@@ -734,7 +743,7 @@ class AssistantToTargetTranslator:
                 self.map_input_embeddings = map_input_embeddings
             else:
                 self.logits_processors = LogitsProcessorList(
-                    [SuppressTokensLogitsProcessor(self._get_suppress_input_ids(), self._assistant_model_device)]
+                    [SuppressTokensLogitsProcessor(self._suppress_input_ids, self._assistant_model_device)]
                 )
 
     def unmap_input_ids(self):
@@ -786,7 +795,8 @@ class AssistantToTargetTranslator:
         """
         Get the input ids that are in the assistant vocab but not in the target vocab.
         """
-        return torch.where(self._assistant_to_target_input_ids == self.SUPPRESS_TOKEN_ID)[0]
+        # Use the cached mask to avoid repeated computation
+        return self._suppress_input_ids
 
     def get_target_ids(
         self, assistant_input_ids, target_input_ids, assistant_candidate_ids: torch.LongTensor
