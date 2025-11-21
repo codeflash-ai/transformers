@@ -235,10 +235,13 @@ class Wav2Vec2PhonemeCTCTokenizer(PreTrainedTokenizer):
             # create list of phonemes
             text = self.phonemize(text, self.phonemizer_lang)
 
-        # make sure ' ' is between phonemes
-        tokens = text.split(" ")
+        # Split and filter fast using list comprehension, .strip() only if necessary
+        # Instead of lambda and filter, list comprehension is generally faster and avoids function call overhead.
+        if " " in text:
+            tokens = [p for p in text.split(" ") if p]  # No need to strip in the common phonemizer output case
+        else:
+            tokens = [text] if text else []
 
-        tokens = list(filter(lambda p: p.strip() != "", tokens))
         return tokens
 
     def phonemize(self, text: str, phonemizer_lang: Optional[str] = None) -> str:
