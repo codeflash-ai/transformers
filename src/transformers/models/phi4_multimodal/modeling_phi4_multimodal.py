@@ -1199,6 +1199,9 @@ class Phi4MultimodalRMSNorm(nn.Module):
         self.weight = nn.Parameter(torch.ones(hidden_size))
         self.variance_epsilon = eps
 
+        # Store shape string once, since hidden_size and shape are fixed after initialization.
+        self._weight_shape_repr = str((hidden_size,))
+
     def forward(self, hidden_states):
         input_dtype = hidden_states.dtype
         hidden_states = hidden_states.to(torch.float32)
@@ -1207,7 +1210,8 @@ class Phi4MultimodalRMSNorm(nn.Module):
         return self.weight * hidden_states.to(input_dtype)
 
     def extra_repr(self):
-        return f"{tuple(self.weight.shape)}, eps={self.variance_epsilon}"
+        # Use cached string to avoid formatting cost on every call.
+        return f"{self._weight_shape_repr}, eps={self.variance_epsilon}"
 
 
 class Phi4MultimodalMLP(nn.Module):
