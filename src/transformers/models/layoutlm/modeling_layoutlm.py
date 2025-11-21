@@ -366,9 +366,12 @@ class LayoutLMPooler(nn.Module):
     def forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
         # We "pool" the model by simply taking the hidden state corresponding
         # to the first token.
-        first_token_tensor = hidden_states[:, 0]
+
+        # Use torch.select for more efficient column selection over slicing
+        first_token_tensor = hidden_states.select(1, 0)
         pooled_output = self.dense(first_token_tensor)
-        pooled_output = self.activation(pooled_output)
+        # Use torch.tanh directly for minor speedup over initialized nn.Tanh
+        pooled_output = torch.tanh(pooled_output)
         return pooled_output
 
 
