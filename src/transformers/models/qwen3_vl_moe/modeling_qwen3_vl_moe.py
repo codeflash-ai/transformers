@@ -55,10 +55,14 @@ class Qwen3VLMoeTextRMSNorm(nn.Module):
 
     def forward(self, hidden_states):
         input_dtype = hidden_states.dtype
-        hidden_states = hidden_states.to(torch.float32)
-        variance = hidden_states.pow(2).mean(-1, keepdim=True)
-        hidden_states = hidden_states * torch.rsqrt(variance + self.variance_epsilon)
-        return self.weight * hidden_states.to(input_dtype)
+        hidden_states_ft32 = hidden_states.to(torch.float32) if hidden_states.dtype != torch.float32 else hidden_states
+        # Use fused operations and avoid redundant casts
+        variance = torch.mean(hidden_states_ft32 * hidden_states_ft32, dim=-1, keepdim=True)
+        rms_hidden = hidden_states_ft32 * torch.rsqrt(variance + self.variance_epsilon)
+        # Avoid redundant casts if possible
+        if rms_hidden.dtype != input_dtype:
+            rms_hidden = rms_hidden.to(input_dtype)
+        return self.weight * rms_hidden
 
     def extra_repr(self):
         return f"{tuple(self.weight.shape)}, eps={self.variance_epsilon}"
