@@ -77,9 +77,13 @@ class PhiRotaryEmbedding(nn.Module):
         attention_factor = 1.0  # Unused in this type of RoPE
 
         # Compute the inverse frequencies
-        inv_freq = 1.0 / (
-            base ** (torch.arange(0, dim, 2, dtype=torch.int64).to(device=device, dtype=torch.float) / dim)
-        )
+        # Optimize: precompute arange and cast only once, operate directly in float to avoid unnecessary dtype conversions
+        freq_indices = torch.arange(0, dim, 2, device=device, dtype=torch.float)  # direct to float
+        # Move division outside the torch operation for efficiency
+        freq_indices /= dim
+        pow_tensor = torch.pow(base, freq_indices)
+        inv_freq = 1.0 / pow_tensor
+
         return inv_freq, attention_factor
 
     @torch.no_grad()
