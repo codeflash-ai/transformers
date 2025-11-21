@@ -200,23 +200,25 @@ class GraniteMoeTopKGating(nn.Module):
         top_k_gates = torch.softmax(top_k_logits, dim=1).type_as(hidden_states)  # [num_tokens, top_k]
 
         # compute number of input given to each expert
-        zeros = torch.zeros(
-            [top_k_gates.size(0), self.num_experts], dtype=top_k_gates.dtype, device=top_k_gates.device
+        # Use a more memory- and runtime-efficient approach by leveraging torch.bincount
+        batch_size = top_k_gates.size(0)
+        top_k_indices_flat = top_k_indices.reshape(-1)  # [num_tokens * top_k]
+        expert_size = torch.bincount(
+            top_k_indices_flat,
+            minlength=self.num_experts,
         )  # [num_tokens, num_experts]
-        gates = zeros.scatter(1, top_k_indices, 1)  # [num_tokens, num_experts]
-        expert_size = gates.long().sum(0)  # [num_experts,]
         # (This cause torch.compile to fail with `torch._dynamo.exc.Unsupported: Backend compiler failed with a fake tensor exception at`)
         # (and `DataDependentOutputException`)
         expert_size = expert_size.tolist()
 
         # sort and group input tokens according to expert assignment
-        top_k_experts = top_k_indices.flatten()  # [num_tokens * top_k]
-        _, index_sorted_experts = top_k_experts.sort(0)  # [num_tokens * top_k]
+        # Instead of flattening/scattering, directly flatten indices and sort once
+        _, index_sorted_experts = top_k_indices_flat.sort(0)  # [num_tokens * top_k]
         batch_index = index_sorted_experts.div(self.top_k, rounding_mode="trunc")  # [num_tokens * top_k]
 
         # gather the gate values for grouped input tokens
-        top_k_gates = top_k_gates.flatten()  # [num_tokens * top_k]
-        batch_gates = top_k_gates[index_sorted_experts]  # [num_tokens * top_k]
+        top_k_gates_flat = top_k_gates.reshape(-1)  # [num_tokens * top_k]
+        batch_gates = top_k_gates_flat[index_sorted_experts]  # [num_tokens * top_k]
 
         return index_sorted_experts, batch_index, batch_gates, expert_size, logits
 
