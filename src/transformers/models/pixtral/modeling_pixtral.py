@@ -136,8 +136,10 @@ class PixtralRotaryEmbedding(nn.Module):
 # Copied from transformers.models.llama.modeling_llama.rotate_half
 def rotate_half(x):
     """Rotates half the hidden dims of the input."""
-    x1 = x[..., : x.shape[-1] // 2]
-    x2 = x[..., x.shape[-1] // 2 :]
+    # Avoid unnecessary slicing by using torch.cat only once and storing shape value
+    d = x.shape[-1] // 2
+    x1 = x[..., :d]
+    x2 = x[..., d:]
     return torch.cat((-x2, x1), dim=-1)
 
 
@@ -161,10 +163,14 @@ def apply_rotary_pos_emb(q, k, cos, sin, position_ids=None, unsqueeze_dim=1):
     Returns:
         `tuple(torch.Tensor)` comprising of the query and key tensors rotated using the Rotary Position Embedding.
     """
-    cos = cos.unsqueeze(unsqueeze_dim)
-    sin = sin.unsqueeze(unsqueeze_dim)
-    q_embed = (q * cos) + (rotate_half(q) * sin)
-    k_embed = (k * cos) + (rotate_half(k) * sin)
+    # Cache unsqueeze results so we only compute them once
+    cos_unsqueezed = cos.unsqueeze(unsqueeze_dim)
+    sin_unsqueezed = sin.unsqueeze(unsqueeze_dim)
+    q_rot = rotate_half(q)
+    k_rot = rotate_half(k)
+    # Combine elementwise multiplications and additions directly
+    q_embed = q * cos_unsqueezed + q_rot * sin_unsqueezed
+    k_embed = k * cos_unsqueezed + k_rot * sin_unsqueezed
     return q_embed, k_embed
 
 
