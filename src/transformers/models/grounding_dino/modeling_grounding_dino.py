@@ -490,14 +490,17 @@ class GroundingDinoLearnedPositionEmbedding(nn.Module):
 
     def forward(self, pixel_values, pixel_mask=None):
         height, width = pixel_values.shape[-2:]
-        width_values = torch.arange(width, device=pixel_values.device)
-        height_values = torch.arange(height, device=pixel_values.device)
+        device = pixel_values.device
+        width_values = torch.arange(width, device=device)
+        height_values = torch.arange(height, device=device)
         x_emb = self.column_embeddings(width_values)
         y_emb = self.row_embeddings(height_values)
-        pos = torch.cat([x_emb.unsqueeze(0).repeat(height, 1, 1), y_emb.unsqueeze(1).repeat(1, width, 1)], dim=-1)
+        pos = torch.cat(
+            [x_emb.unsqueeze(0).expand(height, width, -1), y_emb.unsqueeze(1).expand(height, width, -1)], dim=-1
+        )
         pos = pos.permute(2, 0, 1)
         pos = pos.unsqueeze(0)
-        pos = pos.repeat(pixel_values.shape[0], 1, 1, 1)
+        pos = pos.expand(pixel_values.shape[0], -1, -1, -1)
         return pos
 
 
