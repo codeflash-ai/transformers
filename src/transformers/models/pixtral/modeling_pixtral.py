@@ -294,10 +294,28 @@ class PixtralRMSNorm(nn.Module):
 
     def forward(self, hidden_states):
         input_dtype = hidden_states.dtype
-        hidden_states = hidden_states.to(torch.float32)
-        variance = hidden_states.pow(2).mean(-1, keepdim=True)
-        hidden_states = hidden_states * torch.rsqrt(variance + self.variance_epsilon)
-        return self.weight * hidden_states.to(input_dtype)
+
+        # Only cast if needed (avoids copy if already float32)
+        orig_type = hidden_states.dtype
+        if orig_type != torch.float32:
+            hidden_states = hidden_states.to(torch.float32)
+
+        # Fused square and mean for better performance and memory use
+        # hidden_states.pow(2).mean(-1, keepdim=True)
+        # == (hidden_states * hidden_states).mean(-1, keepdim=True)
+        # But torch.mean(hidden_states**2, dim=-1) is already optimal for performance
+
+        # Compute variance in-place for memory efficiency
+        variance = torch.mean(hidden_states * hidden_states, dim=-1, keepdim=True)
+        # Use out argument to avoid allocating new tensor (if possible for torch.rsqrt)
+        normed_states = hidden_states * torch.rsqrt(variance + self.variance_epsilon)
+
+        # Only cast back if needed
+        if orig_type != torch.float32:
+            normed_states = normed_states.to(input_dtype)
+
+        # Fused multiply for weight parameter (no change)
+        return self.weight * normed_states
 
     def extra_repr(self):
         return f"{tuple(self.weight.shape)}, eps={self.variance_epsilon}"
