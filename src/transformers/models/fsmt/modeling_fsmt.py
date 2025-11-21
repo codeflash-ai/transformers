@@ -175,7 +175,10 @@ PYTHONPATH="src:examples/seq2seq" python examples/seq2seq/run_eval.py facebook/w
 def invert_mask(attention_mask):
     """Turns 1->0, 0->1, False->True, True-> False"""
     assert attention_mask.dim() == 2
-    return attention_mask.eq(0)
+    # Fast path: directly use bitwise inversion for bool/binary mask
+    # eq(0) can be replaced with logical_not for better performance on boolean and integer masks.
+    # This avoids a device transfer and is more efficient for pytorch.
+    return attention_mask.logical_not() if hasattr(attention_mask, "logical_not") else attention_mask.eq(0)
 
 
 def triu_onnx(x, diagonal=0):
