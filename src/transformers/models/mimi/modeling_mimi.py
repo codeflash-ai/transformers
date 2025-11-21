@@ -495,10 +495,12 @@ class MimiLayerScale(nn.Module):
         super().__init__()
         channels = config.hidden_size
         initial_scale = config.layer_scale_initial_scale
-        self.scale = nn.Parameter(torch.full((channels,), initial_scale, requires_grad=True))
+        # Use torch.ones with multiplication for better performance than torch.full
+        self.scale = nn.Parameter(torch.ones(channels, device="cpu") * initial_scale, requires_grad=True)
 
     def forward(self, x: torch.Tensor):
-        return self.scale * x
+        # Use torch.mul (in-place if possible) for performance; .scale shape aligns with x's last dim
+        return torch.mul(x, self.scale)
 
 
 # Copied from transformers.models.llama.modeling_llama.LlamaRotaryEmbedding with Llama->Mimi
