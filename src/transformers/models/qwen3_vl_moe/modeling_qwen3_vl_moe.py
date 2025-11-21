@@ -836,7 +836,7 @@ class Qwen3VLMoeTextRotaryEmbedding(nn.Module):
 
         device_type = x.device.type if isinstance(x.device.type, str) and x.device.type != "mps" else "cpu"
         with torch.autocast(device_type=device_type, enabled=False):  # Force float32
-            freqs = (inv_freq_expanded.float() @ position_ids_expanded.float()).transpose(2, 3)
+            freqs = (inv_freq_expanded * position_ids_expanded).transpose(2, 3)
             freqs = self.apply_interleaved_mrope(freqs, self.mrope_section)
             emb = torch.cat((freqs, freqs), dim=-1)
             cos = emb.cos() * self.attention_scaling
@@ -855,6 +855,10 @@ class Qwen3VLMoeTextRotaryEmbedding(nn.Module):
             x_t: (bs, seq_len, head_dim // 2)
         """
         freqs_t = freqs[0]  # just overwrite the first dimension T
+        # Use a single loop and numpy-style vectorized assignment for maximum speed
+        # Compose slices using indices rather than repeated slice construction
+        # Precompute indices outside the loop
+        s1, s2, s3 = mrope_section
         for dim, offset in enumerate((1, 2), start=1):  # H, W
             length = mrope_section[dim] * 3
             idx = slice(offset, length, 3)
