@@ -300,7 +300,13 @@ class PixtralRMSNorm(nn.Module):
         return self.weight * hidden_states.to(input_dtype)
 
     def extra_repr(self):
-        return f"{tuple(self.weight.shape)}, eps={self.variance_epsilon}"
+        # Directly index shape instead of creating tuple for a single dimension
+        shape = self.weight.shape
+        if len(shape) == 1:
+            # Avoid tuple() overhead for the 1D case as it is always (N,)
+            return f"({shape[0]},), eps={self.variance_epsilon}"
+        else:
+            return f"{tuple(shape)}, eps={self.variance_epsilon}"
 
 
 class PixtralAttentionLayer(GradientCheckpointingLayer):
