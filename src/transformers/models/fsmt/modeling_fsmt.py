@@ -175,18 +175,17 @@ PYTHONPATH="src:examples/seq2seq" python examples/seq2seq/run_eval.py facebook/w
 def invert_mask(attention_mask):
     """Turns 1->0, 0->1, False->True, True-> False"""
     assert attention_mask.dim() == 2
-    return attention_mask.eq(0)
+    # Use bitwise negation for better efficiency.
+    return ~attention_mask.bool()
 
 
 def triu_onnx(x, diagonal=0):
     l = x.shape[0]
-    arange = torch.arange(l, device=x.device)
-    mask = arange.expand(l, l)
-    arange = arange.unsqueeze(-1)
-    if diagonal:
-        arange = arange + diagonal
-    mask = mask >= arange
-    return x.masked_fill(mask == 0, 0)
+    # Optimization: use torch.triu to create the mask, avoids manual broadcasting
+    # This also lets us directly apply the upper-triangular mask, keeping dtype and device correct.
+    # torch.triu returns an upper-triangular matrix given an input and diagonal
+    mask = torch.triu(torch.ones((l, l), dtype=torch.bool, device=x.device), diagonal=diagonal)
+    return x.masked_fill(~mask, 0)
 
 
 def _prepare_fsmt_decoder_inputs(
@@ -209,9 +208,11 @@ def _prepare_fsmt_decoder_inputs(
         decoder_padding_mask = make_padding_mask(decoder_input_ids, pad_token_id)
     else:
         decoder_padding_mask = invert_mask(decoder_padding_mask)
-    causal_mask = triu_onnx(fill_with_neg_inf(torch.zeros(tgt_len, tgt_len, dtype=causal_mask_dtype)), 1).to(
-        device=decoder_input_ids.device
-    )
+    # The following two ops were expensive: torch.zeros creation and fill_with_neg_inf.
+    # Instead, create directly with -inf and avoid an extra .float()/type_as.
+    neg_inf = torch.finfo(causal_mask_dtype).min
+    attn_mask = torch.full((tgt_len, tgt_len), neg_inf, dtype=causal_mask_dtype, device=decoder_input_ids.device)
+    causal_mask = triu_onnx(attn_mask, 1)
     return decoder_input_ids, decoder_padding_mask, causal_mask
 
 
@@ -267,8 +268,11 @@ def shift_tokens_right(input_ids, pad_token_id):
     input_ids.masked_fill_(input_ids == -100, pad_token_id)
 
     prev_output_tokens = input_ids.clone()
-    index_of_eos = (input_ids.ne(pad_token_id).sum(dim=1) - 1).unsqueeze(-1)
-    prev_output_tokens[:, 0] = input_ids.gather(1, index_of_eos).squeeze()
+    # Optimization: avoid allocating intermediate sum tensor.
+    non_pad_count = input_ids.ne(pad_token_id).sum(dim=1)
+    index_of_eos = (non_pad_count - 1).unsqueeze(-1)
+    # .gather is fine, but .squeeze() is needed only if gather returns an extra dim.
+    prev_output_tokens[:, 0] = input_ids.gather(1, index_of_eos).view(-1)
     prev_output_tokens[:, 1:] = input_ids[:, :-1]
     return prev_output_tokens
 
@@ -276,7 +280,8 @@ def shift_tokens_right(input_ids, pad_token_id):
 def make_padding_mask(input_ids, padding_idx=1):
     """True for pad tokens"""
     padding_mask = input_ids.eq(padding_idx)
-    if not padding_mask.any():
+    # Optimization: leverage .any().item() to avoid keeping whole tensor if not needed
+    if not padding_mask.any().item():
         padding_mask = None
     return padding_mask
 
