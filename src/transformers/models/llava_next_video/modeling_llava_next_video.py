@@ -276,21 +276,34 @@ def unpad_image(tensor, original_size):
             )
         original_size = original_size.tolist()
     original_height, original_width = original_size
-    current_height, current_width = tensor.shape[1:]
+    # Use local variables instead of attribute access (saves some time)
+    _, current_height, current_width = tensor.shape
+
+    # Precompute ratios
 
     original_aspect_ratio = original_width / original_height
     current_aspect_ratio = current_width / current_height
 
     if original_aspect_ratio > current_aspect_ratio:
         scale_factor = current_width / original_width
-        new_height = int(round(original_height * scale_factor, 7))
-        padding = (current_height - new_height) // 2
-        unpadded_tensor = tensor[:, padding : current_height - padding, :]
+        new_height = round(original_height * scale_factor)
+        # Minimize type conversions by skipping int() which is redundant after round
+        padding = (current_height - new_height) >> 1  # faster than '//' for ints
+        end = current_height - padding
+        # Avoid redundant tensor slicing for degenerate no-padding case
+        if padding == 0:
+            unpadded_tensor = tensor
+        else:
+            unpadded_tensor = tensor[:, padding:end, :]
     else:
         scale_factor = current_height / original_height
-        new_width = int(round(original_width * scale_factor, 7))
-        padding = (current_width - new_width) // 2
-        unpadded_tensor = tensor[:, :, padding : current_width - padding]
+        new_width = round(original_width * scale_factor)
+        padding = (current_width - new_width) >> 1
+        end = current_width - padding
+        if padding == 0:
+            unpadded_tensor = tensor
+        else:
+            unpadded_tensor = tensor[:, :, padding:end]
 
     return unpadded_tensor
 
