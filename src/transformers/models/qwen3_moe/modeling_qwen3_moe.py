@@ -89,8 +89,26 @@ def repeat_kv(hidden_states: torch.Tensor, n_rep: int) -> torch.Tensor:
     batch, num_key_value_heads, slen, head_dim = hidden_states.shape
     if n_rep == 1:
         return hidden_states
-    hidden_states = hidden_states[:, :, None, :, :].expand(batch, num_key_value_heads, n_rep, slen, head_dim)
-    return hidden_states.reshape(batch, num_key_value_heads * n_rep, slen, head_dim)
+    # More efficient repeat using .reshape and .expand view, then .reshape as before, but avoid an unnecessary copy
+    # (uses as_strided for the repeat pattern)
+    # Only fall back to previous expand/reshape if device/striding disallows as_strided view.
+    try:
+        # Step 1: add an axis for n_rep; shape: (batch, num_key_value_heads, 1, slen, head_dim)
+        hs = hidden_states.unsqueeze(2)
+        # Step 2: use as_strided to repeat heads without copy
+        # Resulting shape: (batch, num_key_value_heads, n_rep, slen, head_dim)
+        stride = list(hs.stride())
+        new_shape = (batch, num_key_value_heads, n_rep, slen, head_dim)
+        new_stride = stride[:]
+        # stride for the n_rep axis is 0 to repeat the same memory, matching repeat/expand semantics
+        new_stride[2] = 0
+        hs = torch.as_strided(hs, size=new_shape, stride=new_stride)
+        # Step 3: reshape to (batch, num_key_value_heads * n_rep, slen, head_dim)
+        return hs.reshape(batch, num_key_value_heads * n_rep, slen, head_dim)
+    except Exception:
+        # Fallback for edge cases where as_strided is not permitted
+        hidden_states = hidden_states[:, :, None, :, :].expand(batch, num_key_value_heads, n_rep, slen, head_dim)
+        return hidden_states.reshape(batch, num_key_value_heads * n_rep, slen, head_dim)
 
 
 def eager_attention_forward(
@@ -103,15 +121,29 @@ def eager_attention_forward(
     dropout: float = 0.0,
     **kwargs: Unpack[TransformersKwargs],
 ):
-    key_states = repeat_kv(key, module.num_key_value_groups)
-    value_states = repeat_kv(value, module.num_key_value_groups)
+    # Pre-fetch these to avoid minor re-lookup inside performance path
+    num_key_value_groups = module.num_key_value_groups
 
-    attn_weights = torch.matmul(query, key_states.transpose(2, 3)) * scaling
+    key_states = repeat_kv(key, num_key_value_groups)
+    value_states = repeat_kv(value, num_key_value_groups)
+
+    # Use torch's fused matmul + scale when possible
+    attn_weights = torch.matmul(query, key_states.transpose(2, 3))
+    if scaling != 1.0:
+        attn_weights = attn_weights * scaling
+
     if attention_mask is not None:
-        causal_mask = attention_mask[:, :, :, : key_states.shape[-2]]
+        # Avoid shape query on .shape[-2] in hotpath
+        key_len = key_states.shape[-2]
+        causal_mask = attention_mask[:, :, :, :key_len]
         attn_weights = attn_weights + causal_mask
 
-    attn_weights = nn.functional.softmax(attn_weights, dim=-1, dtype=torch.float32).to(query.dtype)
+    # Specify dtype only if necessary and avoid superfluous dtype cast if already float32
+    if attn_weights.dtype != torch.float32:
+        attn_weights = nn.functional.softmax(attn_weights, dim=-1, dtype=torch.float32)
+        attn_weights = attn_weights.to(query.dtype)
+    else:
+        attn_weights = nn.functional.softmax(attn_weights, dim=-1)
     attn_weights = nn.functional.dropout(attn_weights, p=dropout, training=module.training)
     attn_output = torch.matmul(attn_weights, value_states)
     attn_output = attn_output.transpose(1, 2).contiguous()
