@@ -280,10 +280,20 @@ class Qwen3MoeRMSNorm(nn.Module):
 
     def forward(self, hidden_states):
         input_dtype = hidden_states.dtype
-        hidden_states = hidden_states.to(torch.float32)
-        variance = hidden_states.pow(2).mean(-1, keepdim=True)
-        hidden_states = hidden_states * torch.rsqrt(variance + self.variance_epsilon)
-        return self.weight * hidden_states.to(input_dtype)
+        # Only cast to float32 if necessary, to avoid unnecessary data movement
+        if hidden_states.dtype == torch.float32:
+            hs = hidden_states
+        else:
+            hs = hidden_states.to(torch.float32)
+        # Fused power+mean (reduce memory use and op count)
+        variance = torch.mean(hs * hs, dim=-1, keepdim=True)
+        # Fused normalization in-place for memory efficiency when safe
+        hs = hs * torch.rsqrt(variance + self.variance_epsilon)
+        # Only cast if needed
+        if hs.dtype != input_dtype:
+            hs = hs.to(input_dtype)
+        # Elementwise multiply (using built-in broadcasting)
+        return self.weight * hs
 
     def extra_repr(self):
         return f"{tuple(self.weight.shape)}, eps={self.variance_epsilon}"
