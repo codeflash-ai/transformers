@@ -266,11 +266,24 @@ class MimiConv1d(nn.Module):
     ) -> torch.Tensor:
         """See `pad_for_conv1d`."""
         length = hidden_states.shape[-1]
-        n_frames = (length - self.kernel_size + self.padding_total) / self.stride + 1
-        n_frames = torch.ceil(n_frames).to(torch.int64) - 1
-        ideal_length = n_frames * self.stride + self.kernel_size - self.padding_total
 
-        return ideal_length - length
+        # Cache these constants for reuse to reduce attribute access and tensor ops
+        kernel_size = self.kernel_size.item()
+        stride = self.stride.item()
+        padding_total = self.padding_total.item()
+
+        # Compute n_frames using integers and avoid intermediate tensor creation:
+        num = length - kernel_size + padding_total
+        # Instead of using division and then torch.ceil, use integer math for ceiling division:
+        n_frames = (num + stride - 1) // stride + 1
+        # n_frames was previously cast to torch.int64 and subtracted by 1
+        n_frames = n_frames - 1
+
+        # Compute ideal_length using Python ints for multiplications/additions
+        ideal_length = n_frames * stride + kernel_size - padding_total
+
+        # Return a torch scalar tensor for value parity with original
+        return torch.tensor(ideal_length - length, dtype=torch.int64)
 
     @staticmethod
     # Copied from transformers.models.encodec.modeling_encodec.EncodecConv1d._pad1d
