@@ -21,6 +21,11 @@ import numpy as np
 import torch
 import torch.nn as nn
 
+from transformers.generation.configuration_utils import GenerationConfig
+from transformers.generation.logits_process import LogitsProcessorList
+from transformers.modeling_utils import PreTrainedModel
+from transformers.tokenization_utils_base import PreTrainedTokenizerBase
+
 from ..pytorch_utils import prune_linear_layer
 from ..utils import is_sklearn_available
 
@@ -432,14 +437,38 @@ class AssistedCandidateGeneratorDifferentTokenizers(AssistedCandidateGenerator):
             tuple: A tuple containing the start index and length of the longest diagonal.
         """
 
-        diags = AssistedCandidateGeneratorDifferentTokenizers._get_longest_diag_dict(
-            input_matrix, input_matrix.nonzero()
-        )
-        diags_values = list(diags.values())
-        diags_keys = list(diags.keys())
-        best_diag = np.argmax(diags_values)
-        diag_start_index = diags_keys[best_diag]
-        diag_start_length = diags_values[best_diag]
+        # If not torch tensor, convert (numpy only happens in test/odd cases)
+        if not torch.is_tensor(input_matrix):
+            input_matrix = torch.from_numpy(input_matrix)
+
+        nonzeros = torch.nonzero(input_matrix, as_tuple=False)
+        if len(nonzeros) == 0:
+            # Value will be ignored, downstream code will not be used
+            return None, 0
+        # Fast: use preallocated tensor for diag lengths, with mapping from linear index
+        diag_lengths = torch.zeros(len(nonzeros), dtype=torch.long, device=input_matrix.device)
+        visited = set()
+        H, W = input_matrix.shape
+
+        for i, idx in enumerate(nonzeros):
+            r, c = idx.tolist()
+            key = (r, c)
+            if key in visited:
+                continue
+            cur_r, cur_c = r, c
+            length = 1
+            visited.add(key)
+            while cur_r + 1 < H and cur_c + 1 < W and input_matrix[cur_r + 1, cur_c + 1] == 1:
+                cur_r += 1
+                cur_c += 1
+                visited.add((cur_r, cur_c))
+                length += 1
+            diag_lengths[i] = length
+
+        # Find the maximum length and index
+        best_diag = torch.argmax(diag_lengths).item()
+        diag_start_index = tuple(nonzeros[best_diag].tolist())
+        diag_start_length = diag_lengths[best_diag].item()
         return diag_start_index, diag_start_length
 
     @staticmethod
@@ -456,19 +485,30 @@ class AssistedCandidateGeneratorDifferentTokenizers(AssistedCandidateGenerator):
         compare_mat = prompt_plus_new_tokens.T == prompt
         if not torch.is_tensor(compare_mat):
             compare_mat = torch.tensor(compare_mat)
-
-        compare_mat_int = compare_mat.to(int)
-
-        if not compare_mat_int.any().item():
+        compare_mat_int = compare_mat.to(dtype=torch.int8)
+        if not compare_mat_int.any():
+            # empty intersection between prompt and prompt_plus_new_tokens
             # empty intersection between prompt and prompt_plus_new_tokens
             return None, None, None
 
         longest_location, longest_diag_length = AssistedCandidateGeneratorDifferentTokenizers._get_longest_diag_index(
             compare_mat_int
         )
+        # If diag is not found for some reason, fail (shouldn't happen given above logic)
+        if longest_location is None:
+            return None, None, None
+
         new_token_start_index = longest_location[0] + longest_diag_length
         discrepancy_with_old = longest_location[1] + longest_diag_length
-        discrepancy_length = (prompt.shape[1] - discrepancy_with_old).item()
+
+        # prompt.shape[1] is a tensor, so call .item() in a single place for final int
+        prompt_len = prompt.shape[1]
+        discrepancy_length = prompt_len - discrepancy_with_old
+        # Defensive: ensure it's int if torch scalar, to satisfy expected shape slicing
+        if isinstance(discrepancy_length, torch.Tensor):
+            discrepancy_length = discrepancy_length.item()
+
+        # Slice along last dimension, no data copy, highly efficient
         new_tokens_only = prompt_plus_new_tokens[:, new_token_start_index + discrepancy_length :]
         discrepancy_only = prompt_plus_new_tokens[
             :, new_token_start_index : new_token_start_index + discrepancy_length
