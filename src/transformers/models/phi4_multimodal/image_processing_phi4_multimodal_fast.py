@@ -150,8 +150,9 @@ class Phi4MultimodalImageProcessorFast(BaseImageProcessorFast):
     def pad_mask_to_max_num_crops(self, masks, max_crops=5):
         B, H, W = masks.shape
         if B < max_crops:
-            pad = torch.ones(max_crops - B, H, W, dtype=masks.dtype, device=masks.device)
-            masks = torch.cat([masks, pad], dim=0)
+            out = masks.new_ones((max_crops, H, W))
+            out[:B] = masks
+            return out
         return masks
 
     @auto_docstring
