@@ -278,16 +278,20 @@ class MimiConv1d(nn.Module):
         """Tiny wrapper around torch.nn.functional.pad, just to allow for reflect padding on small input.
         If this is the case, we insert extra 0 padding to the right before the reflection happens.
         """
-        length = hidden_states.shape[-1]
-        padding_left, padding_right = paddings
+        # Fast path for the vast majority of cases:
         if mode != "reflect":
             return nn.functional.pad(hidden_states, paddings, mode, value)
 
+        length = hidden_states.shape[-1]
+        padding_left, padding_right = paddings
         max_pad = max(padding_left, padding_right)
-        extra_pad = 0
-        if length <= max_pad:
-            extra_pad = max_pad - length + 1
-            hidden_states = nn.functional.pad(hidden_states, (0, extra_pad))
+        if length > max_pad:
+            # Fast reflect path
+            return nn.functional.pad(hidden_states, paddings, mode, value)
+
+        # Only do the (rare) extra zero path when necessary
+        extra_pad = max_pad - length + 1
+        hidden_states = nn.functional.pad(hidden_states, (0, extra_pad))
         padded = nn.functional.pad(hidden_states, paddings, mode, value)
         end = padded.shape[-1] - extra_pad
         return padded[..., :end]
