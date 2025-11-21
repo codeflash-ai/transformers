@@ -278,7 +278,10 @@ class PixtralMLP(nn.Module):
         self.act_fn = ACT2FN[config.hidden_act]
 
     def forward(self, x):
-        down_proj = self.down_proj(self.act_fn(self.gate_proj(x)) * self.up_proj(x))
+        gate_out = self.gate_proj(x)
+        up_out = self.up_proj(x)
+        activated = self.act_fn(gate_out)
+        down_proj = self.down_proj(activated * up_out)
         return down_proj
 
 
