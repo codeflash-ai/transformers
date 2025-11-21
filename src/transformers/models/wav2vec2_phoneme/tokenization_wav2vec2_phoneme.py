@@ -338,27 +338,42 @@ class Wav2Vec2PhonemeCTCTokenizer(PreTrainedTokenizer):
         Converts a connectionist-temporal-classification (CTC) output tokens into a single string.
         """
         # group same tokens into non-repeating tokens in CTC style decoding
+
+        # --- OPTIMIZATION: Replace repeated filter lambdas with set-based filtering ---
+        # Fetch direct token values for fast membership tests
+        pad_token = self.pad_token
+        word_delimiter_token = self.word_delimiter_token
+
+        # group same tokens into non-repeating tokens in CTC style decoding
         if group_tokens:
-            chars, char_repetitions = zip(*((token, len(list(group_iter))) for token, group_iter in groupby(tokens)))
+            # Use local variables for performance; generator comprehensions can be slightly faster than repeated list(group_iter)
+            chars, char_repetitions = zip(
+                *((token, sum(1 for _ in group_iter)) for token, group_iter in groupby(tokens))
+            )
         else:
-            chars = tokens
-            char_repetitions = len(tokens) * [1]
+            chars = tuple(tokens)
+            char_repetitions = tuple([1] * len(tokens))
 
-        # filter self.pad_token which is used as CTC-blank token
-        processed_chars = list(filter(lambda char: char != self.pad_token, chars))
+        # OPTIMIZATION: Inline filtering by building a mask; avoids repeated traversals
+        # Avoid slow list(filter(lambda ...))
+        processed_chars = []
+        if filter_word_delimiter_token and word_delimiter_token is not None:
+            for char in chars:
+                if char != pad_token and char != word_delimiter_token:
+                    processed_chars.append(char)
+        else:
+            for char in chars:
+                if char != pad_token:
+                    processed_chars.append(char)
 
-        # also filter self.word_delimiter_token if not not
-        if filter_word_delimiter_token and self.word_delimiter_token is not None:
-            processed_chars = list(filter(lambda token: token != self.word_delimiter_token, processed_chars))
+        # retrieve offsets
 
         # retrieve offsets
         char_offsets = None
         if output_char_offsets:
-            word_delimiter_token_for_offsets = (
-                self.word_delimiter_token if filter_word_delimiter_token is True else None
-            )
+            word_delimiter_token_for_offsets = word_delimiter_token if filter_word_delimiter_token is True else None
             char_offsets = self._compute_offsets(
-                char_repetitions, chars, self.pad_token, word_delimiter_token=word_delimiter_token_for_offsets
+                char_repetitions, chars, pad_token, word_delimiter_token=word_delimiter_token_for_offsets
             )
 
             if len(char_offsets) != len(processed_chars):
@@ -387,12 +402,11 @@ class Wav2Vec2PhonemeCTCTokenizer(PreTrainedTokenizer):
             {"char": t, "start_offset": s, "end_offset": e} for t, s, e in zip(chars, start_indices, end_indices)
         ]
 
-        # filter out CTC token
-        offsets = list(filter(lambda offsets: offsets["char"] != ctc_token, offsets))
-
         # filter out word delimiter token if necessary
         if word_delimiter_token is not None:
-            offsets = list(filter(lambda offsets: offsets["char"] != word_delimiter_token, offsets))
+            offsets = [off for off in offsets if off["char"] != ctc_token and off["char"] != word_delimiter_token]
+        else:
+            offsets = [off for off in offsets if off["char"] != ctc_token]
 
         return offsets
 
