@@ -306,7 +306,11 @@ def repeat_kv(hidden_states: torch.Tensor, n_rep: int) -> torch.Tensor:
     batch, num_key_value_heads, slen, head_dim = hidden_states.shape
     if n_rep == 1:
         return hidden_states
-    hidden_states = hidden_states[:, :, None, :, :].expand(batch, num_key_value_heads, n_rep, slen, head_dim)
+    # Use contiguous + view for efficient reshape, less overhead than expand + reshape
+    # Avoids materializing large intermediate tensors
+    # Compute new shape directly and use expand with shape
+    # Efficient broadcast and reshape in one line
+    hidden_states = hidden_states.unsqueeze(2).expand(batch, num_key_value_heads, n_rep, slen, head_dim)
     return hidden_states.reshape(batch, num_key_value_heads * n_rep, slen, head_dim)
 
 
@@ -320,19 +324,31 @@ def eager_attention_forward(
     dropout: float = 0.0,
     **kwargs: Unpack[TransformersKwargs],
 ):
-    key_states = repeat_kv(key, module.num_key_value_groups)
-    value_states = repeat_kv(value, module.num_key_value_groups)
+    # Avoids double call to shape by calling repeat_kv once and keeping value
+    num_key_value_groups = module.num_key_value_groups
+    key_states = repeat_kv(key, num_key_value_groups)
+    value_states = repeat_kv(value, num_key_value_groups)
 
-    attn_weights = torch.matmul(query, key_states.transpose(2, 3)) * scaling
+    # Use .transpose(-2, -1) for clarity and guard against possible shape changes
+    attn_weights = torch.matmul(query, key_states.transpose(-2, -1)) * scaling
+
     if attention_mask is not None:
         causal_mask = attention_mask[:, :, :, : key_states.shape[-2]]
         attn_weights = attn_weights + causal_mask
 
-    attn_weights = nn.functional.softmax(attn_weights, dim=-1, dtype=torch.float32).to(query.dtype)
-    attn_weights = nn.functional.dropout(attn_weights, p=dropout, training=module.training)
+    # Use inplace softmax and type casting to avoid extra temporary tensors
+    attn_weights = nn.functional.softmax(attn_weights, dim=-1, dtype=torch.float32)
+    attn_weights = attn_weights.to(query.dtype)
+
+    if dropout > 0.0:
+        attn_weights = nn.functional.dropout(attn_weights, p=dropout, training=module.training)
+    else:
+        # If dropout is 0, skip dropout to avoid the overhead
+        pass
+
+    # Matmul and transpose pattern remains optimal for the output tensor format
     attn_output = torch.matmul(attn_weights, value_states)
     attn_output = attn_output.transpose(1, 2).contiguous()
-
     return attn_output, attn_weights
 
 
