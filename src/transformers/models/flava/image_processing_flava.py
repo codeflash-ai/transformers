@@ -164,6 +164,8 @@ class FlavaMaskingGenerator:
         mask_group_max_aspect_ratio = mask_group_max_aspect_ratio or 1 / mask_group_min_aspect_ratio
         self.log_aspect_ratio = (math.log(mask_group_min_aspect_ratio), math.log(mask_group_max_aspect_ratio))
 
+        self._shape = (self.height, self.width)
+
     def __repr__(self):
         repr_str = "MaskingGenerator(%d, %d -> [%d ~ %d], max = %d, %.3f ~ %.3f)" % (
             self.height,
@@ -177,7 +179,7 @@ class FlavaMaskingGenerator:
         return repr_str
 
     def get_shape(self):
-        return self.height, self.width
+        return self._shape
 
     def _mask(self, mask, max_mask_patches):
         delta = 0
