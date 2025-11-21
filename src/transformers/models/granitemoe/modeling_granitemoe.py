@@ -53,10 +53,23 @@ class GraniteMoeRMSNorm(nn.Module):
 
     def forward(self, hidden_states):
         input_dtype = hidden_states.dtype
-        hidden_states = hidden_states.to(torch.float32)
-        variance = hidden_states.pow(2).mean(-1, keepdim=True)
-        hidden_states = hidden_states * torch.rsqrt(variance + self.variance_epsilon)
-        return self.weight * hidden_states.to(input_dtype)
+
+        # Fast path: if fp32 input, avoid unnecessary .to() ops
+        if input_dtype != torch.float32:
+            hidden_states_fp32 = hidden_states.to(torch.float32)
+        else:
+            hidden_states_fp32 = hidden_states
+
+        # Fused operations for better kernel efficiency (saves temp buffers and synchronizations)
+        variance = torch.mean(hidden_states_fp32 * hidden_states_fp32, dim=-1, keepdim=True)
+        normed = hidden_states_fp32 * torch.rsqrt(variance + self.variance_epsilon)
+
+        # Cast back only if needed
+        if input_dtype != torch.float32:
+            normed = normed.to(input_dtype)
+
+        # Fused parameter multiplication before returning
+        return self.weight * normed
 
     def extra_repr(self):
         return f"{tuple(self.weight.shape)}, eps={self.variance_epsilon}"
