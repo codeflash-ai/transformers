@@ -408,16 +408,31 @@ class Qwen3MoeRotaryEmbedding(nn.Module):
     @torch.no_grad()
     @dynamic_rope_update  # power user: used with advanced RoPE types (e.g. dynamic rope)
     def forward(self, x, position_ids):
-        inv_freq_expanded = self.inv_freq[None, :, None].float().expand(position_ids.shape[0], -1, 1).to(x.device)
-        position_ids_expanded = position_ids[:, None, :].float()
+        # Efficiently compute the rotary frequencies and embeddings
+        # Remove redundant .float() conversion when not needed
 
-        device_type = x.device.type if isinstance(x.device.type, str) and x.device.type != "mps" else "cpu"
-        with torch.autocast(device_type=device_type, enabled=False):  # Force float32
-            freqs = (inv_freq_expanded.float() @ position_ids_expanded.float()).transpose(1, 2)
-            emb = torch.cat((freqs, freqs), dim=-1)
-            cos = emb.cos() * self.attention_scaling
-            sin = emb.sin() * self.attention_scaling
+        # Precompute dtype/device
+        batch_size = position_ids.shape[0]
+        seq_len = position_ids.shape[1]
 
+        inv_freq = self.inv_freq
+        device = x.device
+
+        # Use torch.outer instead of matmul for frequency calculation: faster and more memory efficient for 1D vectors
+        position_ids_float = position_ids.to(dtype=inv_freq.dtype, device=inv_freq.device)
+        # position_ids: [batch, seq_len] → [batch*seq_len]
+        positions_flat = position_ids_float.view(-1)
+        # inv_freq: [dim] × positions_flat: [batch*seq_len] → [batch*seq_len, dim]
+        freqs = torch.outer(positions_flat, inv_freq)
+        # reshape to [batch, seq_len, dim]
+        freqs = freqs.view(batch_size, seq_len, inv_freq.shape[0])
+
+        # Duplicate for rotary embedding
+        emb = torch.cat((freqs, freqs), dim=-1)
+        cos = emb.cos() * self.attention_scaling
+        sin = emb.sin() * self.attention_scaling
+
+        # Cast to input tensor dtype before returning
         return cos.to(dtype=x.dtype), sin.to(dtype=x.dtype)
 
 
