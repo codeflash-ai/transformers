@@ -542,46 +542,66 @@ class PreTrainedTokenizer(PreTrainedTokenizerBase):
         added_tokens = 0
         if new_tokens is None:
             return added_tokens
-        # TODO this is fairly slow to improve!
-        current_vocab = self.get_vocab().copy()
+
+        # Shallow copy for performance: vocab dicts are usually flat
+        current_vocab = dict(self.get_vocab())
         new_idx = len(current_vocab)  # only call this once, len gives the last index + 1
+
+        # Locally cache commonly used attributes to speed up loop
+        _added_tokens_encoder = self._added_tokens_encoder
+        _added_tokens_decoder = self._added_tokens_decoder
+        _special_tokens_map = self._special_tokens_map
+        all_special_tokens = self.all_special_tokens
+        do_lower_case = getattr(self, "do_lower_case", False)
+        verbose = getattr(self, "verbose", False)
+
+        # For faster membership checking
+        all_special_tokens_set = set(all_special_tokens)
+
         for token in new_tokens:
             if not isinstance(token, (str, AddedToken)):
                 raise TypeError(f"Token {token} is not a string but a {type(token)}.")
-            if str(token) == "":
+            token_str = str(token)
+            if token_str == "":
                 continue
             if isinstance(token, str):
-                if token in self._added_tokens_encoder:
+                if token in _added_tokens_encoder:
                     continue
-                else:
-                    # very important for fast and slow equivalence!
-                    is_special = token in self.all_special_tokens or special_tokens
-                    token = AddedToken(
-                        token, rstrip=False, lstrip=False, normalized=not is_special, special=is_special
-                    )
-            elif special_tokens:
-                # doing token.special=True changes the normalization! will fix in rust
-                # this is important and the only reason why the AddedTokens in each class are normalized by default
-                token.__setstate__({"special": True, "normalized": token.normalized})
-            if token in self._added_tokens_decoder:
+                # very important for fast and slow equivalence!
+                is_special = (token in all_special_tokens_set) or special_tokens
+                token_obj = AddedToken(
+                    token, rstrip=False, lstrip=False, normalized=not is_special, special=is_special
+                )
+            else:
+                token_obj = token
+                if special_tokens:
+                    # doing token.special=True changes the normalization! will fix in rust
+                    # this is important and the only reason why the AddedTokens in each class are normalized by default
+                    token_obj.__setstate__({"special": True, "normalized": token_obj.normalized})
+
+            if token_obj in _added_tokens_decoder:
                 continue
-            if not token.special and token.normalized and getattr(self, "do_lower_case", False):
-                # Normalize if requested
-                token.content = token.content.lower()
-            if token.content not in current_vocab:
+
+            # Normalize if requested
+            if not token_obj.special and token_obj.normalized and do_lower_case:
+                token_obj.content = token_obj.content.lower()
+
+            content = token_obj.content
+            if content not in current_vocab:
                 token_index = new_idx + added_tokens
-                current_vocab[token.content] = token_index
+                current_vocab[content] = token_index
                 added_tokens += 1
             else:
-                token_index = current_vocab[token.content]
+                token_index = current_vocab[content]
 
-            if token.special and str(token) not in self.all_special_tokens:
-                self._special_tokens_map["additional_special_tokens"].append(token)
+            if token_obj.special and token_str not in all_special_tokens_set:
+                _special_tokens_map["additional_special_tokens"].append(token_obj)
             # the setter automatically updates the reverse map
-            self._added_tokens_decoder[token_index] = token
-            self._added_tokens_encoder[token.content] = token_index
-            if self.verbose:
-                logger.info(f"Adding {token} to the vocabulary")
+            _added_tokens_decoder[token_index] = token_obj
+            _added_tokens_encoder[content] = token_index
+
+            if verbose:
+                logger.info(f"Adding {token_obj} to the vocabulary")
 
         self._update_trie()
         self._update_total_vocab_size()

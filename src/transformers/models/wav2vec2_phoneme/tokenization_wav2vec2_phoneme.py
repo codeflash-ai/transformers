@@ -155,12 +155,14 @@ class Wav2Vec2PhonemeCTCTokenizer(PreTrainedTokenizer):
 
     def _add_tokens(self, new_tokens: Union[list[str], list[AddedToken]], special_tokens: bool = False) -> int:
         # Overwritten to never strip!
-        to_add = []
-        for token in new_tokens:
-            if isinstance(token, str):
-                to_add.append(AddedToken(token, rstrip=False, lstrip=False, normalized=True, special=special_tokens))
-            else:
-                to_add.append(token)
+        # OPTIMIZED: Pre-allocated list, local attribute caching
+        AddedToken_local = AddedToken  # Localize for faster repeated access
+        to_add = [
+            AddedToken_local(token, rstrip=False, lstrip=False, normalized=True, special=special_tokens)
+            if isinstance(token, str)
+            else token
+            for token in new_tokens
+        ]
 
         return super()._add_tokens(to_add, special_tokens)
 
