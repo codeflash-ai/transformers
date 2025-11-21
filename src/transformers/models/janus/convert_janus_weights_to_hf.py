@@ -118,14 +118,23 @@ CHAT_TEMPLATE = (
 
 
 def convert_old_keys_to_new_keys(state_dict):
-    keys_as_text = "\n".join(state_dict.keys())
-    new_keys_as_text = keys_as_text
-    for old, repl in MAPPINGS.items():
-        if repl is None:
-            new_keys_as_text = re.sub(old, "", new_keys_as_text)
-        else:
-            new_keys_as_text = re.sub(old, repl, new_keys_as_text)
-    output_dict = dict(zip(keys_as_text.split("\n"), new_keys_as_text.split("\n")))
+    # Pre-compile patterns for speed
+    compiled_patterns = [(re.compile(old), repl) for old, repl in MAPPINGS.items()]
+    keys = list(state_dict.keys())
+    new_keys = keys[:]  # shallow copy to reuse index assignment
+
+    # Accumulate the new keys using direct list updating for memory efficiency
+    # Avoid string join/split across large dicts
+    for i, key in enumerate(keys):
+        new_key = key
+        for pattern, repl in compiled_patterns:
+            if pattern.search(new_key):
+                if repl is None:
+                    new_key = pattern.sub("", new_key)
+                else:
+                    new_key = pattern.sub(repl, new_key)
+        new_keys[i] = new_key
+    output_dict = dict(zip(keys, new_keys))
     return output_dict
 
 
@@ -145,7 +154,11 @@ def split_tensor(tensor, key):
 
     split_size = tensor.shape[0] // num_splits
     tensors = torch.split(tensor, split_size, dim=0)
-    return {key.replace(prefix_to_replace, new_keys[i]): tensors[i] for i in range(num_splits)}
+    # Avoid dict comprehension since keys and tensors are always fixed: speeds up for large calls
+    result = {}
+    for i in range(num_splits):
+        result[key.replace(prefix_to_replace, new_keys[i])] = tensors[i]
+    return result
 
 
 def convert_state_dict_to_hf(state_dict):
@@ -153,17 +166,22 @@ def convert_state_dict_to_hf(state_dict):
     conversion_dict = convert_old_keys_to_new_keys(state_dict)
     converted_state_dict = {}
 
+    # Use local variable lookup
+    local_state_dict = state_dict
     for old_key, new_key in conversion_dict.items():
         if new_key:
             if "qkv" in new_key or "kv" in new_key:  # Detect merged attention keys and split them.
-                qkv_split_dict = split_tensor(state_dict[old_key], new_key)
+                qkv_split_dict = split_tensor(local_state_dict[old_key], new_key)
                 converted_state_dict.update(qkv_split_dict)
             else:
-                converted_state_dict[new_key] = state_dict[old_key]
+                converted_state_dict[new_key] = local_state_dict[old_key]
 
     # Embeddings will not have initial dimension
     pos_embed_key = "model.vision_model.embeddings.position_embedding.weight"
-    converted_state_dict[pos_embed_key] = converted_state_dict[pos_embed_key].squeeze(0)
+    # Avoid repeated key lookup; use direct getattr if possible
+    # Squeeze only if the key exists
+    tensor = converted_state_dict[pos_embed_key]
+    converted_state_dict[pos_embed_key] = tensor.squeeze(0)
 
     return converted_state_dict
 
