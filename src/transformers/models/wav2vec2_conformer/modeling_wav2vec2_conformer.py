@@ -164,30 +164,48 @@ class Wav2Vec2ConformerRelPositionalEmbedding(nn.Module):
         self.max_len = config.max_source_positions
         self.d_model = config.hidden_size
         self.pe = None
+        self._pe_position = None
+        self._pe_div_term = None
         self.extend_pe(torch.tensor(0.0).expand(1, self.max_len))
 
     def extend_pe(self, x):
         # Reset the positional encodings
+        # Reset the positional encodings
+        seqlen = x.size(1)
+        required_pe_len = seqlen * 2 - 1
+
+        # Only recalculate if necessary
         if self.pe is not None:
-            # self.pe contains both positive and negative parts
-            # the length of self.pe is 2 * input_len - 1
-            if self.pe.size(1) >= x.size(1) * 2 - 1:
+            if self.pe.size(1) >= required_pe_len:
                 if self.pe.dtype != x.dtype or self.pe.device != x.device:
                     self.pe = self.pe.to(dtype=x.dtype, device=x.device)
                 return
-        # Suppose `i` is the position of query vector and `j` is the
-        # position of key vector. We use positive relative positions when keys
-        # are to the left (i>j) and negative relative positions otherwise (i<j).
-        pe_positive = torch.zeros(x.size(1), self.d_model)
-        pe_negative = torch.zeros(x.size(1), self.d_model)
-        position = torch.arange(0, x.size(1), dtype=torch.int64).float().unsqueeze(1)
-        div_term = torch.exp(
-            torch.arange(0, self.d_model, 2, dtype=torch.int64).float() * -(math.log(10000.0) / self.d_model)
-        )
-        pe_positive[:, 0::2] = torch.sin(position * div_term)
-        pe_positive[:, 1::2] = torch.cos(position * div_term)
-        pe_negative[:, 0::2] = torch.sin(-1 * position * div_term)
-        pe_negative[:, 1::2] = torch.cos(-1 * position * div_term)
+
+        # Precompute div_term if not done, or if d_model changed (shouldn't in normal use)
+        if self._pe_div_term is None or self._pe_div_term.size(0) != (self.d_model // 2):
+            arange_2 = torch.arange(0, self.d_model, 2, dtype=torch.float32)
+            self._pe_div_term = torch.exp(arange_2 * -(math.log(10000.0) / self.d_model))
+        div_term = self._pe_div_term
+
+        # Use torch.zeros_like if possible to allocate on correct device/dtype
+        pe_positive = torch.zeros(seqlen, self.d_model, dtype=torch.float32)
+        pe_negative = torch.zeros(seqlen, self.d_model, dtype=torch.float32)
+
+        # Precompute position matrix if not already or size changed
+        if self._pe_position is None or self._pe_position.size(0) != seqlen:
+            self._pe_position = torch.arange(0, seqlen, dtype=torch.float32).unsqueeze(1)
+        position = self._pe_position
+
+        pos_times_div = position * div_term
+        neg_times_div = -position * div_term
+
+        # Sine and cosine assignment for even/odd positions in a single step to avoid repeated slicing
+        pe_positive[:, 0::2] = torch.sin(pos_times_div)
+        pe_positive[:, 1::2] = torch.cos(pos_times_div)
+        pe_negative[:, 0::2] = torch.sin(neg_times_div)
+        pe_negative[:, 1::2] = torch.cos(neg_times_div)
+
+        # Reverse the order of positive indices and concat both positive and negative indices.
 
         # Reverse the order of positive indices and concat both positive and
         # negative indices. This is used to support the shifting trick
@@ -199,8 +217,10 @@ class Wav2Vec2ConformerRelPositionalEmbedding(nn.Module):
 
     def forward(self, hidden_states: torch.Tensor):
         self.extend_pe(hidden_states)
-        start_idx = self.pe.size(1) // 2 - hidden_states.size(1) + 1
-        end_idx = self.pe.size(1) // 2 + hidden_states.size(1)
+        # Only compute offsets and slicing once
+        seq_len = hidden_states.size(1)
+        start_idx = self.pe.size(1) // 2 - seq_len + 1
+        end_idx = self.pe.size(1) // 2 + seq_len
         relative_position_embeddings = self.pe[:, start_idx:end_idx]
 
         return relative_position_embeddings
