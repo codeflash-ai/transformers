@@ -89,6 +89,15 @@ class Attention(nn.Module):
         return x.view(*new_x_shape)
 
     def split_heads(self, x, k=False):
+        if x.ndim == 3:
+            batch, seq, embed = x.shape
+            head_size = embed // self.n_head
+            x = x.view(batch, seq, self.n_head, head_size)
+            if k:
+                return x.permute(0, 2, 3, 1)
+            else:
+                return x.permute(0, 2, 1, 3)
+
         new_x_shape = x.size()[:-1] + (self.n_head, x.size(-1) // self.n_head)
         x = x.view(*new_x_shape)
         if k:
