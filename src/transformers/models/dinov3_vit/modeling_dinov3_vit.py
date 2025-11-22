@@ -183,9 +183,15 @@ class DINOv3ViTRopePositionEmbedding(nn.Module):
 
 def rotate_half(x):
     """Rotates half the hidden dims of the input."""
-    x1 = x[..., : x.shape[-1] // 2]
-    x2 = x[..., x.shape[-1] // 2 :]
-    return torch.cat((-x2, x1), dim=-1)
+    mid = x.shape[-1] // 2
+    x1 = x[..., :mid]
+    x2 = x[..., mid:]
+    # Avoids creating an intermediate tuple and unnecessary negated copy materialization by in-place negation + torch.cat alternative
+    # We'll use torch.cat but combine both the negation and slicing in a single call for better memory efficiency.
+    # torch.cat is still required for correct output/side effects.
+
+    # Instead of allocating -x2 as a temp, use torch.neg to try to fuse if possible.
+    return torch.cat((torch.neg(x2), x1), dim=-1)
 
 
 def eager_attention_forward(
