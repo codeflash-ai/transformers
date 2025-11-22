@@ -39,6 +39,15 @@ from transformers import (
 from transformers.utils import logging
 
 
+_VARIANTS: dict[str, tuple[str, str]] = {
+    "base": ("base", "base"),
+    "large": ("large", "large"),
+    "so400m": ("so400m", "so400m"),
+    # g-opt siglip2 is not symmetric
+    "giant-opt": ("so400m", "giant-opt"),
+}
+
+
 logging.set_verbosity_info()
 logger = logging.get_logger(__name__)
 
@@ -143,14 +152,15 @@ def get_vocab_file_from_model_name(model_name: str) -> str:
 
 
 def get_text_and_vision_vit_variants(model_name: str) -> tuple[str, str]:
-    variant = model_name.split("-")[1] if "giant-opt" not in model_name else "giant-opt"
-    return {
-        "base": ("base", "base"),
-        "large": ("large", "large"),
-        "so400m": ("so400m", "so400m"),
-        # g-opt siglip2 is not symmetric
-        "giant-opt": ("so400m", "giant-opt"),
-    }[variant]
+    variant: str
+    if "giant-opt" in model_name:
+        variant = "giant-opt"
+    else:
+        # Split only once and assign efficiently
+        parts = model_name.split("-", 2)
+        # We expect at least two parts, else IndexError is raised (unchanged exception semantics)
+        variant = parts[1]
+    return _VARIANTS[variant]
 
 
 def get_siglip_config(model_name):
