@@ -138,6 +138,8 @@ class GPTSw3Tokenizer(PreTrainedTokenizer):
             f"[{''.join(map(chr, list(range(0, 9)) + list(range(11, 32)) + list(range(127, 160)) + [160, 173, 8203]))}]"
         )
 
+        self._whitespace_translation_table = str.maketrans(dict.fromkeys(self.whitespaces, " "))
+
         super().__init__(
             do_lower_case=do_lower_case,
             remove_space=remove_space,
@@ -180,8 +182,10 @@ class GPTSw3Tokenizer(PreTrainedTokenizer):
         # Remove non-printing characters
         text = self.non_printing_characters_re.sub("", text)
 
-        # Normalize whitespaces
-        text = "".join([char if char not in self.whitespaces else " " for char in text])
+        # Normalize whitespaces - use translation table for O(N) speed
+        text = text.translate(self._whitespace_translation_table)
+
+        # NFC Unicode normalization
 
         # NFC Unicode normalization
         text = unicodedata.normalize("NFC", text)
