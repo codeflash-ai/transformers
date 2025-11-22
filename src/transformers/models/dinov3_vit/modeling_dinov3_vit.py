@@ -362,10 +362,22 @@ class DINOv3ViTMLP(nn.Module):
         self.intermediate_size = config.intermediate_size
         self.up_proj = nn.Linear(self.hidden_size, self.intermediate_size, bias=config.mlp_bias)
         self.down_proj = nn.Linear(self.intermediate_size, self.hidden_size, bias=config.mlp_bias)
-        self.act_fn = ACT2FN[config.hidden_act]
+        act_cls = ACT2FN[config.hidden_act]
+        if hasattr(act_cls, "inplace") and callable(act_cls):
+            try:
+                self.act_fn = act_cls(inplace=True)
+            except TypeError:
+                self.act_fn = act_cls
+        else:
+            self.act_fn = act_cls
 
     def forward(self, x):
-        return self.down_proj(self.act_fn(self.up_proj(x)))
+        # Avoid unnecessary temporaries and intermediate array creation
+        # Apply up_proj, then activation, then down_proj
+        x = self.up_proj(x)
+        x = self.act_fn(x)
+        x = self.down_proj(x)
+        return x
 
 
 class DINOv3ViTGatedMLP(nn.Module):
