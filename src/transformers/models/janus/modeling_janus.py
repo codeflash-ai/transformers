@@ -668,13 +668,15 @@ class JanusVQVAEVectorQuantizer(nn.Module):
 
         # get quantized latent vectors
         hidden_state_quant = self.embedding(image_tokens)
-        # l2 normalization on the last dimension
-        hidden_state_quant = F.normalize(hidden_state_quant, p=2, dim=-1)
 
         # reshape back to match original input shape
         hidden_state_quant = hidden_state_quant.view((batch_size, *self.quant_state_dims, emb_dim))
-        hidden_state_quant = hidden_state_quant.permute(0, 3, 1, 2).contiguous()
-
+        # Now permute before normalizing, so normalization memory layout matches access later
+        hidden_state_quant = hidden_state_quant.permute(0, 3, 1, 2)  # (B, C, H, W)
+        # contiguous is not needed until after normalization (if at all), so skip for now
+        # Normalize on C (channel) dim, which is now dim=1
+        hidden_state_quant = F.normalize(hidden_state_quant, p=2, dim=1)
+        # Only call contiguous if needed by downstream, not strictly required here for return
         return hidden_state_quant
 
 
