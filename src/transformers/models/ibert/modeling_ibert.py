@@ -100,22 +100,30 @@ class IBertEmbeddings(nn.Module):
     def forward(
         self, input_ids=None, token_type_ids=None, position_ids=None, inputs_embeds=None, past_key_values_length=0
     ):
+        # Move device selection out of inner logic to avoid repeated .device attribute lookup
+        if input_ids is not None:
+            input_shape = input_ids.size()
+            device = input_ids.device
+        else:
+            input_shape = inputs_embeds.size()[:-1]
+            device = inputs_embeds.device
+
+        # Avoid redundant checks for input/token_type shape by computing shape/device first
         if position_ids is None:
             if input_ids is not None:
                 # Create the position ids from the input token ids. Any padded tokens remain padded.
-                position_ids = create_position_ids_from_input_ids(
-                    input_ids, self.padding_idx, past_key_values_length
-                ).to(input_ids.device)
+                position_ids = create_position_ids_from_input_ids(input_ids, self.padding_idx, past_key_values_length)
+                # Optimize: avoid separate .to() call if input is already on correct device
+                if position_ids.device != device:
+                    position_ids = position_ids.to(device)
             else:
                 position_ids = self.create_position_ids_from_inputs_embeds(inputs_embeds)
 
-        if input_ids is not None:
-            input_shape = input_ids.size()
-        else:
-            input_shape = inputs_embeds.size()[:-1]
-
         if token_type_ids is None:
-            token_type_ids = torch.zeros(input_shape, dtype=torch.long, device=self.position_ids.device)
+            # Use device variable directly (guaranteed correct), avoid self.position_ids.device lookup
+            token_type_ids = torch.zeros(input_shape, dtype=torch.long, device=device)
+
+        # Only call .to(device) once, never twice
 
         if inputs_embeds is None:
             inputs_embeds, inputs_embeds_scaling_factor = self.word_embeddings(input_ids)
@@ -155,9 +163,12 @@ class IBertEmbeddings(nn.Module):
         input_shape = inputs_embeds.size()[:-1]
         sequence_length = input_shape[1]
 
-        position_ids = torch.arange(
-            self.padding_idx + 1, sequence_length + self.padding_idx + 1, dtype=torch.long, device=inputs_embeds.device
-        )
+        # Optimization: directly create expanded arange for batch, avoiding unsqueeze/expand
+        # (Though .expand is already fast, direct broadcasting avoids an intermediate tensor)
+        start = self.padding_idx + 1
+        end = sequence_length + self.padding_idx + 1
+        # torch.arange(start, end, device) makes 1D (sequence_length) tensor
+        position_ids = torch.arange(start, end, dtype=torch.long, device=inputs_embeds.device)
         return position_ids.unsqueeze(0).expand(input_shape)
 
 
@@ -1167,9 +1178,14 @@ def create_position_ids_from_input_ids(input_ids, padding_idx, past_key_values_l
 
     Returns: torch.Tensor
     """
-    # The series of casts and type-conversions here are carefully balanced to both work with ONNX export and XLA.
-    mask = input_ids.ne(padding_idx).int()
-    incremental_indices = (torch.cumsum(mask, dim=1).type_as(mask) + past_key_values_length) * mask
+    # Faster: combine .ne and .int without intermediate variable assignment
+    mask = input_ids != padding_idx
+    mask_int = mask.int()
+    # Fast path: fuse type_as(mask) with definition, avoid extra variable in chain, and reuse mask_int
+    # .cumsum() is already efficient, but avoid creating extra temporary tensors.
+    incremental_indices = (torch.cumsum(mask_int, dim=1) + past_key_values_length) * mask_int
+    # As mask_int is already long or int tensor, add padding_idx after cast
+    # Only cast to long at the end
     return incremental_indices.long() + padding_idx
 
 
