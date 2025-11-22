@@ -188,15 +188,31 @@ def eager_attention_forward(
     if scaling is None:
         scaling = query.size(-1) ** -0.5
 
-    # Take the dot product between "query" and "key" to get the raw attention scores.
-    attn_weights = torch.matmul(query, key.transpose(2, 3)) * scaling
+    # Precompute key transpose only once (saves potential recomputation)
+    key_t = key.transpose(2, 3)
+    # Fused matmul and scale for attention scores
+    attn_weights = torch.matmul(query, key_t)
+    # For performance, apply scaling in-place
+    attn_weights.mul_(scaling)
 
     if attention_mask is not None:
-        attention_mask = attention_mask[:, :, :, : key.shape[-2]]
+        # Slicing generates a view; keep view to avoid unnecessary copies.
+        # But, only slice if actually needed
+        if attention_mask.shape[-1] != key.shape[-2]:
+            attention_mask = attention_mask[:, :, :, : key.shape[-2]]
         attn_weights = attn_weights + attention_mask
 
-    attn_weights = nn.functional.softmax(attn_weights, dim=-1)
-    attn_weights = nn.functional.dropout(attn_weights, p=dropout, training=module.training)
+    # Avoid multiple attribute lookups for F/nn.functional
+    softmax = nn.functional.softmax
+    dropout_fn = nn.functional.dropout
+
+    # Stick to original device/dtype, but softmax and dropout do not need to be reassigned
+    attn_weights = softmax(attn_weights, dim=-1)
+    if dropout > 0.0:
+        attn_weights = dropout_fn(attn_weights, p=dropout, training=module.training)
+    # else: skip dropout altogether for pure inference speed
+
+    # Torch matmul is fast, keep as is
 
     attn_output = torch.matmul(attn_weights, value)
     attn_output = attn_output.transpose(1, 2).contiguous()
