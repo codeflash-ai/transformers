@@ -84,6 +84,7 @@ class VitsTokenizer(PreTrainedTokenizer):
         with open(vocab_file, encoding="utf-8") as vocab_handle:
             self.encoder = json.load(vocab_handle)
 
+        self._unk_token_id = self.encoder.get(unk_token)
         self.decoder = {v: k for k, v in self.encoder.items()}
         self.language = language
         self.add_blank = add_blank
@@ -222,7 +223,7 @@ class VitsTokenizer(PreTrainedTokenizer):
 
     def _convert_token_to_id(self, token):
         """Converts a token (str) in an id using the vocab."""
-        return self.encoder.get(token, self.encoder.get(self.unk_token))
+        return self.encoder.get(token, self._unk_token_id)
 
     def _convert_id_to_token(self, index):
         """Converts an index (integer) in a token (str) using the vocab."""
