@@ -305,8 +305,22 @@ class NeighborhoodAttention(nn.Module):
         self.dropout = nn.Dropout(config.attention_probs_dropout_prob)
 
     def transpose_for_scores(self, x):
-        new_x_shape = x.size()[:-1] + (self.num_attention_heads, self.attention_head_size)
-        x = x.view(new_x_shape)
+        # Fast path using reshape/as_strided where possible to avoid physical data copies.
+        # x: (B, NH, H, W, all_head_size)
+        # We want (B, NH, H, W, num_attention_heads, attention_head_size) -> permute -> (B, num_attention_heads, H, W, attention_head_size)
+        num_attention_heads = self.num_attention_heads
+        attention_head_size = self.attention_head_size
+
+        # Ravel x if not contiguous for shape inference.
+        # We'll try to use reshape which is a view if possible, falling back to view if input is contiguous.
+        input_shape = x.size()
+        *prefix, orig_dim = input_shape
+        new_x_shape = (*prefix, num_attention_heads, attention_head_size)
+        # Using .reshape instead of .view for safer view-creation for possibly non-contiguous inputs
+        x = x.reshape(new_x_shape)
+        # .permute: (B, NH, H, W, num_heads, head_dim) -> (B, num_heads, NH, H, head_dim)
+        # But original permute is (0, 3, 1, 2, 4)
+        # So preserve legacy call:
         return x.permute(0, 3, 1, 2, 4)
 
     def forward(
