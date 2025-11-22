@@ -430,7 +430,8 @@ class RoCBertOutput(nn.Module):
     def forward(self, hidden_states: torch.Tensor, input_tensor: torch.Tensor) -> torch.Tensor:
         hidden_states = self.dense(hidden_states)
         hidden_states = self.dropout(hidden_states)
-        hidden_states = self.LayerNorm(hidden_states + input_tensor)
+        hidden_states.add_(input_tensor)
+        hidden_states = self.LayerNorm(hidden_states)
         return hidden_states
 
 
