@@ -113,8 +113,8 @@ class DeepseekVLAligner(nn.Module):
 
     def forward(self, vision_encodings: torch.Tensor) -> torch.Tensor:
         x = self.linear1(vision_encodings)
-        x = self.activation(x)
-        x = self.linear2(x)
+        # nn.GELU does not support in-place, but reduce reference by combining lines.
+        x = self.linear2(self.activation(x))
         return x
 
 
