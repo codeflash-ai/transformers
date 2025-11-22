@@ -217,6 +217,9 @@ class IBertSelfAttention(nn.Module):
 
         self.softmax = IntSoftmax(self.act_bit, quant_mode=self.quant_mode, force_dequant=config.force_dequant)
 
+        # Precompute scale constant for efficiency
+        self._inv_head_sqrt = 1.0 / math.sqrt(self.attention_head_size)
+
     def forward(
         self,
         hidden_states,
@@ -240,20 +243,24 @@ class IBertSelfAttention(nn.Module):
 
         # Transpose
         batch_size, seq_length, _ = hidden_states.shape
-        query_layer = query_layer.view(batch_size, -1, self.num_attention_heads, self.attention_head_size).transpose(
-            1, 2
-        )
-        key_layer = key_layer.view(batch_size, -1, self.num_attention_heads, self.attention_head_size).transpose(1, 2)
-        value_layer = value_layer.view(batch_size, -1, self.num_attention_heads, self.attention_head_size).transpose(
-            1, 2
-        )
+        # Combine all .view/transpose chains into in-place and reuse shape tuples
+        shape = (batch_size, seq_length, self.num_attention_heads, self.attention_head_size)
+        # We avoid repeated -1 for seq_length as seq_length is already known
+        query_layer = query_layer.view(*shape).transpose(1, 2)
+        key_layer = key_layer.view(*shape).transpose(1, 2)
+        value_layer = value_layer.view(*shape).transpose(1, 2)
+
+        # Take the dot product between "query" and "key" to get the raw attention scores.
+        # Use in-place division for optimization.
 
         # Take the dot product between "query" and "key" to get the raw attention scores.
         attention_scores = torch.matmul(query_layer, key_layer.transpose(-1, -2))
-        scale = math.sqrt(self.attention_head_size)
-        attention_scores = attention_scores / scale
+        attention_scores.mul_(self._inv_head_sqrt)
+
         if self.quant_mode:
-            attention_scores_scaling_factor = query_layer_scaling_factor * key_layer_scaling_factor / scale
+            attention_scores_scaling_factor = (
+                query_layer_scaling_factor * key_layer_scaling_factor * self._inv_head_sqrt
+            )
         else:
             attention_scores_scaling_factor = None
 
@@ -277,7 +284,8 @@ class IBertSelfAttention(nn.Module):
             context_layer_scaling_factor = None
 
         context_layer = context_layer.permute(0, 2, 1, 3).contiguous()
-        new_context_layer_shape = context_layer.size()[:-2] + (self.all_head_size,)
+        # Compute new shape directly
+        new_context_layer_shape = (batch_size, seq_length, self.all_head_size)
         context_layer = context_layer.view(*new_context_layer_shape)
 
         # requantization: 32-bit -> 8-bit
