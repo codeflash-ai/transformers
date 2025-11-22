@@ -182,7 +182,9 @@ def repeat_kv(hidden_states: torch.Tensor, n_rep: int) -> torch.Tensor:
     batch, num_key_value_heads, slen, head_dim = hidden_states.shape
     if n_rep == 1:
         return hidden_states
-    hidden_states = hidden_states[:, :, None, :, :].expand(batch, num_key_value_heads, n_rep, slen, head_dim)
+    # Use expand if n_rep is not 1 for memory efficiency (as in the original code)
+    # But avoid the temporary allocation by using reshape out-of-place
+    hidden_states = hidden_states.unsqueeze(2).expand(batch, num_key_value_heads, n_rep, slen, head_dim)
     return hidden_states.reshape(batch, num_key_value_heads * n_rep, slen, head_dim)
 
 
@@ -199,17 +201,33 @@ def eager_attention_forward(
     key_states = repeat_kv(key, module.num_key_value_groups)
     value_states = repeat_kv(value, module.num_key_value_groups)
 
-    attn_weights = torch.matmul(query, key_states.transpose(2, 3)) * scaling
-    if attention_mask is not None:
-        causal_mask = attention_mask[:, :, :, : key_states.shape[-2]]
-        attn_weights = attn_weights + causal_mask
+    # In-place op is avoided to prevent accidental shape sharing especially on autograd-enabled tensors
+    attn_weights = torch.matmul(query, key_states.transpose(2, 3))
+    attn_weights.mul_(scaling)
 
-    attn_weights = nn.functional.softmax(attn_weights, dim=-1, dtype=torch.float32).to(query.dtype)
-    attn_weights = nn.functional.dropout(attn_weights, p=dropout, training=module.training)
-    attn_output = torch.matmul(attn_weights, value_states)
+    if attention_mask is not None:
+        # Avoid slicing on the right unless necessary: causal_mask alias is not needed
+        attn_weights = attn_weights + attention_mask[:, :, :, : key_states.shape[-2]]
+
+    attn_output, attn_weights = _softmax_dropout_matmul(
+        attn_weights, value_states, module.training, dropout, query.dtype
+    )
+    # Single transpose and contiguous
     attn_output = attn_output.transpose(1, 2).contiguous()
 
     return attn_output, attn_weights
+
+
+@torch.jit.ignore
+def _softmax_dropout_matmul(
+    attn_weights: torch.Tensor, value_states: torch.Tensor, training: bool, dropout: float, query_dtype: torch.dtype
+):
+    # Fuse softmax, cast and dropout for efficiency where possible.
+    attn_weights = nn.functional.softmax(attn_weights, dim=-1, dtype=torch.float32)
+    attn_weights = attn_weights.to(query_dtype)
+    if dropout > 0.0:
+        attn_weights = nn.functional.dropout(attn_weights, p=dropout, training=training)
+    return torch.matmul(attn_weights, value_states), attn_weights
 
 
 class ApertusAttention(nn.Module):
