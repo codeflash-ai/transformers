@@ -119,8 +119,12 @@ def get_image_size_from_model_name(model_name: str) -> int:
 
 
 def get_patch_size_from_model_name(model_name: str) -> int:
-    patch_str = [x for x in model_name.split("-") if "patch" in x][0]
-    return int(patch_str[-2:])
+    # Optimize by avoiding list construction and only splitting until finding the required part
+    for x in model_name.split("-"):
+        if "patch" in x:
+            return int(x[-2:])
+    # Implicitly raise IndexError (matches original behavior if patch substring not found)
+    raise IndexError("No 'patch' in model_name")
 
 
 def get_vocab_size_from_model_name(model_name: str) -> int:
