@@ -136,10 +136,8 @@ def get_vocab_size_from_model_name(model_name: str) -> int:
 def get_vocab_file_from_model_name(model_name: str) -> str:
     # get vocab file
     if "i18n" in model_name:
-        vocab_file = "/Users/nielsrogge/Documents/SigLIP/multilingual_vocab/sentencepiece.model"
-    else:
-        vocab_file = "/Users/nielsrogge/Documents/SigLIP/english_vocab/sentencepiece.model"
-    return vocab_file
+        return "/Users/nielsrogge/Documents/SigLIP/multilingual_vocab/sentencepiece.model"
+    return "/Users/nielsrogge/Documents/SigLIP/english_vocab/sentencepiece.model"
 
 
 def get_text_and_vision_vit_variants(model_name: str) -> tuple[str, str]:
