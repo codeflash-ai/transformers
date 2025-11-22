@@ -60,14 +60,35 @@ class MobileViTImageProcessorFast(BaseImageProcessorFast):
 
     # Copied from transformers.models.beit.image_processing_beit_fast.BeitImageProcessorFast.reduce_label
     def reduce_label(self, labels: list["torch.Tensor"]):
-        for idx in range(len(labels)):
-            label = labels[idx]
-            label = torch.where(label == 0, torch.tensor(255, dtype=label.dtype), label)
-            label = label - 1
-            label = torch.where(label == 254, torch.tensor(255, dtype=label.dtype), label)
-            labels[idx] = label
-
-        return label
+        # Vectorized version: operates on batch tensor for speed
+        if not labels:
+            return labels
+        # Check if list of single tensors or stacked tensor
+        if isinstance(labels, torch.Tensor):
+            label = labels
+        elif isinstance(labels, list) and isinstance(labels[0], torch.Tensor):
+            label = torch.stack(labels, dim=0)
+        else:
+            # Fallback: old loop, should not occur in normal use
+            for idx in range(len(labels)):
+                lb = labels[idx]
+                lb = torch.where(lb == 0, torch.tensor(255, dtype=lb.dtype, device=lb.device), lb)
+                lb = lb - 1
+                lb = torch.where(lb == 254, torch.tensor(255, dtype=lb.dtype, device=lb.device), lb)
+                labels[idx] = lb
+            return labels[-1] if labels else None
+        # Vectorized reduction
+        label = torch.where(label == 0, torch.tensor(255, dtype=label.dtype, device=label.device), label)
+        label = label - 1
+        label = torch.where(label == 254, torch.tensor(255, dtype=label.dtype, device=label.device), label)
+        # If input was list, unstack
+        if isinstance(labels, list) and not isinstance(labels, torch.Tensor):
+            ret_labels = [label[i] for i in range(label.shape[0])]
+            for idx in range(len(labels)):
+                labels[idx] = ret_labels[idx]
+            return ret_labels[-1]
+        else:
+            return label
 
     @auto_docstring
     def preprocess(
@@ -172,10 +193,7 @@ class MobileViTImageProcessorFast(BaseImageProcessorFast):
             if do_flip_channel_order:
                 # For batched images, we need to handle them all at once
                 if stacked_images.ndim > 3 and stacked_images.shape[1] >= 3:
-                    # Flip RGB → BGR for batched images
-                    flipped = stacked_images.clone()
-                    flipped[:, 0:3] = stacked_images[:, [2, 1, 0], ...]
-                    stacked_images = flipped
+                    stacked_images[:, 0:3] = stacked_images[:, [2, 1, 0], ...]
 
             processed_images_grouped[shape] = stacked_images
 
