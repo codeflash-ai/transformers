@@ -60,7 +60,12 @@ class PLBartScaledWordEmbedding(nn.Embedding):
         self.embed_scale = embed_scale
 
     def forward(self, input_ids: torch.Tensor):
-        return super().forward(input_ids) * self.embed_scale
+        # Microoptimization: use in-place multiplication if feasible
+        embeddings = super().forward(input_ids)
+        if self.embed_scale == 1.0:  # Most common case: skip the multiplication
+            return embeddings
+        # If scaling is needed and tensor is non-leaf, a non-inplace mul is more compatible w/ autograd
+        return embeddings.mul(self.embed_scale)
 
 
 @auto_docstring
