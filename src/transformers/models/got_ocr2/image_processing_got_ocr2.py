@@ -93,12 +93,15 @@ def get_all_supported_aspect_ratios(min_image_tiles: int, max_image_tiles: int) 
 
     """
     aspect_ratios = []
-    for width in range(1, max_image_tiles + 1):
-        for height in range(1, max_image_tiles + 1):
-            if width * height <= max_image_tiles and width * height >= min_image_tiles:
-                aspect_ratios.append((width, height))
-
-    aspect_ratios = sorted(aspect_ratios, key=lambda x: x[0] * x[1])
+    for num_tiles in range(min_image_tiles, max_image_tiles + 1):
+        # factor pairs for num_tiles in range.
+        for width in range(1, num_tiles + 1):
+            if num_tiles % width == 0:
+                height = num_tiles // width
+                if width <= max_image_tiles and height <= max_image_tiles:
+                    aspect_ratios.append((width, height))
+    # Sorting is still by area w*h as previous behavior
+    aspect_ratios.sort(key=lambda x: x[0] * x[1])
 
     return aspect_ratios
 
@@ -125,10 +128,16 @@ def get_optimal_tiled_canvas(
     area = original_width * original_height
 
     # find the grid with the best aspect ratio
+
+    # Use local variables, avoid repeated calculations
+    twice_target_patch_area = 2 * target_tile_height * target_tile_width
+
+    # find the grid with the best aspect ratio
     best_ratio_diff = float("inf")
     best_grid = (1, 1)
     for grid in possible_tile_arrangements:
-        grid_aspect_ratio = grid[0] / grid[1]
+        w, h = grid
+        grid_aspect_ratio = w / h
         ratio_diff = abs(aspect_ratio - grid_aspect_ratio)
         if ratio_diff < best_ratio_diff:
             best_ratio_diff = ratio_diff
@@ -136,7 +145,8 @@ def get_optimal_tiled_canvas(
         elif ratio_diff == best_ratio_diff:
             # if the aspect ratio difference is the same, we favor the grid with more patches
             # until the area covered by the patches is more than twice the original image area
-            if area > 0.5 * target_tile_height * target_tile_width * grid[0] * grid[1]:
+            patch_area = target_tile_height * target_tile_width * w * h
+            if area > 0.5 * patch_area:
                 best_grid = grid
 
     return best_grid
