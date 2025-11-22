@@ -29,6 +29,8 @@ if is_phonemizer_available():
 if is_uroman_available():
     import uroman as ur
 
+NON_ROMAN_PATTERN = re.compile(r"[^\x00-\x7F]")
+
 logger = logging.get_logger(__name__)
 
 VOCAB_FILES_NAMES = {"vocab_file": "vocab.json"}
@@ -36,7 +38,7 @@ VOCAB_FILES_NAMES = {"vocab_file": "vocab.json"}
 
 def has_non_roman_characters(input_string):
     # Find any character outside the ASCII range
-    non_roman_pattern = re.compile(r"[^\x00-\x7F]")
+    non_roman_pattern = NON_ROMAN_PATTERN
 
     # Search the input string for non-Roman characters
     match = non_roman_pattern.search(input_string)
