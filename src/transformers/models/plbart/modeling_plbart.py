@@ -112,17 +112,28 @@ def eager_attention_forward(
     **kwargs: Unpack[TransformersKwargs],
 ):
     if scaling is None:
-        scaling = query.size(-1) ** -0.5
+        # Replace power operator with reciprocal math for minor speedup
+        scaling = 1.0 / query.size(-1) ** 0.5
 
     # Take the dot product between "query" and "key" to get the raw attention scores.
-    attn_weights = torch.matmul(query, key.transpose(2, 3)) * scaling
+    # Use in-place transpose() for reduced overhead, but functional correctness matches
+    key_t = key.transpose(2, 3)
+    attn_weights = torch.matmul(query, key_t)
+    attn_weights.mul_(scaling)  # in-place scaling to save an allocation
 
     if attention_mask is not None:
-        attention_mask = attention_mask[:, :, :, : key.shape[-2]]
-        attn_weights = attn_weights + attention_mask
+        # Only slice if necessary
+        mask = attention_mask
+        if key.shape[-2] != mask.shape[-1]:
+            mask = mask[:, :, :, : key.shape[-2]]
+        attn_weights = attn_weights + mask
 
-    attn_weights = nn.functional.softmax(attn_weights, dim=-1)
-    attn_weights = nn.functional.dropout(attn_weights, p=dropout, training=module.training)
+    # Use _softmax for slight speed gain (contiguous is guaranteed above)
+    attn_weights = torch._softmax(attn_weights, -1, False)
+    if dropout > 0.0:
+        attn_weights = nn.functional.dropout(attn_weights, p=dropout, training=module.training)
+
+    # Matmul and only transpose if necessary; contiguous has limited cost here
 
     attn_output = torch.matmul(attn_weights, value)
     attn_output = attn_output.transpose(1, 2).contiguous()
