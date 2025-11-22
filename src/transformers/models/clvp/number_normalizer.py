@@ -17,6 +17,8 @@
 
 import sys
 
+import regex as re
+
 
 if sys.version_info >= (3, 11):
     # Atomic grouping support was only added to the core RE in Python 3.11
@@ -28,29 +30,31 @@ else:
 class EnglishNormalizer:
     def __init__(self):
         # List of (regular expression, replacement) pairs for abbreviations:
-        self._abbreviations = [
-            (re.compile("\\b%s\\." % x[0], re.IGNORECASE), x[1])
-            for x in [
-                ("mrs", "misess"),
-                ("mr", "mister"),
-                ("dr", "doctor"),
-                ("st", "saint"),
-                ("co", "company"),
-                ("jr", "junior"),
-                ("maj", "major"),
-                ("gen", "general"),
-                ("drs", "doctors"),
-                ("rev", "reverend"),
-                ("lt", "lieutenant"),
-                ("hon", "honorable"),
-                ("sgt", "sergeant"),
-                ("capt", "captain"),
-                ("esq", "esquire"),
-                ("ltd", "limited"),
-                ("col", "colonel"),
-                ("ft", "fort"),
-            ]
+        abbreviation_pairs = [
+            ("mrs", "misess"),
+            ("mr", "mister"),
+            ("dr", "doctor"),
+            ("st", "saint"),
+            ("co", "company"),
+            ("jr", "junior"),
+            ("maj", "major"),
+            ("gen", "general"),
+            ("drs", "doctors"),
+            ("rev", "reverend"),
+            ("lt", "lieutenant"),
+            ("hon", "honorable"),
+            ("sgt", "sergeant"),
+            ("capt", "captain"),
+            ("esq", "esquire"),
+            ("ltd", "limited"),
+            ("col", "colonel"),
+            ("ft", "fort"),
         ]
+
+        # Build replacement dictionary and compile single regex
+        self._abbr_dict = {k: v for k, v in abbreviation_pairs}
+        abbr_pattern = r"\b(" + "|".join(re.escape(k) for k in self._abbr_dict.keys()) + r")\."
+        self._abbr_regex = re.compile(abbr_pattern, re.IGNORECASE)
 
         self.ones = ["", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine"]
         self.teens = [
@@ -218,9 +222,14 @@ class EnglishNormalizer:
         """
         Expands the abbreviate words.
         """
-        for regex, replacement in self._abbreviations:
-            text = re.sub(regex, replacement, text)
-        return text
+
+        def abbr_repl(match):
+            abbr = match.group(1)
+            # case-insensitive replace: preserve input case for replacement?
+            # The original implementation always replaces with the canonical (lowercase) expansion string.
+            return self._abbr_dict[abbr.lower()]
+
+        return self._abbr_regex.sub(abbr_repl, text)
 
     def collapse_whitespace(self, text: str) -> str:
         """
