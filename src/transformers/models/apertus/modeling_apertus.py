@@ -72,7 +72,15 @@ class ApertusRMSNorm(nn.Module):
         return self.weight * hidden_states.to(input_dtype)
 
     def extra_repr(self):
-        return f"{tuple(self.weight.shape)}, eps={self.variance_epsilon}"
+        # Optimization: avoid tuple construction overhead for 1D shapes
+        # tuple() uses extra Python allocation, for nn.Parameters with shape (N,) we can format directly
+        # This preserves behavior for all shapes (including multidimensional), as tuple() and str(shape) only differ for 1D arrays in representation
+        ws = self.weight.shape
+        if len(ws) == 1:
+            shape_repr = f"({ws[0]},)"
+        else:
+            shape_repr = str(tuple(ws))
+        return f"{shape_repr}, eps={self.variance_epsilon}"
 
 
 class ApertusRotaryEmbedding(nn.Module):
