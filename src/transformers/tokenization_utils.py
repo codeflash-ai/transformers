@@ -21,6 +21,7 @@ import itertools
 import re
 import unicodedata
 from collections import OrderedDict
+from functools import lru_cache
 from typing import Any, Optional, Union, overload
 
 from .tokenization_utils_base import (
@@ -39,6 +40,11 @@ from .tokenization_utils_base import (
     TruncationStrategy,
 )
 from .utils import PaddingStrategy, TensorType, add_end_docstrings, logging
+
+
+_WHITESPACE_CHARS = {" ", "\t", "\n", "\r"}
+
+_CONTROL_EXCLUDE = {"\t", "\n", "\r"}
 
 
 logger = logging.get_logger(__name__)
@@ -343,9 +349,9 @@ def _is_whitespace(char):
     """Checks whether `char` is a whitespace character."""
     # \t, \n, and \r are technically control characters but we treat them
     # as whitespace since they are generally considered as such.
-    if char == " " or char == "\t" or char == "\n" or char == "\r":
+    if char in _WHITESPACE_CHARS:
         return True
-    cat = unicodedata.category(char)
+    cat = _category(char)
     if cat == "Zs":
         return True
     return False
@@ -355,9 +361,9 @@ def _is_control(char):
     """Checks whether `char` is a control character."""
     # These are technically control characters but we count them as whitespace
     # characters.
-    if char == "\t" or char == "\n" or char == "\r":
+    if char in _CONTROL_EXCLUDE:
         return False
-    cat = unicodedata.category(char)
+    cat = _category(char)
     if cat.startswith("C"):
         return True
     return False
@@ -401,6 +407,11 @@ def _insert_one_token_to_ordered_list(token_list: list[str], new_token: str):
         return
     else:
         token_list.insert(insertion_idx, new_token)
+
+
+@lru_cache(maxsize=128)
+def _category(char):
+    return unicodedata.category(char)
 
 
 @add_end_docstrings(INIT_TOKENIZER_DOCSTRING)
