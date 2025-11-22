@@ -396,7 +396,8 @@ class NatOutput(nn.Module):
 
     def forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
         hidden_states = self.dense(hidden_states)
-        hidden_states = self.dropout(hidden_states)
+        if self.dropout.p > 0:
+            hidden_states = self.dropout(hidden_states)
         return hidden_states
 
 
