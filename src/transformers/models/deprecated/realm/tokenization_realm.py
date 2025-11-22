@@ -393,13 +393,8 @@ class BasicTokenizer:
     def _run_strip_accents(self, text):
         """Strips accents from a piece of text."""
         text = unicodedata.normalize("NFD", text)
-        output = []
-        for char in text:
-            cat = unicodedata.category(char)
-            if cat == "Mn":
-                continue
-            output.append(char)
-        return "".join(output)
+        category = unicodedata.category
+        return "".join(char for char in text if category(char) != "Mn")
 
     def _run_split_on_punc(self, text, never_split=None):
         """Splits punctuation on a piece of text."""
