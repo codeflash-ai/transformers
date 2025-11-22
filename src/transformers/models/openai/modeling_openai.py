@@ -69,7 +69,7 @@ class Attention(nn.Module):
             w = w / math.sqrt(v.size(-1))
         # XD: self.b may be larger than w, so we need to crop it
         b = self.bias[:, :, : w.size(-2), : w.size(-1)]
-        w = w * b + -1e4 * (1 - b)
+        w = w.mul_(b).add_((1 - b) * (-1e4))
 
         if attention_mask is not None:
             # Apply the attention mask
