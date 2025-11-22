@@ -17,6 +17,8 @@
 
 import sys
 
+import regex as re
+
 
 if sys.version_info >= (3, 11):
     # Atomic grouping support was only added to the core RE in Python 3.11
@@ -206,12 +208,22 @@ class EnglishNormalizer:
         This method is used to normalize numbers within a text such as converting the numbers to words, removing
         commas, etc.
         """
-        text = re.sub(r"([0-9][0-9,]+[0-9])", self._remove_commas, text)
-        text = re.sub(r"£([0-9,]*[0-9])", r"\1 pounds", text)
-        text = re.sub(r"\$([0-9.,]*[0-9])", self._expand_dollars, text)
-        text = re.sub(r"([0-9]++\.[0-9]+)", self._expand_decimal_point, text)
-        text = re.sub(r"[0-9]++(st|nd|rd|th)", self._expand_ordinal, text)
-        text = re.sub(r"[0-9]+", self._expand_number, text)
+        # Precompile all regexes for reuse
+        if not hasattr(self, "_compiled_regex"):
+            self._re_remove_commas = re.compile(r"([0-9][0-9,]+[0-9])")
+            self._re_pounds = re.compile(r"£([0-9,]*[0-9])")
+            self._re_dollars = re.compile(r"\$([0-9.,]*[0-9])")
+            self._re_decimal = re.compile(r"([0-9]++\.[0-9]+)")
+            self._re_ordinal = re.compile(r"[0-9]++(st|nd|rd|th)")
+            self._re_number = re.compile(r"[0-9]+")
+            self._compiled_regex = True
+
+        text = self._re_remove_commas.sub(self._remove_commas, text)
+        text = self._re_pounds.sub(r"\1 pounds", text)
+        text = self._re_dollars.sub(self._expand_dollars, text)
+        text = self._re_decimal.sub(self._expand_decimal_point, text)
+        text = self._re_ordinal.sub(self._expand_ordinal, text)
+        text = self._re_number.sub(self._expand_number, text)
         return text
 
     def expand_abbreviations(self, text: str) -> str:
