@@ -52,16 +52,11 @@ def get_config(model_name):
 
 # here we list all keys to be renamed (original name on the left, our name on the right)
 def create_rename_keys(config):
-    rename_keys = []
-
-    # fmt: off
-    # stem
-    rename_keys.append(("backbone.pos_embed", "backbone.embeddings.position_embeddings"))
-    rename_keys.append(("backbone.patch_embed.proj.weight", "backbone.embeddings.projection.weight"))
-    rename_keys.append(("backbone.patch_embed.proj.bias", "backbone.embeddings.projection.bias"))
-    # fmt: on
-
-    return rename_keys
+    return [
+        ("backbone.pos_embed", "backbone.embeddings.position_embeddings"),
+        ("backbone.patch_embed.proj.weight", "backbone.embeddings.projection.weight"),
+        ("backbone.patch_embed.proj.bias", "backbone.embeddings.projection.bias"),
+    ]
 
 
 def rename_key(dct, old, new):
