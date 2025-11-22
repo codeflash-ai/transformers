@@ -108,8 +108,17 @@ class VitsTokenizer(PreTrainedTokenizer):
         return len(self.encoder)
 
     def get_vocab(self):
-        vocab = {self.convert_ids_to_tokens(i): i for i in range(self.vocab_size)}
-        vocab.update(self.added_tokens_encoder)
+        # Optimize by minimizing costly repeated method calls
+        vocab_size = self.vocab_size
+        convert_id_to_token = self._convert_id_to_token
+        added_tokens_decoder = self._added_tokens_decoder
+        added_tokens_encoder = self.added_tokens_encoder
+
+        vocab = {
+            (added_tokens_decoder[i].content if i in added_tokens_decoder else convert_id_to_token(i)): i
+            for i in range(vocab_size)
+        }
+        vocab.update(added_tokens_encoder)
         return vocab
 
     def normalize_text(self, input_string):
