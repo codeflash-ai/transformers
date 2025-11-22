@@ -1229,8 +1229,11 @@ class MimiEuclideanCodebook(nn.Module):
     def quantize(self, hidden_states):
         # Projects each vector in `hidden_states` over the nearest centroid and return its index.
         # `hidden_states` should be `[N, D]` with `N` the number of input vectors and `D` the dimension.
-        dists = torch.cdist(hidden_states[None].float(), self.embed[None].float(), p=2)[0]
-        embed_ind = dists.argmin(dim=-1)
+        # Avoid unnecessary unsqueeze and [0] index for performance.
+        hidden_states = hidden_states.float()
+        centroids = self.embed.float()
+        dists = torch.cdist(hidden_states, centroids, p=2)
+        embed_ind = torch.argmin(dists, dim=-1)
         return embed_ind
 
     # Copied from transformers.models.encodec.modeling_encodec.EncodecEuclideanCodebook.encode
@@ -1248,6 +1251,14 @@ class MimiEuclideanCodebook(nn.Module):
     def decode(self, embed_ind):
         quantize = nn.functional.embedding(embed_ind, self.embed)
         return quantize
+
+    @property
+    def embed(self):
+        # Provides fast access to embed tensor, using direct buffer access for efficiency.
+        # Falls back to self._embed if not None.
+        if self._embed is not None:
+            return self._embed
+        return self.embed_sum
 
 
 # Copied from transformers.models.encodec.modeling_encodec.EncodecVectorQuantization with Encodec->Mimi
