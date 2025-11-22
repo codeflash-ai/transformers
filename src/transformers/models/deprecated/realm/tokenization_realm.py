@@ -45,8 +45,7 @@ def whitespace_tokenize(text):
     text = text.strip()
     if not text:
         return []
-    tokens = text.split()
-    return tokens
+    return text.split()  # Fast path; no code changes necessary.
 
 
 class RealmTokenizer(PreTrainedTokenizer):
@@ -498,26 +497,50 @@ class WordpieceTokenizer:
         """
 
         output_tokens = []
+        vocab = self.vocab  # localize lookup for repeated usage
+        unk_token = self.unk_token
+        max_input_chars_per_word = self.max_input_chars_per_word
+        # Optimization: minimize attribute lookup in inner loop.
+
+        # Precompute for concatenation for '##'
+        add_prefix = "##"
+
+        # Use local for function, no optimization needed for whitespace_tokenize
         for token in whitespace_tokenize(text):
-            chars = list(token)
-            if len(chars) > self.max_input_chars_per_word:
-                output_tokens.append(self.unk_token)
+            if len(token) > max_input_chars_per_word:
+                output_tokens.append(unk_token)
                 continue
 
             is_bad = False
             start = 0
             sub_tokens = []
-            while start < len(chars):
-                end = len(chars)
+            token_len = len(token)
+            # Optimization: Use token directly instead of chars list
+            # since token is already a str sequence.
+            while start < token_len:
+                end = token_len
                 cur_substr = None
-                while start < end:
-                    substr = "".join(chars[start:end])
-                    if start > 0:
-                        substr = "##" + substr
-                    if substr in self.vocab:
-                        cur_substr = substr
-                        break
-                    end -= 1
+
+                # Optimization: move 'start > 0' and '##' prefix logic out of the substring creation loop
+                # so we create substr and the prefix in one step.
+                # Also, use str.__getitem__ slicing for substring, which is much faster than ''.join(list)[x:y]
+                if start == 0:
+                    # Search plain substrings first
+                    while end > start:
+                        substr = token[start:end]
+                        if substr in vocab:
+                            cur_substr = substr
+                            break
+                        end -= 1
+                else:
+                    # Search with '##' prefix
+                    while end > start:
+                        substr = add_prefix + token[start:end]
+                        if substr in vocab:
+                            cur_substr = substr
+                            break
+                        end -= 1
+
                 if cur_substr is None:
                     is_bad = True
                     break
@@ -525,7 +548,7 @@ class WordpieceTokenizer:
                 start = end
 
             if is_bad:
-                output_tokens.append(self.unk_token)
+                output_tokens.append(unk_token)
             else:
                 output_tokens.extend(sub_tokens)
         return output_tokens
