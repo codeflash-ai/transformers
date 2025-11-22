@@ -115,10 +115,14 @@ class RoCBertEmbeddings(nn.Module):
         # issue #5664
         if token_type_ids is None:
             if hasattr(self, "token_type_ids"):
-                # NOTE: We assume either pos ids to have bsz == 1 (broadcastable) or bsz == effective bsz (input_shape[0])
-                buffered_token_type_ids = self.token_type_ids.expand(position_ids.shape[0], -1)
-                buffered_token_type_ids = torch.gather(buffered_token_type_ids, dim=1, index=position_ids)
-                token_type_ids = buffered_token_type_ids.expand(batch_size, seq_length)
+                # Optimize expansion & gathering with broadcast and no extra allocations
+                if position_ids.shape[0] == 1:
+                    # broadcast
+                    token_type_ids = self.token_type_ids[:, :seq_length].expand(batch_size, seq_length)
+                else:
+                    buffered_token_type_ids = self.token_type_ids.expand(position_ids.shape[0], -1)
+                    buffered_token_type_ids = torch.gather(buffered_token_type_ids, dim=1, index=position_ids)
+                    token_type_ids = buffered_token_type_ids.expand(batch_size, seq_length)
             else:
                 token_type_ids = torch.zeros(input_shape, dtype=torch.long, device=self.position_ids.device)
 
@@ -133,41 +137,57 @@ class RoCBertEmbeddings(nn.Module):
             embeddings = self.dropout(embeddings)
 
             denominator = 1
-            embedding_in = torch.clone(embeddings)
+            # Avoid unneeded copy if possible: in-place add with .clone only if needed
+            # We can just use embeddings as the working tensor if next steps will always sum in extra representations.
+            embedding_in = embeddings
+            shape_added = False
+            pronunciation_added = False
+
             if self.enable_shape and input_shape_ids is not None:
                 embedding_shape = self.shape_embed(input_shape_ids)
-                embedding_in += embedding_shape
+                embedding_in = embedding_in + embedding_shape
                 denominator += 1
+                shape_added = True
             if self.enable_pronunciation and input_pronunciation_ids is not None:
                 embedding_pronunciation = self.pronunciation_embed(input_pronunciation_ids)
-                embedding_in += embedding_pronunciation
+                embedding_in = embedding_in + embedding_pronunciation
                 denominator += 1
+                pronunciation_added = True
 
-            embedding_in /= denominator
+            if denominator > 1:
+                embedding_in = embedding_in / denominator
+
             return embedding_in
         else:
             if inputs_embeds is None:
                 inputs_embeds = self.word_embeddings(input_ids)  # embedding_word
             device = inputs_embeds.device
 
-            embedding_in = torch.clone(inputs_embeds)
+            # In-place building of embedding_in for concat (less allocations)
+            to_cat = [inputs_embeds]
             if self.enable_shape:
                 if input_shape_ids is None:
                     input_shape_ids = torch.zeros(input_shape, dtype=torch.long, device=device)
                 embedding_shape = self.shape_embed(input_shape_ids)
-                embedding_in = torch.cat((embedding_in, embedding_shape), -1)
+                to_cat.append(embedding_shape)
             if self.enable_pronunciation:
                 if input_pronunciation_ids is None:
                     input_pronunciation_ids = torch.zeros(input_shape, dtype=torch.long, device=device)
                 embedding_pronunciation = self.pronunciation_embed(input_pronunciation_ids)
-                embedding_in = torch.cat((embedding_in, embedding_pronunciation), -1)
+                to_cat.append(embedding_pronunciation)
+            # Efficient cat (empty tensors are handled by initialization of to_cat list)
+            if len(to_cat) > 1:
+                embedding_in = torch.cat(to_cat, -1)
+            else:
+                embedding_in = to_cat[0]
 
             embedding_in = self.map_inputs_layer(embedding_in)  # batch_size * seq_len * hidden_dim
 
             token_type_embeddings = self.token_type_embeddings(token_type_ids)
-            embedding_in += token_type_embeddings
+            embedding_in = embedding_in + token_type_embeddings
+
             position_embeddings = self.position_embeddings(position_ids)
-            embedding_in += position_embeddings
+            embedding_in = embedding_in + position_embeddings
 
             embedding_in = self.LayerNorm(embedding_in)
             embedding_in = self.dropout(embedding_in)
