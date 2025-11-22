@@ -31,6 +31,16 @@ from torchvision import transforms
 from transformers import DINOv3ConvNextConfig, DINOv3ConvNextModel, DINOv3ViTImageProcessorFast
 
 
+_NORMALIZE = transforms.Normalize(
+    mean=(0.485, 0.456, 0.406),
+    std=(0.229, 0.224, 0.225),
+)
+
+_TO_TENSOR = transforms.ToTensor()
+
+_RESIZE_CACHE = {}
+
+
 HUB_MODELS = {
     "convnext_tiny": "facebook/dinov3-convnext-tiny-pretrain-lvd1689m",
     "convnext_small": "facebook/dinov3-convnext-small-pretrain-lvd1689m",
@@ -89,13 +99,11 @@ def prepare_img():
 
 
 def get_transform(resize_size: int = 224):
-    to_tensor = transforms.ToTensor()
-    resize = transforms.Resize((resize_size, resize_size), antialias=True)
-    normalize = transforms.Normalize(
-        mean=(0.485, 0.456, 0.406),
-        std=(0.229, 0.224, 0.225),
-    )
-    return transforms.Compose([to_tensor, resize, normalize])
+    # Use cached resize transform if available, otherwise create and cache
+    if resize_size not in _RESIZE_CACHE:
+        _RESIZE_CACHE[resize_size] = transforms.Resize((resize_size, resize_size), antialias=True)
+    resize = _RESIZE_CACHE[resize_size]
+    return transforms.Compose([_TO_TENSOR, resize, _NORMALIZE])
 
 
 def get_image_processor(resize_size: int = 224):
