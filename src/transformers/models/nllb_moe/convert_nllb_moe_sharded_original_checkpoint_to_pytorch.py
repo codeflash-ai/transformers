@@ -55,10 +55,11 @@ def rename_fairseq_keys(state_dict, expert_idx=None):
                 key = key.replace("moe_layer.experts.", "ffn.experts.expert_")
         if "gate" in key:
             key = key.replace(".moe_layer.gate.wg", ".ffn.router.classifier")
-        if "fc2" and "experts" not in key:
-            key = key.replace(".fc2.", ".ffn.fc2.")
-        if "fc1" and "experts" not in key:
-            key = key.replace(".fc1.", ".ffn.fc1.")
+        if "experts" not in key:
+            if ".fc2." in key:
+                key = key.replace(".fc2.", ".ffn.fc2.")
+            if ".fc1." in key:
+                key = key.replace(".fc1.", ".ffn.fc1.")
         if ".encoder_attn." in key:
             key = key.replace(".encoder_attn.", ".cross_attention.")
         if "encoder_attn_layer_norm" in key:
