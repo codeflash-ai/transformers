@@ -68,11 +68,19 @@ def is_grayscale(
     if input_data_format == ChannelDimension.FIRST:
         if image.shape[0] == 1:
             return True
-        return np.all(image[0, ...] == image[1, ...]) and np.all(image[1, ...] == image[2, ...])
+        # Vectorize comparison for all channels directly rather than chaining np.all for two pairs
+        c0 = image[0, ...]
+        c1 = image[1, ...]
+        c2 = image[2, ...]
+        # Use a single logical_and for full vectorized check
+        return np.all((c0 == c1) & (c1 == c2))
     elif input_data_format == ChannelDimension.LAST:
         if image.shape[-1] == 1:
             return True
-        return np.all(image[..., 0] == image[..., 1]) and np.all(image[..., 1] == image[..., 2])
+        c0 = image[..., 0]
+        c1 = image[..., 1]
+        c2 = image[..., 2]
+        return np.all((c0 == c1) & (c1 == c2))
 
 
 def convert_to_grayscale(
