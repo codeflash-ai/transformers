@@ -44,6 +44,44 @@ def has_non_roman_characters(input_string):
     return has_non_roman
 
 
+class TrieNode:
+    __slots__ = ["children", "is_end"]
+
+    def __init__(self):
+        self.children = {}
+        self.is_end = False
+
+
+class Trie:
+    # Trie only for str tokens
+    def __init__(self):
+        self.root = TrieNode()
+
+    def insert(self, word):
+        node = self.root
+        for c in word:
+            if c not in node.children:
+                node.children[c] = TrieNode()
+            node = node.children[c]
+        node.is_end = True
+
+    def longest_prefix(self, s, start=0):
+        # Returns (match, length) of longest match in Trie starting at s[start:]
+        node = self.root
+        max_len = 0
+        i = start
+        cur = node
+        while i < len(s):
+            c = s[i]
+            if c not in cur.children:
+                break
+            cur = cur.children[c]
+            i += 1
+            if cur.is_end:
+                max_len = i - start
+        return max_len  # length of longest match beginning at s[start:]
+
+
 class VitsTokenizer(PreTrainedTokenizer):
     """
     Construct a VITS tokenizer. Also supports MMS-TTS.
@@ -92,6 +130,11 @@ class VitsTokenizer(PreTrainedTokenizer):
 
         self.is_uroman = is_uroman
 
+        # Pre-build the vocabulary Trie for efficient lookup during normalization
+        vocab_keys = list(self.encoder.keys())
+        added_token_keys = []
+        # self.added_tokens_encoder may not yet be available, but PreTrainedTokenizer.__init__ will set it up
+        # So we'll defer full trie until after super().__init__ if needed
         super().__init__(
             pad_token=pad_token,
             unk_token=unk_token,
@@ -102,6 +145,13 @@ class VitsTokenizer(PreTrainedTokenizer):
             is_uroman=is_uroman,
             **kwargs,
         )
+
+        # Now self.added_tokens_encoder is available
+        added_token_keys = list(self.added_tokens_encoder.keys())
+        all_vocab_keys = vocab_keys + added_token_keys
+        self._vocab_trie = Trie()
+        for key in all_vocab_keys:
+            self._vocab_trie.insert(key)
 
     @property
     def vocab_size(self):
@@ -114,24 +164,19 @@ class VitsTokenizer(PreTrainedTokenizer):
 
     def normalize_text(self, input_string):
         """Lowercase the input string, respecting any special token ids that may be part or entirely upper-cased."""
-        all_vocabulary = list(self.encoder.keys()) + list(self.added_tokens_encoder.keys())
-        filtered_text = ""
+        filtered_text = []
 
         i = 0
-        while i < len(input_string):
-            found_match = False
-            for word in all_vocabulary:
-                if input_string[i : i + len(word)] == word:
-                    filtered_text += word
-                    i += len(word)
-                    found_match = True
-                    break
-
-            if not found_match:
-                filtered_text += input_string[i].lower()
+        length = len(input_string)
+        while i < length:
+            longest = self._vocab_trie.longest_prefix(input_string, i)
+            if longest > 0:
+                filtered_text.append(input_string[i : i + longest])
+                i += longest
+            else:
+                filtered_text.append(input_string[i].lower())
                 i += 1
-
-        return filtered_text
+        return "".join(filtered_text)
 
     def _preprocess_char(self, text):
         """Special treatment of characters in certain languages"""
