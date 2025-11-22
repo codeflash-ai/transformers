@@ -628,8 +628,11 @@ def repeat_kv(hidden_states: torch.Tensor, n_rep: int) -> torch.Tensor:
     batch, num_key_value_heads, slen, head_dim = hidden_states.shape
     if n_rep == 1:
         return hidden_states
-    hidden_states = hidden_states[:, :, None, :, :].expand(batch, num_key_value_heads, n_rep, slen, head_dim)
-    return hidden_states.reshape(batch, num_key_value_heads * n_rep, slen, head_dim)
+    # Use torch.tile for more efficient memory handling compared to expand+reshape.
+    hidden_states = hidden_states.unsqueeze(2)  # (batch, num_key_value_heads, 1, seqlen, head_dim)
+    hidden_states = hidden_states.expand(-1, -1, n_rep, -1, -1)
+    hidden_states = hidden_states.reshape(batch, num_key_value_heads * n_rep, slen, head_dim)
+    return hidden_states
 
 
 # copied from transformers.models.gemma.modeling_gemma.GemmaAttention with Gemma->Mimi
