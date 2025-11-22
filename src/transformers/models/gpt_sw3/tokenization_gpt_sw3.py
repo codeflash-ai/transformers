@@ -16,6 +16,14 @@ from ...utils.import_utils import requires
 if is_torch_available():
     import torch
 
+_NON_PRINTING_CHARS_PATTERN = (
+    f"[{''.join(map(chr, list(range(0, 9)) + list(range(11, 32)) + list(range(127, 160)) + [160, 173, 8203]))}]"
+)
+
+_NON_PRINTING_CHARACTERS_RE = re.compile(_NON_PRINTING_CHARS_PATTERN)
+
+_WHITESPACES = {" ", " ", " ", " ", " ", "　", " ", " ", " ", " ", "￼", ""}
+
 
 logger = logging.get_logger(__name__)
 VOCAB_FILES_NAMES = {"vocab_file": "spiece.model"}
@@ -128,15 +136,11 @@ class GPTSw3Tokenizer(PreTrainedTokenizer):
         self.sp_model = spm.SentencePieceProcessor(**self.sp_model_kwargs)
         self.sp_model.Load(vocab_file)
 
-        # Used for whitespace normalization in input texts
-        # fmt : off
-        self.whitespaces = {" ", " ", " ", " ", " ", "　", " ", " ", " ", " ", "￼", ""}
-        # fmt : on
+        # Use precompiled module constant for whitespace normalization
+        self.whitespaces = _WHITESPACES
 
-        # Regular expression to remove non-printing characters (e.g. some unicode control chars) in preprocessing
-        self.non_printing_characters_re = re.compile(
-            f"[{''.join(map(chr, list(range(0, 9)) + list(range(11, 32)) + list(range(127, 160)) + [160, 173, 8203]))}]"
-        )
+        # Use precompiled module constant for removing non-printing characters
+        self.non_printing_characters_re = _NON_PRINTING_CHARACTERS_RE
 
         super().__init__(
             do_lower_case=do_lower_case,
