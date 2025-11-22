@@ -45,8 +45,7 @@ def whitespace_tokenize(text):
     text = text.strip()
     if not text:
         return []
-    tokens = text.split()
-    return tokens
+    return text.split()
 
 
 class RealmTokenizer(PreTrainedTokenizer):
@@ -364,7 +363,10 @@ class BasicTokenizer:
                 [`PreTrainedTokenizer.tokenize`]) List of token not to split.
         """
         # union() returns a new set by concatenating the two sets.
-        never_split = self.never_split.union(set(never_split)) if never_split else self.never_split
+        if never_split:
+            never_split = self.never_split.union(set(never_split))
+        else:
+            never_split = self.never_split
         text = self._clean_text(text)
 
         # This was added on November 1st, 2018 for the multilingual and Chinese
@@ -377,63 +379,72 @@ class BasicTokenizer:
             text = self._tokenize_chinese_chars(text)
         orig_tokens = whitespace_tokenize(text)
         split_tokens = []
+        do_lower_case = self.do_lower_case
+        strip_accents = self.strip_accents
+        _run_strip_accents = self._run_strip_accents
+        _run_split_on_punc = self._run_split_on_punc
+
         for token in orig_tokens:
             if token not in never_split:
-                if self.do_lower_case:
+                if do_lower_case:
                     token = token.lower()
-                    if self.strip_accents is not False:
-                        token = self._run_strip_accents(token)
-                elif self.strip_accents:
-                    token = self._run_strip_accents(token)
-            split_tokens.extend(self._run_split_on_punc(token, never_split))
+                    if strip_accents is not False:
+                        token = _run_strip_accents(token)
+                elif strip_accents:
+                    token = _run_strip_accents(token)
+            split_tokens.extend(_run_split_on_punc(token, never_split))
 
-        output_tokens = whitespace_tokenize(" ".join(split_tokens))
-        return output_tokens
+        # Avoid join+split if only one token and it's a never_split
+        if len(split_tokens) == 1 and split_tokens[0] in never_split:
+            return split_tokens
+        return whitespace_tokenize(" ".join(split_tokens))
 
     def _run_strip_accents(self, text):
         """Strips accents from a piece of text."""
-        text = unicodedata.normalize("NFD", text)
+        # "NFD" normalization will break any chars with accents into base-char + accent-char(s)
+        # Only need to skip those with category "Mn" (nonspacing mark)
+        text_nfd = unicodedata.normalize("NFD", text)
         output = []
-        for char in text:
-            cat = unicodedata.category(char)
-            if cat == "Mn":
-                continue
-            output.append(char)
+        append = output.append  # for local lookup optimization
+        for char in text_nfd:
+            if unicodedata.category(char) != "Mn":
+                append(char)
         return "".join(output)
 
     def _run_split_on_punc(self, text, never_split=None):
         """Splits punctuation on a piece of text."""
         if never_split is not None and text in never_split:
             return [text]
-        chars = list(text)
-        i = 0
-        start_new_word = True
+        chars = text
         output = []
-        while i < len(chars):
-            char = chars[i]
-            if _is_punctuation(char):
-                output.append([char])
-                start_new_word = True
-            else:
-                if start_new_word:
-                    output.append([])
-                start_new_word = False
-                output[-1].append(char)
-            i += 1
+        current = []
+        append_word = output.append
+        is_punctuation = _is_punctuation
 
-        return ["".join(x) for x in output]
+        for char in chars:
+            if is_punctuation(char):
+                if current:
+                    append_word("".join(current))
+                    current = []
+                append_word(char)
+            else:
+                current.append(char)
+        if current:
+            append_word("".join(current))
+        return output
 
     def _tokenize_chinese_chars(self, text):
         """Adds whitespace around any CJK character."""
         output = []
+        append = output.append  # local lookup
+        is_chinese_char = self._is_chinese_char
         for char in text:
-            cp = ord(char)
-            if self._is_chinese_char(cp):
-                output.append(" ")
-                output.append(char)
-                output.append(" ")
+            if is_chinese_char(ord(char)):
+                append(" ")
+                append(char)
+                append(" ")
             else:
-                output.append(char)
+                append(char)
         return "".join(output)
 
     def _is_chinese_char(self, cp):
@@ -463,14 +474,17 @@ class BasicTokenizer:
     def _clean_text(self, text):
         """Performs invalid character removal and whitespace cleanup on text."""
         output = []
+        append = output.append  # local variable for speed
+        is_control = _is_control
+        is_whitespace = _is_whitespace
         for char in text:
             cp = ord(char)
-            if cp == 0 or cp == 0xFFFD or _is_control(char):
+            if cp == 0 or cp == 0xFFFD or is_control(char):
                 continue
-            if _is_whitespace(char):
-                output.append(" ")
+            if is_whitespace(char):
+                append(" ")
             else:
-                output.append(char)
+                append(char)
         return "".join(output)
 
 
