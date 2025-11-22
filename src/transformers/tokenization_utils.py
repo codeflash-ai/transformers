@@ -41,6 +41,14 @@ from .tokenization_utils_base import (
 from .utils import PaddingStrategy, TensorType, add_end_docstrings, logging
 
 
+_ASCII_PUNCTUATION_SET = set(
+    [chr(i) for i in range(33, 48)]
+    + [chr(i) for i in range(58, 65)]
+    + [chr(i) for i in range(91, 97)]
+    + [chr(i) for i in range(123, 127)]
+)
+
+
 logger = logging.get_logger(__name__)
 
 # Slow tokenizers are saved in a vocabulary plus three separated files
@@ -365,15 +373,11 @@ def _is_control(char):
 
 def _is_punctuation(char):
     """Checks whether `char` is a punctuation character."""
-    cp = ord(char)
-    # We treat all non-letter/number ASCII as punctuation.
-    # Characters such as "^", "$", and "`" are not in the Unicode
-    # Punctuation class but we treat them as punctuation anyways, for
-    # consistency.
-    if (cp >= 33 and cp <= 47) or (cp >= 58 and cp <= 64) or (cp >= 91 and cp <= 96) or (cp >= 123 and cp <= 126):
+    # Fast ASCII path
+    if char in _ASCII_PUNCTUATION_SET:
         return True
-    cat = unicodedata.category(char)
-    if cat.startswith("P"):
+    # Fallback to Unicode general punctuation category
+    if unicodedata.category(char).startswith("P"):
         return True
     return False
 
