@@ -60,11 +60,19 @@ class MobileViTImageProcessorFast(BaseImageProcessorFast):
 
     # Copied from transformers.models.beit.image_processing_beit_fast.BeitImageProcessorFast.reduce_label
     def reduce_label(self, labels: list["torch.Tensor"]):
+        t255 = None
+        t254 = None
+
         for idx in range(len(labels)):
             label = labels[idx]
-            label = torch.where(label == 0, torch.tensor(255, dtype=label.dtype), label)
+
+            if t255 is None or t255.dtype != label.dtype:
+                t255 = torch.tensor(255, dtype=label.dtype)
+                t254 = torch.tensor(254, dtype=label.dtype)
+
+            label = torch.where(label == 0, t255, label)
             label = label - 1
-            label = torch.where(label == 254, torch.tensor(255, dtype=label.dtype), label)
+            label = torch.where(label == t254, t255, label)
             labels[idx] = label
 
         return label
