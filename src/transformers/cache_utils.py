@@ -690,8 +690,8 @@ class Cache:
 
     def __init__(
         self,
-        layers: Optional[list[CacheLayerMixin]] = None,
-        layer_class_to_replicate: Optional[type[CacheLayerMixin]] = None,
+        layers: Optional[list["CacheLayerMixin"]] = None,
+        layer_class_to_replicate: Optional[type["CacheLayerMixin"]] = None,
         offloading: bool = False,
         offload_only_non_sliding: bool = True,
     ):
@@ -710,7 +710,9 @@ class Cache:
         self.offloading = offloading
         if self.offloading:
             self.only_non_sliding = offload_only_non_sliding
-            self.prefetch_stream = torch.Stream() if _is_torch_greater_or_equal_than_2_7 else torch.cuda.Stream()
+            # cache the conditional Stream construction
+            val = torch.Stream if hasattr(torch, "Stream") else torch.cuda.Stream
+            self.prefetch_stream = val()
 
     def __repr__(self):
         return f"{self.__class__.__name__}(layers={self.layers})"
@@ -770,12 +772,17 @@ class Cache:
         """
         # In this case, the `layers` were not provided, and we must append as much as `layer_idx`
         if self.layer_class_to_replicate is not None:
-            while len(self.layers) <= layer_idx:
-                self.layers.append(self.layer_class_to_replicate())
+            diff = layer_idx - len(self.layers) + 1
+            if diff > 0:
+                # Batch append to avoid repeated list resizes
+                self.layers.extend(self.layer_class_to_replicate() for _ in range(diff))
 
         if self.offloading:
             # Wait for the stream to finish if needed, and start prefetching the next layer
-            torch.cuda.default_stream(key_states.device).wait_stream(self.prefetch_stream)
+            device = key_states.device
+            # Avoid torch.cuda.* call on cpu tensors
+            if device.type == "cuda":
+                torch.cuda.default_stream(device).wait_stream(self.prefetch_stream)
             self.prefetch(layer_idx + 1, self.only_non_sliding)
 
         keys, values = self.layers[layer_idx].update(key_states, value_states, cache_kwargs)

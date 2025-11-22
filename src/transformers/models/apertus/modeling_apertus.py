@@ -169,8 +169,12 @@ def apply_rotary_pos_emb(q, k, cos, sin, position_ids=None, unsqueeze_dim=1):
     """
     cos = cos.unsqueeze(unsqueeze_dim)
     sin = sin.unsqueeze(unsqueeze_dim)
-    q_embed = (q * cos) + (rotate_half(q) * sin)
-    k_embed = (k * cos) + (rotate_half(k) * sin)
+    rot_half = rotate_half  # Reduce global resolution
+    # Compute q * cos and rotate_half(q) * sin separately, then sum
+    q_embed = q * cos
+    q_embed.add_(rot_half(q) * sin)
+    k_embed = k * cos
+    k_embed.add_(rot_half(k) * sin)
     return q_embed, k_embed
 
 
@@ -250,11 +254,18 @@ class ApertusAttention(nn.Module):
         **kwargs: Unpack[TransformersKwargs],
     ) -> tuple[torch.Tensor, torch.Tensor]:
         input_shape = hidden_states.shape[:-1]
-        hidden_shape = (*input_shape, -1, self.head_dim)
+        head_dim = self.head_dim  # Avoid repeated lookups
+        num_attention_heads = self.config.num_attention_heads
 
-        query_states = self.q_proj(hidden_states).view(hidden_shape).transpose(1, 2)
-        key_states = self.k_proj(hidden_states).view(hidden_shape).transpose(1, 2)
-        value_states = self.v_proj(hidden_states).view(hidden_shape).transpose(1, 2)
+        hidden_shape = (*input_shape, -1, head_dim)
+
+        q_proj = self.q_proj(hidden_states).view(hidden_shape)
+        k_proj = self.k_proj(hidden_states).view(hidden_shape)
+        v_proj = self.v_proj(hidden_states).view(hidden_shape)
+        # Transposing on last two dims only (likely same pattern)
+        query_states = q_proj.transpose(1, 2)
+        key_states = k_proj.transpose(1, 2)
+        value_states = v_proj.transpose(1, 2)
         query_states = self.q_norm(query_states)
         key_states = self.k_norm(key_states)
 
@@ -266,8 +277,9 @@ class ApertusAttention(nn.Module):
             key_states, value_states = past_key_values.update(key_states, value_states, self.layer_idx, cache_kwargs)
 
         attention_interface: Callable = eager_attention_forward
-        if self.config._attn_implementation != "eager":
-            attention_interface = ALL_ATTENTION_FUNCTIONS[self.config._attn_implementation]
+        attn_impl = self.config._attn_implementation
+        if attn_impl != "eager":
+            attention_interface = ALL_ATTENTION_FUNCTIONS[attn_impl]
 
         attn_output, attn_weights = attention_interface(
             self,
@@ -280,7 +292,7 @@ class ApertusAttention(nn.Module):
             **kwargs,
         )
 
-        attn_output = attn_output.reshape(*input_shape, -1).contiguous()
+        attn_output = attn_output.reshape(*input_shape, -1)
         attn_output = self.o_proj(attn_output)
         return attn_output, attn_weights
 
