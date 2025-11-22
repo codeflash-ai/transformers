@@ -742,16 +742,21 @@ class JanusVQVAEAttnBlock(nn.Module):
 
         # compute attention
         batch_size, channels, height, width = query_states.shape
-        query_states = query_states.reshape(batch_size, channels, height * width).permute(0, 2, 1)
-        key_states = key_states.reshape(batch_size, channels, height * width)
+        hw = height * width
+
+        # Efficient reshape and transpose using .view() and .transpose for better performance/memory
+        query_states = query_states.view(batch_size, channels, hw).transpose(1, 2)  # (B, HW, C)
+        key_states = key_states.view(batch_size, channels, hw)  # (B, C, HW)
+
+        # fused scaling before bmm
+        scale = channels**-0.5
         attn_weights = torch.bmm(query_states, key_states)
-        attn_weights = attn_weights * (int(channels) ** (-0.5))
+        attn_weights.mul_(scale)  # in-place for memory (safe, no reuse of attn_weights before)
         attn_weights = F.softmax(attn_weights, dim=2)
 
-        # attend to values
-        value_states = value_states.reshape(batch_size, channels, height * width)
-        attn_weights = attn_weights.permute(0, 2, 1)
-        attn_output = torch.bmm(value_states, attn_weights).reshape(batch_size, channels, height, width)
+        value_states = value_states.view(batch_size, channels, hw)  # (B, C, HW)
+        attn_output = torch.bmm(value_states, attn_weights.transpose(1, 2))  # (B, C, HW)
+        attn_output = attn_output.view(batch_size, channels, height, width)
 
         attn_output = self.proj_out(attn_output)
         return residual + attn_output
