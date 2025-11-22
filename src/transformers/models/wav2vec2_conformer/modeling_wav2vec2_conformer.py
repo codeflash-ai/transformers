@@ -307,7 +307,7 @@ class Wav2Vec2ConformerFeatureEncoder(nn.Module):
         self._requires_grad = False
 
     def forward(self, input_values):
-        hidden_states = input_values[:, None]
+        hidden_states = input_values.unsqueeze(1)
 
         # make sure hidden_states require grad for gradient_checkpointing
         if self._requires_grad and self.training:
