@@ -73,85 +73,110 @@ def get_deta_config(model_name):
 
 # here we list all keys to be renamed (original name on the left, our name on the right)
 def create_rename_keys(config):
-    rename_keys = []
+    # Collect all keys in a single list for faster append operations
+    rename_keys = [
+        # stem
+        ("backbone.0.body.patch_embed.proj.weight", "model.backbone.model.embeddings.patch_embeddings.projection.weight"),
+        ("backbone.0.body.patch_embed.proj.bias", "model.backbone.model.embeddings.patch_embeddings.projection.bias"),
+        ("backbone.0.body.patch_embed.norm.weight", "model.backbone.model.embeddings.norm.weight"),
+        ("backbone.0.body.patch_embed.norm.bias", "model.backbone.model.embeddings.norm.bias"),
+    ]
 
-    # stem
-    # fmt: off
-    rename_keys.append(("backbone.0.body.patch_embed.proj.weight", "model.backbone.model.embeddings.patch_embeddings.projection.weight"))
-    rename_keys.append(("backbone.0.body.patch_embed.proj.bias", "model.backbone.model.embeddings.patch_embeddings.projection.bias"))
-    rename_keys.append(("backbone.0.body.patch_embed.norm.weight", "model.backbone.model.embeddings.norm.weight"))
-    rename_keys.append(("backbone.0.body.patch_embed.norm.bias", "model.backbone.model.embeddings.norm.bias"))
-    # stages
-    for i in range(len(config.backbone_config.depths)):
-        for j in range(config.backbone_config.depths[i]):
-            rename_keys.append((f"backbone.0.body.layers.{i}.blocks.{j}.norm1.weight", f"model.backbone.model.encoder.layers.{i}.blocks.{j}.layernorm_before.weight"))
-            rename_keys.append((f"backbone.0.body.layers.{i}.blocks.{j}.norm1.bias", f"model.backbone.model.encoder.layers.{i}.blocks.{j}.layernorm_before.bias"))
-            rename_keys.append((f"backbone.0.body.layers.{i}.blocks.{j}.attn.relative_position_bias_table", f"model.backbone.model.encoder.layers.{i}.blocks.{j}.attention.self.relative_position_bias_table"))
-            rename_keys.append((f"backbone.0.body.layers.{i}.blocks.{j}.attn.relative_position_index", f"model.backbone.model.encoder.layers.{i}.blocks.{j}.attention.self.relative_position_index"))
-            rename_keys.append((f"backbone.0.body.layers.{i}.blocks.{j}.attn.proj.weight", f"model.backbone.model.encoder.layers.{i}.blocks.{j}.attention.output.dense.weight"))
-            rename_keys.append((f"backbone.0.body.layers.{i}.blocks.{j}.attn.proj.bias", f"model.backbone.model.encoder.layers.{i}.blocks.{j}.attention.output.dense.bias"))
-            rename_keys.append((f"backbone.0.body.layers.{i}.blocks.{j}.norm2.weight", f"model.backbone.model.encoder.layers.{i}.blocks.{j}.layernorm_after.weight"))
-            rename_keys.append((f"backbone.0.body.layers.{i}.blocks.{j}.norm2.bias", f"model.backbone.model.encoder.layers.{i}.blocks.{j}.layernorm_after.bias"))
-            rename_keys.append((f"backbone.0.body.layers.{i}.blocks.{j}.mlp.fc1.weight", f"model.backbone.model.encoder.layers.{i}.blocks.{j}.intermediate.dense.weight"))
-            rename_keys.append((f"backbone.0.body.layers.{i}.blocks.{j}.mlp.fc1.bias", f"model.backbone.model.encoder.layers.{i}.blocks.{j}.intermediate.dense.bias"))
-            rename_keys.append((f"backbone.0.body.layers.{i}.blocks.{j}.mlp.fc2.weight", f"model.backbone.model.encoder.layers.{i}.blocks.{j}.output.dense.weight"))
-            rename_keys.append((f"backbone.0.body.layers.{i}.blocks.{j}.mlp.fc2.bias", f"model.backbone.model.encoder.layers.{i}.blocks.{j}.output.dense.bias"))
+    # stages (use local vars for repeated attributes so attribute lookups don't repeat)
+    depths = config.backbone_config.depths
+    num_stages = len(depths)
+    for i in range(num_stages):
+        depth_i = depths[i]
+        for j in range(depth_i):
+            # Use local variables for precalculated string prefixes (minor optimization in tight loop)
+            src_prefix = f"backbone.0.body.layers.{i}.blocks.{j}"
+            tgt_prefix = f"model.backbone.model.encoder.layers.{i}.blocks.{j}"
+            rename_keys.extend([
+                (f"{src_prefix}.norm1.weight", f"{tgt_prefix}.layernorm_before.weight"),
+                (f"{src_prefix}.norm1.bias", f"{tgt_prefix}.layernorm_before.bias"),
+                (f"{src_prefix}.attn.relative_position_bias_table", f"{tgt_prefix}.attention.self.relative_position_bias_table"),
+                (f"{src_prefix}.attn.relative_position_index", f"{tgt_prefix}.attention.self.relative_position_index"),
+                (f"{src_prefix}.attn.proj.weight", f"{tgt_prefix}.attention.output.dense.weight"),
+                (f"{src_prefix}.attn.proj.bias", f"{tgt_prefix}.attention.output.dense.bias"),
+                (f"{src_prefix}.norm2.weight", f"{tgt_prefix}.layernorm_after.weight"),
+                (f"{src_prefix}.norm2.bias", f"{tgt_prefix}.layernorm_after.bias"),
+                (f"{src_prefix}.mlp.fc1.weight", f"{tgt_prefix}.intermediate.dense.weight"),
+                (f"{src_prefix}.mlp.fc1.bias", f"{tgt_prefix}.intermediate.dense.bias"),
+                (f"{src_prefix}.mlp.fc2.weight", f"{tgt_prefix}.output.dense.weight"),
+                (f"{src_prefix}.mlp.fc2.bias", f"{tgt_prefix}.output.dense.bias"),
+            ])
+
 
         if i < 3:
-            rename_keys.append((f"backbone.0.body.layers.{i}.downsample.reduction.weight", f"model.backbone.model.encoder.layers.{i}.downsample.reduction.weight"))
-            rename_keys.append((f"backbone.0.body.layers.{i}.downsample.norm.weight", f"model.backbone.model.encoder.layers.{i}.downsample.norm.weight"))
-            rename_keys.append((f"backbone.0.body.layers.{i}.downsample.norm.bias", f"model.backbone.model.encoder.layers.{i}.downsample.norm.bias"))
+            src_down_prefix = f"backbone.0.body.layers.{i}.downsample"
+            tgt_down_prefix = f"model.backbone.model.encoder.layers.{i}.downsample"
+            rename_keys.extend([
+                (f"{src_down_prefix}.reduction.weight", f"{tgt_down_prefix}.reduction.weight"),
+                (f"{src_down_prefix}.norm.weight", f"{tgt_down_prefix}.norm.weight"),
+                (f"{src_down_prefix}.norm.bias", f"{tgt_down_prefix}.norm.bias"),
+            ])
 
-    rename_keys.append(("backbone.0.body.norm1.weight", "model.backbone.model.hidden_states_norms.stage2.weight"))
-    rename_keys.append(("backbone.0.body.norm1.bias", "model.backbone.model.hidden_states_norms.stage2.bias"))
-    rename_keys.append(("backbone.0.body.norm2.weight", "model.backbone.model.hidden_states_norms.stage3.weight"))
-    rename_keys.append(("backbone.0.body.norm2.bias", "model.backbone.model.hidden_states_norms.stage3.bias"))
-    rename_keys.append(("backbone.0.body.norm3.weight", "model.backbone.model.hidden_states_norms.stage4.weight"))
-    rename_keys.append(("backbone.0.body.norm3.bias", "model.backbone.model.hidden_states_norms.stage4.bias"))
+    # Add static backbone norm keys (grouped in a single extend for fewer `append` calls)
+    rename_keys.extend([
+        ("backbone.0.body.norm1.weight", "model.backbone.model.hidden_states_norms.stage2.weight"),
+        ("backbone.0.body.norm1.bias", "model.backbone.model.hidden_states_norms.stage2.bias"),
+        ("backbone.0.body.norm2.weight", "model.backbone.model.hidden_states_norms.stage3.weight"),
+        ("backbone.0.body.norm2.bias", "model.backbone.model.hidden_states_norms.stage3.bias"),
+        ("backbone.0.body.norm3.weight", "model.backbone.model.hidden_states_norms.stage4.weight"),
+        ("backbone.0.body.norm3.bias", "model.backbone.model.hidden_states_norms.stage4.bias"),
+    ])
 
     # transformer encoder
-    for i in range(config.encoder_layers):
-        rename_keys.append((f"transformer.encoder.layers.{i}.self_attn.sampling_offsets.weight", f"model.encoder.layers.{i}.self_attn.sampling_offsets.weight"))
-        rename_keys.append((f"transformer.encoder.layers.{i}.self_attn.sampling_offsets.bias", f"model.encoder.layers.{i}.self_attn.sampling_offsets.bias"))
-        rename_keys.append((f"transformer.encoder.layers.{i}.self_attn.attention_weights.weight", f"model.encoder.layers.{i}.self_attn.attention_weights.weight"))
-        rename_keys.append((f"transformer.encoder.layers.{i}.self_attn.attention_weights.bias", f"model.encoder.layers.{i}.self_attn.attention_weights.bias"))
-        rename_keys.append((f"transformer.encoder.layers.{i}.self_attn.value_proj.weight", f"model.encoder.layers.{i}.self_attn.value_proj.weight"))
-        rename_keys.append((f"transformer.encoder.layers.{i}.self_attn.value_proj.bias", f"model.encoder.layers.{i}.self_attn.value_proj.bias"))
-        rename_keys.append((f"transformer.encoder.layers.{i}.self_attn.output_proj.weight", f"model.encoder.layers.{i}.self_attn.output_proj.weight"))
-        rename_keys.append((f"transformer.encoder.layers.{i}.self_attn.output_proj.bias", f"model.encoder.layers.{i}.self_attn.output_proj.bias"))
-        rename_keys.append((f"transformer.encoder.layers.{i}.norm1.weight", f"model.encoder.layers.{i}.self_attn_layer_norm.weight"))
-        rename_keys.append((f"transformer.encoder.layers.{i}.norm1.bias", f"model.encoder.layers.{i}.self_attn_layer_norm.bias"))
-        rename_keys.append((f"transformer.encoder.layers.{i}.linear1.weight", f"model.encoder.layers.{i}.fc1.weight"))
-        rename_keys.append((f"transformer.encoder.layers.{i}.linear1.bias", f"model.encoder.layers.{i}.fc1.bias"))
-        rename_keys.append((f"transformer.encoder.layers.{i}.linear2.weight", f"model.encoder.layers.{i}.fc2.weight"))
-        rename_keys.append((f"transformer.encoder.layers.{i}.linear2.bias", f"model.encoder.layers.{i}.fc2.bias"))
-        rename_keys.append((f"transformer.encoder.layers.{i}.norm2.weight", f"model.encoder.layers.{i}.final_layer_norm.weight"))
-        rename_keys.append((f"transformer.encoder.layers.{i}.norm2.bias", f"model.encoder.layers.{i}.final_layer_norm.bias"))
+    encoder_layers = config.encoder_layers
+    for i in range(encoder_layers):
+        src_prefix = f"transformer.encoder.layers.{i}"
+        tgt_prefix = f"model.encoder.layers.{i}"
+        rename_keys.extend([
+            (f"{src_prefix}.self_attn.sampling_offsets.weight", f"{tgt_prefix}.self_attn.sampling_offsets.weight"),
+            (f"{src_prefix}.self_attn.sampling_offsets.bias", f"{tgt_prefix}.self_attn.sampling_offsets.bias"),
+            (f"{src_prefix}.self_attn.attention_weights.weight", f"{tgt_prefix}.self_attn.attention_weights.weight"),
+            (f"{src_prefix}.self_attn.attention_weights.bias", f"{tgt_prefix}.self_attn.attention_weights.bias"),
+            (f"{src_prefix}.self_attn.value_proj.weight", f"{tgt_prefix}.self_attn.value_proj.weight"),
+            (f"{src_prefix}.self_attn.value_proj.bias", f"{tgt_prefix}.self_attn.value_proj.bias"),
+            (f"{src_prefix}.self_attn.output_proj.weight", f"{tgt_prefix}.self_attn.output_proj.weight"),
+            (f"{src_prefix}.self_attn.output_proj.bias", f"{tgt_prefix}.self_attn.output_proj.bias"),
+            (f"{src_prefix}.norm1.weight", f"{tgt_prefix}.self_attn_layer_norm.weight"),
+            (f"{src_prefix}.norm1.bias", f"{tgt_prefix}.self_attn_layer_norm.bias"),
+            (f"{src_prefix}.linear1.weight", f"{tgt_prefix}.fc1.weight"),
+            (f"{src_prefix}.linear1.bias", f"{tgt_prefix}.fc1.bias"),
+            (f"{src_prefix}.linear2.weight", f"{tgt_prefix}.fc2.weight"),
+            (f"{src_prefix}.linear2.bias", f"{tgt_prefix}.fc2.bias"),
+            (f"{src_prefix}.norm2.weight", f"{tgt_prefix}.final_layer_norm.weight"),
+            (f"{src_prefix}.norm2.bias", f"{tgt_prefix}.final_layer_norm.bias"),
+        ])
 
     # transformer decoder
-    for i in range(config.decoder_layers):
-        rename_keys.append((f"transformer.decoder.layers.{i}.cross_attn.sampling_offsets.weight", f"model.decoder.layers.{i}.encoder_attn.sampling_offsets.weight"))
-        rename_keys.append((f"transformer.decoder.layers.{i}.cross_attn.sampling_offsets.bias", f"model.decoder.layers.{i}.encoder_attn.sampling_offsets.bias"))
-        rename_keys.append((f"transformer.decoder.layers.{i}.cross_attn.attention_weights.weight", f"model.decoder.layers.{i}.encoder_attn.attention_weights.weight"))
-        rename_keys.append((f"transformer.decoder.layers.{i}.cross_attn.attention_weights.bias", f"model.decoder.layers.{i}.encoder_attn.attention_weights.bias"))
-        rename_keys.append((f"transformer.decoder.layers.{i}.cross_attn.value_proj.weight", f"model.decoder.layers.{i}.encoder_attn.value_proj.weight"))
-        rename_keys.append((f"transformer.decoder.layers.{i}.cross_attn.value_proj.bias", f"model.decoder.layers.{i}.encoder_attn.value_proj.bias"))
-        rename_keys.append((f"transformer.decoder.layers.{i}.cross_attn.output_proj.weight", f"model.decoder.layers.{i}.encoder_attn.output_proj.weight"))
-        rename_keys.append((f"transformer.decoder.layers.{i}.cross_attn.output_proj.bias", f"model.decoder.layers.{i}.encoder_attn.output_proj.bias"))
-        rename_keys.append((f"transformer.decoder.layers.{i}.norm1.weight", f"model.decoder.layers.{i}.encoder_attn_layer_norm.weight"))
-        rename_keys.append((f"transformer.decoder.layers.{i}.norm1.bias", f"model.decoder.layers.{i}.encoder_attn_layer_norm.bias"))
-        rename_keys.append((f"transformer.decoder.layers.{i}.self_attn.out_proj.weight", f"model.decoder.layers.{i}.self_attn.out_proj.weight"))
-        rename_keys.append((f"transformer.decoder.layers.{i}.self_attn.out_proj.bias", f"model.decoder.layers.{i}.self_attn.out_proj.bias"))
-        rename_keys.append((f"transformer.decoder.layers.{i}.norm2.weight", f"model.decoder.layers.{i}.self_attn_layer_norm.weight"))
-        rename_keys.append((f"transformer.decoder.layers.{i}.norm2.bias", f"model.decoder.layers.{i}.self_attn_layer_norm.bias"))
-        rename_keys.append((f"transformer.decoder.layers.{i}.linear1.weight", f"model.decoder.layers.{i}.fc1.weight"))
-        rename_keys.append((f"transformer.decoder.layers.{i}.linear1.bias", f"model.decoder.layers.{i}.fc1.bias"))
-        rename_keys.append((f"transformer.decoder.layers.{i}.linear2.weight", f"model.decoder.layers.{i}.fc2.weight"))
-        rename_keys.append((f"transformer.decoder.layers.{i}.linear2.bias", f"model.decoder.layers.{i}.fc2.bias"))
-        rename_keys.append((f"transformer.decoder.layers.{i}.norm3.weight", f"model.decoder.layers.{i}.final_layer_norm.weight"))
-        rename_keys.append((f"transformer.decoder.layers.{i}.norm3.bias", f"model.decoder.layers.{i}.final_layer_norm.bias"))
-
-    # fmt: on
+    decoder_layers = config.decoder_layers
+    for i in range(decoder_layers):
+        src_prefix = f"transformer.decoder.layers.{i}"
+        tgt_prefix = f"model.decoder.layers.{i}"
+        rename_keys.extend([
+            (f"{src_prefix}.cross_attn.sampling_offsets.weight", f"{tgt_prefix}.encoder_attn.sampling_offsets.weight"),
+            (f"{src_prefix}.cross_attn.sampling_offsets.bias", f"{tgt_prefix}.encoder_attn.sampling_offsets.bias"),
+            (f"{src_prefix}.cross_attn.attention_weights.weight", f"{tgt_prefix}.encoder_attn.attention_weights.weight"),
+            (f"{src_prefix}.cross_attn.attention_weights.bias", f"{tgt_prefix}.encoder_attn.attention_weights.bias"),
+            (f"{src_prefix}.cross_attn.value_proj.weight", f"{tgt_prefix}.encoder_attn.value_proj.weight"),
+            (f"{src_prefix}.cross_attn.value_proj.bias", f"{tgt_prefix}.encoder_attn.value_proj.bias"),
+            (f"{src_prefix}.cross_attn.output_proj.weight", f"{tgt_prefix}.encoder_attn.output_proj.weight"),
+            (f"{src_prefix}.cross_attn.output_proj.bias", f"{tgt_prefix}.encoder_attn.output_proj.bias"),
+            (f"{src_prefix}.norm1.weight", f"{tgt_prefix}.encoder_attn_layer_norm.weight"),
+            (f"{src_prefix}.norm1.bias", f"{tgt_prefix}.encoder_attn_layer_norm.bias"),
+            (f"{src_prefix}.self_attn.out_proj.weight", f"{tgt_prefix}.self_attn.out_proj.weight"),
+            (f"{src_prefix}.self_attn.out_proj.bias", f"{tgt_prefix}.self_attn.out_proj.bias"),
+            (f"{src_prefix}.norm2.weight", f"{tgt_prefix}.self_attn_layer_norm.weight"),
+            (f"{src_prefix}.norm2.bias", f"{tgt_prefix}.self_attn_layer_norm.bias"),
+            (f"{src_prefix}.linear1.weight", f"{tgt_prefix}.fc1.weight"),
+            (f"{src_prefix}.linear1.bias", f"{tgt_prefix}.fc1.bias"),
+            (f"{src_prefix}.linear2.weight", f"{tgt_prefix}.fc2.weight"),
+            (f"{src_prefix}.linear2.bias", f"{tgt_prefix}.fc2.bias"),
+            (f"{src_prefix}.norm3.weight", f"{tgt_prefix}.final_layer_norm.weight"),
+            (f"{src_prefix}.norm3.bias", f"{tgt_prefix}.final_layer_norm.bias"),
+        ])
 
     return rename_keys
 
