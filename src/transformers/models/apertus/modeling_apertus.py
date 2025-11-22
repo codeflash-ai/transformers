@@ -127,15 +127,38 @@ class ApertusRotaryEmbedding(nn.Module):
     @torch.no_grad()
     @dynamic_rope_update  # power user: used with advanced RoPE types (e.g. dynamic rope)
     def forward(self, x, position_ids):
-        inv_freq_expanded = self.inv_freq[None, :, None].float().expand(position_ids.shape[0], -1, 1).to(x.device)
-        position_ids_expanded = position_ids[:, None, :].float()
+        """
+        Optimize memory usage and performance by:
+        - Allocating output directly on x.device and correct dtype.
+        - Avoiding unneeded .float() casts and device transfers.
+        - Replacing inefficient broadcasting/expand with math using broadcasting semantics.
+        """
 
-        device_type = x.device.type if isinstance(x.device.type, str) and x.device.type != "mps" else "cpu"
-        with torch.autocast(device_type=device_type, enabled=False):  # Force float32
-            freqs = (inv_freq_expanded.float() @ position_ids_expanded.float()).transpose(1, 2)
-            emb = torch.cat((freqs, freqs), dim=-1)
-            cos = emb.cos() * self.attention_scaling
-            sin = emb.sin() * self.attention_scaling
+        # Avoid repeated float() and expand() calls, compute expanded inv_freq and position_ids in one go
+        # position_ids: (batch, seq_len)
+        # inv_freq: (dim // 2,) or (dim,)
+        # Broadcasting logic: want shape (batch, seq_len, n_freq)
+        inv_freq = self.inv_freq
+        attention_scaling = self.attention_scaling
+
+        # position_ids: (batch, seq_len)
+        # inv_freq:      (n_freq,)
+
+        # Compute enough for broadcasting (batch, seq_len, 1) and (1, 1, n_freq)
+        # so (batch, seq_len, n_freq)
+        # Use float32 for high accuracy, only cast at output
+        pos_float = position_ids.to(dtype=torch.float32, device=x.device)
+        invf_float = inv_freq.to(dtype=torch.float32, device=x.device)
+
+        # Shape: (batch, seq_len, n_freq)
+        freqs = pos_float.unsqueeze(-1) * invf_float
+
+        # Duplicate frequencies for cos/sin: (batch, seq_len, n_freq*2)
+        emb = torch.cat((freqs, freqs), dim=-1)
+
+        # Compute, apply scaling in float32, finally cast to x.dtype
+        cos = torch.cos(emb) * attention_scaling
+        sin = torch.sin(emb) * attention_scaling
 
         return cos.to(dtype=x.dtype), sin.to(dtype=x.dtype)
 
