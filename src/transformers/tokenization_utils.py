@@ -21,7 +21,7 @@ import itertools
 import re
 import unicodedata
 from collections import OrderedDict
-from typing import Any, Optional, Union, overload
+from typing import Any, Optional, Union
 
 from .tokenization_utils_base import (
     ENCODE_KWARGS_DOCSTRING,
@@ -1035,11 +1035,65 @@ class PreTrainedTokenizer(PreTrainedTokenizerBase):
             )
         return [0] * ((len(token_ids_1) if token_ids_1 else 0) + len(token_ids_0))
 
-    @overload
-    def convert_ids_to_tokens(self, ids: int, skip_special_tokens: bool = False) -> str: ...
+    def convert_ids_to_tokens(self, ids: int, skip_special_tokens: bool = False) -> str:
+        """
+        Converts a single index or a sequence of indices in a token or a sequence of tokens, using the vocabulary and
+        added tokens.
 
-    @overload
-    def convert_ids_to_tokens(self, ids: list[int], skip_special_tokens: bool = False) -> list[str]: ...
+        Args:
+            ids (`int` or `list[int]`):
+                The token id (or token ids) to convert to tokens.
+            skip_special_tokens (`bool`, *optional*, defaults to `False`):
+                Whether or not to remove special tokens in the decoding.
+
+        Returns:
+            `str` or `list[str]`: The decoded token(s).
+        """
+        if isinstance(ids, int):
+            if ids in self._added_tokens_decoder:
+                return self._added_tokens_decoder[ids].content
+            else:
+                return self._convert_id_to_token(ids)
+        tokens = []
+        for index in ids:
+            index = int(index)
+            if skip_special_tokens and index in self.all_special_ids:
+                continue
+            if index in self._added_tokens_decoder:
+                tokens.append(self._added_tokens_decoder[index].content)
+            else:
+                tokens.append(self._convert_id_to_token(index))
+        return tokens
+
+    def convert_ids_to_tokens(self, ids: list[int], skip_special_tokens: bool = False) -> list[str]:
+        """
+        Converts a single index or a sequence of indices in a token or a sequence of tokens, using the vocabulary and
+        added tokens.
+
+        Args:
+            ids (`int` or `list[int]`):
+                The token id (or token ids) to convert to tokens.
+            skip_special_tokens (`bool`, *optional*, defaults to `False`):
+                Whether or not to remove special tokens in the decoding.
+
+        Returns:
+            `str` or `list[str]`: The decoded token(s).
+        """
+        if isinstance(ids, int):
+            if ids in self._added_tokens_decoder:
+                return self._added_tokens_decoder[ids].content
+            else:
+                return self._convert_id_to_token(ids)
+        tokens = []
+        for index in ids:
+            index = int(index)
+            if skip_special_tokens and index in self.all_special_ids:
+                continue
+            if index in self._added_tokens_decoder:
+                tokens.append(self._added_tokens_decoder[index].content)
+            else:
+                tokens.append(self._convert_id_to_token(index))
+        return tokens
 
     def convert_ids_to_tokens(
         self, ids: Union[int, list[int]], skip_special_tokens: bool = False
