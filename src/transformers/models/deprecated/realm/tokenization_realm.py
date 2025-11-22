@@ -465,10 +465,12 @@ class BasicTokenizer:
         output = []
         for char in text:
             cp = ord(char)
-            if cp == 0 or cp == 0xFFFD or _is_control(char):
+            if cp == 0 or cp == 0xFFFD:
                 continue
             if _is_whitespace(char):
                 output.append(" ")
+            elif _is_control(char):
+                continue
             else:
                 output.append(char)
         return "".join(output)
