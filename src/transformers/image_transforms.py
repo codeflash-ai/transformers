@@ -954,8 +954,13 @@ def group_images_by_shape(
         images, *paired_inputs, is_nested=is_nested
     )
 
-    # Stack images with the same shape
-    grouped_images = {shape: torch.stack(images_list, dim=0) for shape, images_list in grouped_images.items()}
+    # Stack efficiently by shape
+    for shape, images_list in grouped_images.items():
+        # Preallocate once when possible
+        if images_list and isinstance(images_list[0], torch.Tensor):
+            grouped_images[shape] = torch.stack(images_list, dim=0)
+        else:
+            grouped_images[shape] = images_list
 
     return grouped_images, *paired_grouped_values, grouped_images_index
 
