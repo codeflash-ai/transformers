@@ -117,6 +117,7 @@ class RealmTokenizer(PreTrainedTokenizer):
                 " model use `tokenizer = RealmTokenizer.from_pretrained(PRETRAINED_MODEL_NAME)`"
             )
         self.vocab = load_vocab(vocab_file)
+        self._unk_token_id = self.vocab.get(str(unk_token))
         self.ids_to_tokens = collections.OrderedDict([(ids, tok) for tok, ids in self.vocab.items()])
         self.do_basic_tokenize = do_basic_tokenize
         if do_basic_tokenize:
@@ -167,7 +168,11 @@ class RealmTokenizer(PreTrainedTokenizer):
 
     def _convert_token_to_id(self, token):
         """Converts a token (str) in an id using the vocab."""
-        return self.vocab.get(token, self.vocab.get(self.unk_token))
+        # Use the pre-cached unk_token id to avoid dictionary lookup each time
+        res = self.vocab.get(token)
+        if res is not None:
+            return res
+        return self._unk_token_id
 
     def _convert_id_to_token(self, index):
         """Converts an index (integer) in a token (str) using the vocab."""
