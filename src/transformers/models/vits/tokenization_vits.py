@@ -114,24 +114,33 @@ class VitsTokenizer(PreTrainedTokenizer):
 
     def normalize_text(self, input_string):
         """Lowercase the input string, respecting any special token ids that may be part or entirely upper-cased."""
-        all_vocabulary = list(self.encoder.keys()) + list(self.added_tokens_encoder.keys())
-        filtered_text = ""
+        trie = self._build_vocabulary_trie()
+        filtered = []
 
         i = 0
-        while i < len(input_string):
-            found_match = False
-            for word in all_vocabulary:
-                if input_string[i : i + len(word)] == word:
-                    filtered_text += word
-                    i += len(word)
-                    found_match = True
-                    break
+        length = len(input_string)
+        while i < length:
+            node = trie
+            j = i
+            matched_word = None
+            last_match_pos = i
 
-            if not found_match:
-                filtered_text += input_string[i].lower()
+            # Traverse as far as possible with the trie to find the longest vocabulary word match
+            while j < length and input_string[j] in node:
+                node = node[input_string[j]]
+                j += 1
+                if "__end__" in node:
+                    matched_word = node["__end__"]
+                    last_match_pos = j
+
+            if matched_word is not None:
+                filtered.append(matched_word)
+                i = last_match_pos
+            else:
+                filtered.append(input_string[i].lower())
                 i += 1
 
-        return filtered_text
+        return "".join(filtered)
 
     def _preprocess_char(self, text):
         """Special treatment of characters in certain languages"""
@@ -241,6 +250,26 @@ class VitsTokenizer(PreTrainedTokenizer):
             f.write(json.dumps(self.encoder, indent=2, sort_keys=True, ensure_ascii=False) + "\n")
 
         return (vocab_file,)
+
+    def _build_vocabulary_trie(self):
+        # Helper to build a trie for word matching acceleration
+        # This trie will map from a character to the next possible nodes, with a final value if it's a terminating word
+        # Only build once, caching in the instance
+        if hasattr(self, "_vocab_trie"):
+            return self._vocab_trie
+
+        all_vocabulary = list(self.encoder.keys()) + list(self.added_tokens_encoder.keys())
+        trie = {}
+        for word in all_vocabulary:
+            node = trie
+            for char in word:
+                if char not in node:
+                    node[char] = {}
+                node = node[char]
+            # End of word
+            node["__end__"] = word
+        self._vocab_trie = trie
+        return trie
 
 
 __all__ = ["VitsTokenizer"]
