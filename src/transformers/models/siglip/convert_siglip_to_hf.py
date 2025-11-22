@@ -227,78 +227,105 @@ def split_encoderblock_layers(state_dict: dict) -> dict:
 
 def create_rename_keys(config):
     rename_keys = []
-    # fmt: off
 
     # vision encoder
 
-    rename_keys.append(("params/img/embedding/kernel", "vision_model.embeddings.patch_embedding.weight"))
-    rename_keys.append(("params/img/embedding/bias", "vision_model.embeddings.patch_embedding.bias"))
-    rename_keys.append(("params/img/pos_embedding", "vision_model.embeddings.position_embedding.weight"))
+    rename_keys.extend([
+        ("params/img/embedding/kernel", "vision_model.embeddings.patch_embedding.weight"),
+        ("params/img/embedding/bias", "vision_model.embeddings.patch_embedding.bias"),
+        ("params/img/pos_embedding", "vision_model.embeddings.position_embedding.weight"),
+    ])
 
-    for i in range(config.vision_config.num_hidden_layers):
-        rename_keys.append((f"params/img/Transformer/encoderblock_{i}/LayerNorm_0/scale", f"vision_model.encoder.layers.{i}.layer_norm1.weight"))
-        rename_keys.append((f"params/img/Transformer/encoderblock_{i}/LayerNorm_0/bias", f"vision_model.encoder.layers.{i}.layer_norm1.bias"))
-        rename_keys.append((f"params/img/Transformer/encoderblock_{i}/LayerNorm_1/scale", f"vision_model.encoder.layers.{i}.layer_norm2.weight"))
-        rename_keys.append((f"params/img/Transformer/encoderblock_{i}/LayerNorm_1/bias", f"vision_model.encoder.layers.{i}.layer_norm2.bias"))
-        rename_keys.append((f"params/img/Transformer/encoderblock_{i}/MlpBlock_0/Dense_0/kernel", f"vision_model.encoder.layers.{i}.mlp.fc1.weight"))
-        rename_keys.append((f"params/img/Transformer/encoderblock_{i}/MlpBlock_0/Dense_0/bias", f"vision_model.encoder.layers.{i}.mlp.fc1.bias"))
-        rename_keys.append((f"params/img/Transformer/encoderblock_{i}/MlpBlock_0/Dense_1/kernel", f"vision_model.encoder.layers.{i}.mlp.fc2.weight"))
-        rename_keys.append((f"params/img/Transformer/encoderblock_{i}/MlpBlock_0/Dense_1/bias", f"vision_model.encoder.layers.{i}.mlp.fc2.bias"))
-        rename_keys.append((f"params/img/Transformer/encoderblock_{i}/MultiHeadDotProductAttention_0/key/kernel", f"vision_model.encoder.layers.{i}.self_attn.k_proj.weight"))
-        rename_keys.append((f"params/img/Transformer/encoderblock_{i}/MultiHeadDotProductAttention_0/key/bias", f"vision_model.encoder.layers.{i}.self_attn.k_proj.bias"))
-        rename_keys.append((f"params/img/Transformer/encoderblock_{i}/MultiHeadDotProductAttention_0/value/kernel", f"vision_model.encoder.layers.{i}.self_attn.v_proj.weight"))
-        rename_keys.append((f"params/img/Transformer/encoderblock_{i}/MultiHeadDotProductAttention_0/value/bias", f"vision_model.encoder.layers.{i}.self_attn.v_proj.bias"))
-        rename_keys.append((f"params/img/Transformer/encoderblock_{i}/MultiHeadDotProductAttention_0/query/kernel", f"vision_model.encoder.layers.{i}.self_attn.q_proj.weight"))
-        rename_keys.append((f"params/img/Transformer/encoderblock_{i}/MultiHeadDotProductAttention_0/query/bias", f"vision_model.encoder.layers.{i}.self_attn.q_proj.bias"))
-        rename_keys.append((f"params/img/Transformer/encoderblock_{i}/MultiHeadDotProductAttention_0/out/kernel", f"vision_model.encoder.layers.{i}.self_attn.out_proj.weight"))
-        rename_keys.append((f"params/img/Transformer/encoderblock_{i}/MultiHeadDotProductAttention_0/out/bias", f"vision_model.encoder.layers.{i}.self_attn.out_proj.bias"))
+    num_v_layers = config.vision_config.num_hidden_layers
+    vision_layer_keys = [
+        ("LayerNorm_0/scale", "layer_norm1.weight"),
+        ("LayerNorm_0/bias", "layer_norm1.bias"),
+        ("LayerNorm_1/scale", "layer_norm2.weight"),
+        ("LayerNorm_1/bias", "layer_norm2.bias"),
+        ("MlpBlock_0/Dense_0/kernel", "mlp.fc1.weight"),
+        ("MlpBlock_0/Dense_0/bias", "mlp.fc1.bias"),
+        ("MlpBlock_0/Dense_1/kernel", "mlp.fc2.weight"),
+        ("MlpBlock_0/Dense_1/bias", "mlp.fc2.bias"),
+        ("MultiHeadDotProductAttention_0/key/kernel", "self_attn.k_proj.weight"),
+        ("MultiHeadDotProductAttention_0/key/bias", "self_attn.k_proj.bias"),
+        ("MultiHeadDotProductAttention_0/value/kernel", "self_attn.v_proj.weight"),
+        ("MultiHeadDotProductAttention_0/value/bias", "self_attn.v_proj.bias"),
+        ("MultiHeadDotProductAttention_0/query/kernel", "self_attn.q_proj.weight"),
+        ("MultiHeadDotProductAttention_0/query/bias", "self_attn.q_proj.bias"),
+        ("MultiHeadDotProductAttention_0/out/kernel", "self_attn.out_proj.weight"),
+        ("MultiHeadDotProductAttention_0/out/bias", "self_attn.out_proj.bias"),
+    ]
 
-    rename_keys.append(("params/img/Transformer/encoder_norm/scale", "vision_model.post_layernorm.weight"))
-    rename_keys.append(("params/img/Transformer/encoder_norm/bias", "vision_model.post_layernorm.bias"))
+    for i in range(num_v_layers):
+        layer_prefix = f"params/img/Transformer/encoderblock_{i}/"
+        hf_prefix = f"vision_model.encoder.layers.{i}."
+        rename_keys.extend(
+            (layer_prefix + k, hf_prefix + v)
+            for k, v in vision_layer_keys
+        )
 
-    rename_keys.append(("params/img/MAPHead_0/probe", "vision_model.head.probe"))
-    rename_keys.append(("params/img/MAPHead_0/LayerNorm_0/scale", "vision_model.head.layernorm.weight"))
-    rename_keys.append(("params/img/MAPHead_0/LayerNorm_0/bias", "vision_model.head.layernorm.bias"))
-    rename_keys.append(("params/img/MAPHead_0/MlpBlock_0/Dense_0/kernel", "vision_model.head.mlp.fc1.weight"))
-    rename_keys.append(("params/img/MAPHead_0/MlpBlock_0/Dense_0/bias", "vision_model.head.mlp.fc1.bias"))
-    rename_keys.append(("params/img/MAPHead_0/MlpBlock_0/Dense_1/kernel", "vision_model.head.mlp.fc2.weight"))
-    rename_keys.append(("params/img/MAPHead_0/MlpBlock_0/Dense_1/bias", "vision_model.head.mlp.fc2.bias"))
-    rename_keys.append(("params/img/MAPHead_0/MultiHeadDotProductAttention_0/out/kernel", "vision_model.head.attention.out_proj.weight"))
-    rename_keys.append(("params/img/MAPHead_0/MultiHeadDotProductAttention_0/out/bias", "vision_model.head.attention.out_proj.bias"))
+    rename_keys.extend([
+        ("params/img/Transformer/encoder_norm/scale", "vision_model.post_layernorm.weight"),
+        ("params/img/Transformer/encoder_norm/bias", "vision_model.post_layernorm.bias"),
+        ("params/img/MAPHead_0/probe", "vision_model.head.probe"),
+        ("params/img/MAPHead_0/LayerNorm_0/scale", "vision_model.head.layernorm.weight"),
+        ("params/img/MAPHead_0/LayerNorm_0/bias", "vision_model.head.layernorm.bias"),
+        ("params/img/MAPHead_0/MlpBlock_0/Dense_0/kernel", "vision_model.head.mlp.fc1.weight"),
+        ("params/img/MAPHead_0/MlpBlock_0/Dense_0/bias", "vision_model.head.mlp.fc1.bias"),
+        ("params/img/MAPHead_0/MlpBlock_0/Dense_1/kernel", "vision_model.head.mlp.fc2.weight"),
+        ("params/img/MAPHead_0/MlpBlock_0/Dense_1/bias", "vision_model.head.mlp.fc2.bias"),
+        ("params/img/MAPHead_0/MultiHeadDotProductAttention_0/out/kernel", "vision_model.head.attention.out_proj.weight"),
+        ("params/img/MAPHead_0/MultiHeadDotProductAttention_0/out/bias", "vision_model.head.attention.out_proj.bias"),
+    ])
 
     # text encoder
 
-    rename_keys.append(("params/txt/Embed_0/embedding", "text_model.embeddings.token_embedding.weight"))
-    rename_keys.append(("params/txt/pos_embedding", "text_model.embeddings.position_embedding.weight"))
+    rename_keys.extend([
+        ("params/txt/Embed_0/embedding", "text_model.embeddings.token_embedding.weight"),
+        ("params/txt/pos_embedding", "text_model.embeddings.position_embedding.weight"),
+    ])
 
-    for i in range(config.text_config.num_hidden_layers):
-        rename_keys.append((f"params/txt/Encoder_0/encoderblock_{i}/LayerNorm_0/scale", f"text_model.encoder.layers.{i}.layer_norm1.weight"))
-        rename_keys.append((f"params/txt/Encoder_0/encoderblock_{i}/LayerNorm_0/bias", f"text_model.encoder.layers.{i}.layer_norm1.bias"))
-        rename_keys.append((f"params/txt/Encoder_0/encoderblock_{i}/LayerNorm_1/scale", f"text_model.encoder.layers.{i}.layer_norm2.weight"))
-        rename_keys.append((f"params/txt/Encoder_0/encoderblock_{i}/LayerNorm_1/bias", f"text_model.encoder.layers.{i}.layer_norm2.bias"))
-        rename_keys.append((f"params/txt/Encoder_0/encoderblock_{i}/MlpBlock_0/Dense_0/kernel", f"text_model.encoder.layers.{i}.mlp.fc1.weight"))
-        rename_keys.append((f"params/txt/Encoder_0/encoderblock_{i}/MlpBlock_0/Dense_0/bias", f"text_model.encoder.layers.{i}.mlp.fc1.bias"))
-        rename_keys.append((f"params/txt/Encoder_0/encoderblock_{i}/MlpBlock_0/Dense_1/kernel", f"text_model.encoder.layers.{i}.mlp.fc2.weight"))
-        rename_keys.append((f"params/txt/Encoder_0/encoderblock_{i}/MlpBlock_0/Dense_1/bias", f"text_model.encoder.layers.{i}.mlp.fc2.bias"))
-        rename_keys.append((f"params/txt/Encoder_0/encoderblock_{i}/MultiHeadDotProductAttention_0/key/kernel", f"text_model.encoder.layers.{i}.self_attn.k_proj.weight"))
-        rename_keys.append((f"params/txt/Encoder_0/encoderblock_{i}/MultiHeadDotProductAttention_0/key/bias", f"text_model.encoder.layers.{i}.self_attn.k_proj.bias"))
-        rename_keys.append((f"params/txt/Encoder_0/encoderblock_{i}/MultiHeadDotProductAttention_0/value/kernel", f"text_model.encoder.layers.{i}.self_attn.v_proj.weight"))
-        rename_keys.append((f"params/txt/Encoder_0/encoderblock_{i}/MultiHeadDotProductAttention_0/value/bias", f"text_model.encoder.layers.{i}.self_attn.v_proj.bias"))
-        rename_keys.append((f"params/txt/Encoder_0/encoderblock_{i}/MultiHeadDotProductAttention_0/query/kernel", f"text_model.encoder.layers.{i}.self_attn.q_proj.weight"))
-        rename_keys.append((f"params/txt/Encoder_0/encoderblock_{i}/MultiHeadDotProductAttention_0/query/bias", f"text_model.encoder.layers.{i}.self_attn.q_proj.bias"))
-        rename_keys.append((f"params/txt/Encoder_0/encoderblock_{i}/MultiHeadDotProductAttention_0/out/kernel", f"text_model.encoder.layers.{i}.self_attn.out_proj.weight"))
-        rename_keys.append((f"params/txt/Encoder_0/encoderblock_{i}/MultiHeadDotProductAttention_0/out/bias", f"text_model.encoder.layers.{i}.self_attn.out_proj.bias"))
+    num_t_layers = config.text_config.num_hidden_layers
+    text_layer_keys = [
+        ("LayerNorm_0/scale", "layer_norm1.weight"),
+        ("LayerNorm_0/bias", "layer_norm1.bias"),
+        ("LayerNorm_1/scale", "layer_norm2.weight"),
+        ("LayerNorm_1/bias", "layer_norm2.bias"),
+        ("MlpBlock_0/Dense_0/kernel", "mlp.fc1.weight"),
+        ("MlpBlock_0/Dense_0/bias", "mlp.fc1.bias"),
+        ("MlpBlock_0/Dense_1/kernel", "mlp.fc2.weight"),
+        ("MlpBlock_0/Dense_1/bias", "mlp.fc2.bias"),
+        ("MultiHeadDotProductAttention_0/key/kernel", "self_attn.k_proj.weight"),
+        ("MultiHeadDotProductAttention_0/key/bias", "self_attn.k_proj.bias"),
+        ("MultiHeadDotProductAttention_0/value/kernel", "self_attn.v_proj.weight"),
+        ("MultiHeadDotProductAttention_0/value/bias", "self_attn.v_proj.bias"),
+        ("MultiHeadDotProductAttention_0/query/kernel", "self_attn.q_proj.weight"),
+        ("MultiHeadDotProductAttention_0/query/bias", "self_attn.q_proj.bias"),
+        ("MultiHeadDotProductAttention_0/out/kernel", "self_attn.out_proj.weight"),
+        ("MultiHeadDotProductAttention_0/out/bias", "self_attn.out_proj.bias"),
+    ]
 
-    rename_keys.append(("params/txt/Encoder_0/encoder_norm/scale", "text_model.final_layer_norm.weight"))
-    rename_keys.append(("params/txt/Encoder_0/encoder_norm/bias", "text_model.final_layer_norm.bias"))
-    rename_keys.append(("params/txt/head/kernel", "text_model.head.weight"))
-    rename_keys.append(("params/txt/head/bias", "text_model.head.bias"))
+    for i in range(num_t_layers):
+        layer_prefix = f"params/txt/Encoder_0/encoderblock_{i}/"
+        hf_prefix = f"text_model.encoder.layers.{i}."
+        rename_keys.extend(
+            (layer_prefix + k, hf_prefix + v)
+            for k, v in text_layer_keys
+        )
+
+    rename_keys.extend([
+        ("params/txt/Encoder_0/encoder_norm/scale", "text_model.final_layer_norm.weight"),
+        ("params/txt/Encoder_0/encoder_norm/bias", "text_model.final_layer_norm.bias"),
+        ("params/txt/head/kernel", "text_model.head.weight"),
+        ("params/txt/head/bias", "text_model.head.bias"),
+    ])
 
     # learned temperature and bias
-    rename_keys.append(("params/t", "logit_scale"))
-    rename_keys.append(("params/b", "logit_bias"))
+    rename_keys.extend([
+        ("params/t", "logit_scale"),
+        ("params/b", "logit_bias"),
+    ])
 
-    # fmt: on
     return rename_keys
 
 
