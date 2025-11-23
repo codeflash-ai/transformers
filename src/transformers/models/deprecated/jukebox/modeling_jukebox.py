@@ -191,11 +191,12 @@ def get_mask(mask, query_length, key_value_length, blocks, spread, device, sampl
     offset = sample_t - query_length if sample else max(key_value_length - query_length, 0)
     if mask == "autoregressive":
         # Masked dense
-        mask = torch.ones(query_length, key_value_length, device=device).tril(offset)
+        mask = torch.ones(query_length, key_value_length, device=device)
+        mask.tril_(offset)
     elif mask == "summary":
         # Masked summary
-        mask = torch.ones(query_length, query_length, device=device).tril()
-        mask = torch.ones(query_length, query_length, device=device).tril()
+        mask = torch.ones(query_length, query_length, device=device)
+        mask.tril_()
         mask = mask.view(query_length, blocks, query_length // blocks)[:, :-1, -key_value_length // blocks :]
         mask = (
             torch.nn.functional.pad(
@@ -207,7 +208,8 @@ def get_mask(mask, query_length, key_value_length, blocks, spread, device, sampl
             .view(query_length, key_value_length)
         )
     elif mask == "prime":
-        mask = torch.ones(query_length, key_value_length, device=device).tril(offset)
+        mask = torch.ones(query_length, key_value_length, device=device)
+        mask.tril_(offset)
     return mask.view(1, 1, query_length, key_value_length)
 
 
