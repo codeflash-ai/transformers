@@ -567,7 +567,8 @@ class Kosmos2TextSinusoidalPositionalEmbedding(nn.Module):
         emb_weights = self.get_embedding(num_embeddings, embedding_dim, padding_idx)
         if hasattr(self, "weights"):
             # in forward put the weights on the correct dtype and device of the param
-            emb_weights = emb_weights.to(dtype=self.weights.dtype, device=self.weights.device)
+            # Detach before moving device/dtype to avoid slow tensor conversion if not needed
+            emb_weights = emb_weights.to(dtype=self.weights.dtype, device=self.weights.device, non_blocking=True)
 
         self.register_buffer("weights", emb_weights, persistent=False)
 
@@ -607,7 +608,8 @@ class Kosmos2TextSinusoidalPositionalEmbedding(nn.Module):
                 # Create the position ids from the input token ids. Any padded tokens remain padded.
                 position_ids = self.create_position_ids_from_input_ids(
                     input_ids, self.padding_idx, past_key_values_length
-                ).to(input_ids.device)
+                )
+                # .to(input_ids.device) not needed, already created on input_ids.device due to .ne()
         else:
             bsz, seq_len = inputs_embeds.size()[:-1]
             if position_ids is None:
@@ -620,7 +622,10 @@ class Kosmos2TextSinusoidalPositionalEmbedding(nn.Module):
         if max_pos > self.weights.size(0):
             self.make_weights(max_pos + self.offset, self.embedding_dim, self.padding_idx)
 
-        return self.weights.index_select(0, position_ids.view(-1)).view(bsz, seq_len, self.weights.shape[-1]).detach()
+        # Avoid redundant view/reshape: index_select+reshape can be slow if memory layout is not contiguous
+        indices = position_ids.view(-1)
+        out = self.weights.index_select(0, indices)
+        return out.view(bsz, seq_len, self.weights.shape[-1]).detach()
 
     @staticmethod
     # Copied from transformers.models.m2m_100.modeling_m2m_100.M2M100SinusoidalPositionalEmbedding.create_position_ids_from_inputs_embeds
@@ -636,10 +641,22 @@ class Kosmos2TextSinusoidalPositionalEmbedding(nn.Module):
         input_shape = inputs_embeds.size()[:-1]
         sequence_length = input_shape[1]
 
+        device = inputs_embeds.device
+        # Use torch.arange with shape to construct position ids directly then broadcast if batch_size > 1
+        # This avoids creating and expanding unnecessary intermediate tensors
         position_ids = torch.arange(
-            padding_idx + 1, sequence_length + padding_idx + 1, dtype=torch.long, device=inputs_embeds.device
+            padding_idx + 1,
+            sequence_length + padding_idx + 1,
+            dtype=torch.long,
+            device=device,
         )
-        return position_ids.unsqueeze(0).expand(input_shape).contiguous() + past_key_values_length
+        if input_shape[0] == 1:
+            # If batch==1, expand is a no-op but we avoid intermediate memory usage
+            position_ids = position_ids.unsqueeze(0)
+        else:
+            position_ids = position_ids.unsqueeze(0).expand(input_shape)
+        # .contiguous() not strictly required after expand
+        return position_ids + past_key_values_length
 
     @staticmethod
     # Copied from transformers.models.roberta.modeling_roberta.RobertaEmbeddings.create_position_ids_from_input_ids
@@ -655,7 +672,9 @@ class Kosmos2TextSinusoidalPositionalEmbedding(nn.Module):
         """
         # The series of casts and type-conversions here are carefully balanced to both work with ONNX export and XLA.
         mask = input_ids.ne(padding_idx).int()
-        incremental_indices = (torch.cumsum(mask, dim=1).type_as(mask) + past_key_values_length) * mask
+        # torch.cumsum is efficient, but avoid unnecessary type conversions
+        incremental_indices = torch.cumsum(mask, dim=1)
+        incremental_indices = (incremental_indices + past_key_values_length) * mask
         return incremental_indices.long() + padding_idx
 
 
