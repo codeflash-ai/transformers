@@ -22,12 +22,13 @@ import warnings
 from typing import Optional
 
 from packaging import version
-from tokenizers import AddedToken, Regex, Tokenizer, decoders, normalizers, pre_tokenizers, processors
+from tokenizers import (AddedToken, Regex, Tokenizer, decoders, normalizers,
+                        pre_tokenizers, processors)
 from tokenizers.models import BPE, Unigram, WordPiece
 
-from .utils import is_protobuf_available, is_sentencepiece_available, logging, requires_backends
+from .utils import (is_protobuf_available, is_sentencepiece_available, logging,
+                    requires_backends)
 from .utils.import_utils import PROTOBUF_IMPORT_ERROR
-
 
 logger = logging.get_logger(__name__)
 
@@ -43,7 +44,8 @@ def import_protobuf(error_message=""):
         if version.parse(google.protobuf.__version__) < version.parse("4.0.0"):
             from transformers.utils import sentencepiece_model_pb2
         else:
-            from transformers.utils import sentencepiece_model_pb2_new as sentencepiece_model_pb2
+            from transformers.utils import \
+                sentencepiece_model_pb2_new as sentencepiece_model_pb2
         return sentencepiece_model_pb2
     else:
         raise ImportError(PROTOBUF_IMPORT_ERROR.format(error_message))
@@ -1599,15 +1601,19 @@ def bytes_to_unicode():
     decent coverage. This is a significant percentage of your normal, say, 32K bpe vocab. To avoid that, we want lookup
     tables between utf-8 bytes and unicode strings.
     """
-    bs = (
+    # Optimize 'b not in bs' by using a set for membership checks, preserving order with a list at the end
+    initial_ranges = (
         list(range(ord("!"), ord("~") + 1)) + list(range(ord("¡"), ord("¬") + 1)) + list(range(ord("®"), ord("ÿ") + 1))
     )
+    bs = initial_ranges[:]  # list for order
+    bs_set = set(bs)  # set for fast membership
     cs = bs[:]
     n = 0
     for b in range(2**8):
-        if b not in bs:
+        if b not in bs_set:
             bs.append(b)
             cs.append(2**8 + n)
+            bs_set.add(b)
             n += 1
     cs = [chr(n) for n in cs]
     return dict(zip(bs, cs))
