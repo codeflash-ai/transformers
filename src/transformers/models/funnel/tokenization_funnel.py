@@ -506,23 +506,27 @@ class WordpieceTokenizer:
         """
 
         output_tokens = []
+        vocab = self.vocab  # Avoid attribute lookup in tight loop
+        unk_token = self.unk_token
+        max_input_chars_per_word = self.max_input_chars_per_word
         for token in whitespace_tokenize(text):
-            chars = list(token)
-            if len(chars) > self.max_input_chars_per_word:
-                output_tokens.append(self.unk_token)
+            token_len = len(token)
+            if token_len > max_input_chars_per_word:
+                output_tokens.append(unk_token)
                 continue
 
             is_bad = False
             start = 0
             sub_tokens = []
-            while start < len(chars):
-                end = len(chars)
+            while start < token_len:
+                end = token_len
                 cur_substr = None
                 while start < end:
-                    substr = "".join(chars[start:end])
-                    if start > 0:
-                        substr = "##" + substr
-                    if substr in self.vocab:
+                    if start == 0:
+                        substr = token[start:end]
+                    else:
+                        substr = "##" + token[start:end]
+                    if substr in vocab:
                         cur_substr = substr
                         break
                     end -= 1
@@ -533,7 +537,7 @@ class WordpieceTokenizer:
                 start = end
 
             if is_bad:
-                output_tokens.append(self.unk_token)
+                output_tokens.append(unk_token)
             else:
                 output_tokens.extend(sub_tokens)
         return output_tokens
