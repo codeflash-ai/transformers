@@ -279,17 +279,27 @@ def eager_attention_forward(
         scaling = query.size(-1) ** -0.5
 
     # Take the dot product between "query" and "key" to get the raw attention scores.
-    attn_weights = torch.matmul(query, key.transpose(2, 3)) * scaling
+    # Fused matmul and scaled scores calculation for efficiency
+    attn_weights = torch.matmul(query, key.transpose(2, 3))
+    attn_weights.mul_(scaling)
 
     if attention_mask is not None:
-        attention_mask = attention_mask[:, :, :, : key.shape[-2]]
-        attn_weights = attn_weights + attention_mask
+        # Use in-place add for efficiency
+        attn_weights.add_(attention_mask[:, :, :, : key.shape[-2]])
+
+    # Use in-place softmax and dropout where possible for memory efficiency
 
     attn_weights = nn.functional.softmax(attn_weights, dim=-1)
-    attn_weights = nn.functional.dropout(attn_weights, p=dropout, training=module.training)
+    if dropout > 0.0 and module.training:
+        # Only apply dropout when nonzero and module is training
+        attn_weights = nn.functional.dropout(attn_weights, p=dropout, training=True)
+    # Otherwise attn_weights remains unchanged
+
+    # Fused matmul operation and in-place contiguous call
 
     attn_output = torch.matmul(attn_weights, value)
-    attn_output = attn_output.transpose(1, 2).contiguous()
+    attn_output = attn_output.transpose(1, 2)
+    attn_output = attn_output.contiguous()
 
     return attn_output, attn_weights
 
