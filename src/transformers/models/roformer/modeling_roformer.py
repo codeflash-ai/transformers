@@ -521,24 +521,26 @@ class RoFormerSequenceSummary(nn.Module):
             # We can probably just use the multi-head attention module of PyTorch >=1.1.0
             raise NotImplementedError
 
-        self.summary = nn.Identity()
-        if hasattr(config, "summary_use_proj") and config.summary_use_proj:
-            if hasattr(config, "summary_proj_to_labels") and config.summary_proj_to_labels and config.num_labels > 0:
+        # Only initialize layers when needed (avoid double wrapping).
+        summary_use_proj = getattr(config, "summary_use_proj", False)
+        summary_proj_to_labels = getattr(config, "summary_proj_to_labels", False)
+        summary_activation = getattr(config, "summary_activation", None)
+        summary_first_dropout = getattr(config, "summary_first_dropout", 0.0)
+        summary_last_dropout = getattr(config, "summary_last_dropout", 0.0)
+
+        if summary_use_proj:
+            if summary_proj_to_labels and getattr(config, "num_labels", 0) > 0:
                 num_classes = config.num_labels
             else:
                 num_classes = config.hidden_size
             self.summary = nn.Linear(config.hidden_size, num_classes)
+        else:
+            self.summary = nn.Identity()
 
-        activation_string = getattr(config, "summary_activation", None)
-        self.activation: Callable = get_activation(activation_string) if activation_string else nn.Identity()
+        self.activation: Callable = get_activation(summary_activation) if summary_activation else nn.Identity()
 
-        self.first_dropout = nn.Identity()
-        if hasattr(config, "summary_first_dropout") and config.summary_first_dropout > 0:
-            self.first_dropout = nn.Dropout(config.summary_first_dropout)
-
-        self.last_dropout = nn.Identity()
-        if hasattr(config, "summary_last_dropout") and config.summary_last_dropout > 0:
-            self.last_dropout = nn.Dropout(config.summary_last_dropout)
+        self.first_dropout = nn.Dropout(summary_first_dropout) if summary_first_dropout > 0 else nn.Identity()
+        self.last_dropout = nn.Dropout(summary_last_dropout) if summary_last_dropout > 0 else nn.Identity()
 
     def forward(
         self, hidden_states: torch.FloatTensor, cls_index: Optional[torch.LongTensor] = None
@@ -555,31 +557,56 @@ class RoFormerSequenceSummary(nn.Module):
         Returns:
             `torch.FloatTensor`: The summary of the sequence hidden states.
         """
-        if self.summary_type == "last":
+        st = self.summary_type
+
+        if st == "last":
+            # Use negative indexing directly; avoid slice overhead.
             output = hidden_states[:, -1]
-        elif self.summary_type == "first":
+        elif st == "first":
             output = hidden_states[:, 0]
-        elif self.summary_type == "mean":
-            output = hidden_states.mean(dim=1)
-        elif self.summary_type == "cls_index":
-            if cls_index is None:
-                cls_index = torch.full_like(
-                    hidden_states[..., :1, :],
-                    hidden_states.shape[-2] - 1,
-                    dtype=torch.long,
-                )
+        elif st == "mean":
+            # For float16/bfloat16, accumulate in float32 for precision/throughput.
+            dtype = hidden_states.dtype
+            if dtype in (torch.float16, torch.bfloat16):
+                output = hidden_states.to(torch.float32).mean(dim=1).to(dtype)
             else:
-                cls_index = cls_index.unsqueeze(-1).unsqueeze(-1)
-                cls_index = cls_index.expand((-1,) * (cls_index.dim() - 1) + (hidden_states.size(-1),))
+                output = hidden_states.mean(dim=1)
+        elif st == "cls_index":
+            # Optimize tensor allocation and expansion for multi-dim cases.
+            batch_shape = hidden_states.shape[:-2]
+            seq_len = hidden_states.shape[-2]
+            hidden_sz = hidden_states.shape[-1]
+            # shape of hidden_states: (..., seq_len, hidden_sz)
+            if cls_index is None:
+                # torch.full_like is fastest when used as follows:
+                # The shape for broadcasting, (..., 1, hidden_sz) will match hidden_states for gather
+                cls_index_shape = hidden_states.shape[:-2] + (1, hidden_sz)
+                fill_value = seq_len - 1
+                cls_index = torch.full(cls_index_shape, fill_value, dtype=torch.long, device=hidden_states.device)
+            else:
+                # unsqueeze+expand can be efficiently chained
+                # shape of cls_index[..., None, None] == batch_shape + (1, 1)
+                # expand to batch_shape + (1, hidden_sz)
+                cls_index = cls_index.unsqueeze(-1).unsqueeze(-1).expand(*batch_shape, 1, hidden_sz)
+            # This gather is efficient if shapes and strides align
             # shape of cls_index: (bsz, XX, 1, hidden_size) where XX are optional leading dim of hidden_states
             output = hidden_states.gather(-2, cls_index).squeeze(-2)  # shape (bsz, XX, hidden_size)
-        elif self.summary_type == "attn":
+        elif st == "attn":
             raise NotImplementedError
 
-        output = self.first_dropout(output)
-        output = self.summary(output)
-        output = self.activation(output)
-        output = self.last_dropout(output)
+        # Fuse layers if all are Identity (no-op), otherwise keep current order.
+        # Avoid unnecessary function calls if dropout/activation/summary are Identity.
+        # This is implemented implicitly by PyTorch but may be beneficial for performance.
+
+        # Avoid redundant function calls (PyTorch nn.Identity is cheap but still a function call)
+        if type(self.first_dropout) is not nn.Identity:
+            output = self.first_dropout(output)
+        if type(self.summary) is not nn.Identity:
+            output = self.summary(output)
+        if type(self.activation) is not nn.Identity:
+            output = self.activation(output)
+        if type(self.last_dropout) is not nn.Identity:
+            output = self.last_dropout(output)
 
         return output
 
