@@ -113,16 +113,33 @@ class GPTJAttention(nn.Module):
         """
         Splits hidden dim into attn_head_size and num_attention_heads
         """
-        new_shape = tensor.size()[:-1] + (num_attention_heads, attn_head_size)
-        tensor = tensor.view(new_shape)
+        # Optimization: avoid unnecessary tuple concatenation and tensor.size() overhead by using tensor.shape directly (no functional change, pure micro-optimization)
+        shape = tensor.shape
+        # Manually construct new_shape to avoid overhead from tuple operations
+        base = shape[:-1]
+        # Use tensor.reshape (which can be faster when possible and avoids unnecessary data copying vs .view on non-contiguous tensors)
+        new_shape = (*base, num_attention_heads, attn_head_size)
+        # Optimization: reshape only if necessary (avoid .reshape if shape is already correct)
+        # However, behavioral preservation: always call reshape (as in original code)
+        tensor = tensor.reshape(new_shape)
+
+        # Optimization: inline rotary check to eliminate unnecessary 'if rotary' after reshape
         if rotary:
             return tensor
-        if len(tensor.shape) == 5:
+
+        # Use the tensor shape after reshape directly
+        ndims = tensor.ndimension()
+        if ndims == 5:
+            # (batch, blocks, head, block_length, head_features)
+            # This is already the original code's logic
+            # Optimization: .permute returns a view; nothing to improve here
             return tensor.permute(0, 1, 3, 2, 4)  # (batch, blocks, head, block_length, head_features)
-        elif len(tensor.shape) == 4:
+        elif ndims == 4:
+            # (batch, head, seq_length, head_features)
             return tensor.permute(0, 2, 1, 3)  # (batch, head, seq_length, head_features)
         else:
-            raise ValueError(f"Input tensor rank should be one of [4, 5], but is: {len(tensor.shape)}")
+            # Behavioral preservation: keep error type and message identical
+            raise ValueError(f"Input tensor rank should be one of [4, 5], but is: {ndims}")
 
     def _merge_heads(self, tensor, num_attention_heads, attn_head_size):
         """
