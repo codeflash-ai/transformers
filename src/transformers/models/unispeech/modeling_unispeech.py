@@ -858,67 +858,71 @@ def _compute_mask_indices(
         return num_masked_span
 
     # compute number of masked spans in batch
-    input_lengths = (
-        attention_mask.detach().sum(-1).tolist()
-        if attention_mask is not None
-        else [sequence_length for _ in range(batch_size)]
-    )
+    if attention_mask is not None:
+        # attention_mask should already be on cpu when preprocessing.
+        input_lengths = attention_mask.detach().sum(-1).cpu().numpy()
+    else:
+        input_lengths = np.full(batch_size, sequence_length, dtype=np.int32)
+
+    # SpecAugment mask to fill
 
     # SpecAugment mask to fill
     spec_aug_mask = np.zeros((batch_size, sequence_length), dtype=bool)
-    spec_aug_mask_idxs = []
 
     max_num_masked_span = compute_num_masked_span(sequence_length)
 
     if max_num_masked_span == 0:
         return spec_aug_mask
 
-    for input_length in input_lengths:
+    # Allocation for indices (avoid Python list and array-of-arrays construction)
+    spec_aug_mask_idxs = np.empty((batch_size, max_num_masked_span), dtype=np.int32)
+
+    # Populate mask indices for each sample in the batch
+    for b in range(batch_size):
+        input_length = int(input_lengths[b])
         # compute num of masked spans for this input
         num_masked_span = compute_num_masked_span(input_length)
 
-        # get random indices to mask
-        spec_aug_mask_idx = np.random.choice(
-            np.arange(input_length - (mask_length - 1)), num_masked_span, replace=False
-        )
-
-        # pick first sampled index that will serve as a dummy index to pad vector
-        # to ensure same dimension for all batches due to probabilistic rounding
-        # Picking first sample just pads those vectors twice.
-        if len(spec_aug_mask_idx) == 0:
+        # Guard for edge case where there is no span to choose from
+        valid_span_starts = input_length - (mask_length - 1)
+        if num_masked_span > 0 and valid_span_starts > 0:
+            # Use np.random.permutation for efficiency+uniqueness and fast slicing
+            perm = np.random.permutation(valid_span_starts)
+            mask_starts = perm[:num_masked_span]
+        else:
+            mask_starts = np.empty(0, dtype=np.int32)
+        # The dummy index, for padding, handles edge cases as in the original
+        if mask_starts.size == 0:
             # this case can only happen if `input_length` is strictly smaller then
             # `sequence_length` in which case the last token has to be a padding
             # token which we can use as a dummy mask id
             dummy_mask_idx = sequence_length - 1
         else:
-            dummy_mask_idx = spec_aug_mask_idx[0]
+            dummy_mask_idx = mask_starts[0]
 
-        spec_aug_mask_idx = np.concatenate(
-            [spec_aug_mask_idx, np.ones(max_num_masked_span - num_masked_span, dtype=np.int32) * dummy_mask_idx]
-        )
-        spec_aug_mask_idxs.append(spec_aug_mask_idx)
+        if num_masked_span < max_num_masked_span:
+            # Pad with dummy index to maintain consistent array shapes
+            pad = np.full(max_num_masked_span - num_masked_span, dummy_mask_idx, dtype=np.int32)
+            out = np.concatenate([mask_starts, pad])
+        else:
+            out = mask_starts
+        spec_aug_mask_idxs[b] = out
 
-    spec_aug_mask_idxs = np.array(spec_aug_mask_idxs)
+    # Expand masked indices to masked spans via broadcasting & vectorized addition
+    base = spec_aug_mask_idxs[:, :, None]  # shape: (batch_size,max_num_masked_span,1)
+    offsets = np.arange(mask_length, dtype=np.int32)[None, None, :]  # (1,1,mask_length)
+    full_idxs = base + offsets  # shape: (batch_size, max_num_masked_span, mask_length)
+    full_idxs = full_idxs.reshape(batch_size, max_num_masked_span * mask_length)
 
-    # expand masked indices to masked spans
-    spec_aug_mask_idxs = np.broadcast_to(
-        spec_aug_mask_idxs[:, :, None], (batch_size, max_num_masked_span, mask_length)
-    )
-    spec_aug_mask_idxs = spec_aug_mask_idxs.reshape(batch_size, max_num_masked_span * mask_length)
+    # Cap any index that overflows the input_length for each batch
+    # (ensures pad/dummy indices do not exceed borders)
+    np.minimum(full_idxs, sequence_length - 1, out=full_idxs)
 
-    # add offset to the starting indexes so that indexes now create a span
-    offsets = np.arange(mask_length)[None, None, :]
-    offsets = np.broadcast_to(offsets, (batch_size, max_num_masked_span, mask_length)).reshape(
-        batch_size, max_num_masked_span * mask_length
-    )
-    spec_aug_mask_idxs = spec_aug_mask_idxs + offsets
-
-    # ensure that we cannot have indices larger than sequence_length
-    if spec_aug_mask_idxs.max() > sequence_length - 1:
-        spec_aug_mask_idxs[spec_aug_mask_idxs > sequence_length - 1] = sequence_length - 1
-
-    # scatter indices to mask
-    np.put_along_axis(spec_aug_mask, spec_aug_mask_idxs, 1, -1)
+    # Use efficient fancy indexing for vectorized mask scatter
+    row_indices = np.arange(batch_size)[:, None]  # shape (batch_size,1)
+    # Broadcast row indices to (batch_size, k)
+    row_indices_broadcast = np.broadcast_to(row_indices, full_idxs.shape)
+    spec_aug_mask[row_indices_broadcast, full_idxs] = True
 
     return spec_aug_mask
 
