@@ -1,55 +1,28 @@
-# coding=utf-8
-# Copyright 2022 The HuggingFace Inc. team. All rights reserved.
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
-"""Image processor class for MobileNetV2."""
-
 from typing import Optional, Union
 
 import numpy as np
+from codeflash.verification.codeflash_capture import codeflash_capture
 
-from ...image_processing_utils import BaseImageProcessor, BatchFeature, get_size_dict
-from ...image_transforms import (
-    get_resize_output_image_size,
-    resize,
-    to_channel_dimension_format,
-)
-from ...image_utils import (
-    IMAGENET_STANDARD_MEAN,
-    IMAGENET_STANDARD_STD,
-    ChannelDimension,
-    ImageInput,
-    PILImageResampling,
-    infer_channel_dimension_format,
-    is_scaled_image,
-    make_flat_list_of_images,
-    to_numpy_array,
-    valid_images,
-    validate_preprocess_arguments,
-)
+from transformers.utils.import_utils import requires
+
+from ...image_processing_utils import (BaseImageProcessor, BatchFeature,
+                                       get_size_dict)
+from ...image_transforms import (get_resize_output_image_size, resize,
+                                 to_channel_dimension_format)
+from ...image_utils import (IMAGENET_STANDARD_MEAN, IMAGENET_STANDARD_STD,
+                            ChannelDimension, ImageInput, PILImageResampling,
+                            infer_channel_dimension_format, is_scaled_image,
+                            make_flat_list_of_images, to_numpy_array,
+                            valid_images, validate_preprocess_arguments)
 from ...processing_utils import ImagesKwargs
-from ...utils import TensorType, filter_out_non_signature_kwargs, is_torch_available, is_torch_tensor, logging
-
-
-if is_torch_available():
-    import torch
-
-
+from ...utils import (TensorType, filter_out_non_signature_kwargs,
+                      is_torch_available, is_torch_tensor, logging)
 from ...utils.import_utils import requires
 
-
+'Image processor class for MobileNetV2.'
+if is_torch_available():
+    import torch
 logger = logging.get_logger(__name__)
-
 
 class MobileNetV2ImageProcessorKwargs(ImagesKwargs, total=False):
     """
@@ -58,13 +31,11 @@ class MobileNetV2ImageProcessorKwargs(ImagesKwargs, total=False):
         is used for background, and background itself is not included in all classes of a dataset (e.g.
         ADE20k). The background label will be replaced by 255.
     """
-
     do_reduce_labels: bool
 
-
-@requires(backends=("vision",))
+@requires(backends=('vision',))
 class MobileNetV2ImageProcessor(BaseImageProcessor):
-    r"""
+    """
     Constructs a MobileNetV2 image processor.
 
     Args:
@@ -106,35 +77,17 @@ class MobileNetV2ImageProcessor(BaseImageProcessor):
             background label will be replaced by 255. Can be overridden by the `do_reduce_labels` parameter in the
             `preprocess` method.
     """
-
-    model_input_names = ["pixel_values"]
+    model_input_names = ['pixel_values']
     valid_kwargs = MobileNetV2ImageProcessorKwargs
 
-    def __init__(
-        self,
-        do_resize: bool = True,
-        size: Optional[dict[str, int]] = None,
-        resample: PILImageResampling = PILImageResampling.BILINEAR,
-        do_center_crop: bool = True,
-        crop_size: Optional[dict[str, int]] = None,
-        do_rescale: bool = True,
-        rescale_factor: Union[int, float] = 1 / 255,
-        do_normalize: bool = True,
-        image_mean: Optional[Union[float, list[float]]] = None,
-        image_std: Optional[Union[float, list[float]]] = None,
-        do_reduce_labels: bool = False,
-        **kwargs,
-    ) -> None:
+    @codeflash_capture(function_name='MobileNetV2ImageProcessor.__init__', tmp_dir_path='/tmp/codeflash_ywaw_awh/test_return_values', tests_root='/home/ubuntu/work/repo/tests', is_fto=True)
+    def __init__(self, do_resize: bool=True, size: Optional[dict[str, int]]=None, resample: PILImageResampling=PILImageResampling.BILINEAR, do_center_crop: bool=True, crop_size: Optional[dict[str, int]]=None, do_rescale: bool=True, rescale_factor: Union[int, float]=1 / 255, do_normalize: bool=True, image_mean: Optional[Union[float, list[float]]]=None, image_std: Optional[Union[float, list[float]]]=None, do_reduce_labels: bool=False, **kwargs) -> None:
         super().__init__(**kwargs)
-        size = size if size is not None else {"shortest_edge": 256}
-        size = get_size_dict(size, default_to_square=False)
-        crop_size = crop_size if crop_size is not None else {"height": 224, "width": 224}
-        crop_size = get_size_dict(crop_size, param_name="crop_size")
         self.do_resize = do_resize
-        self.size = size
+        self.size = get_size_dict(size if size is not None else {'shortest_edge': 256}, default_to_square=False)
         self.resample = resample
         self.do_center_crop = do_center_crop
-        self.crop_size = crop_size
+        self.crop_size = get_size_dict(crop_size if crop_size is not None else {'height': 224, 'width': 224}, param_name='crop_size')
         self.do_rescale = do_rescale
         self.rescale_factor = rescale_factor
         self.do_normalize = do_normalize
@@ -142,16 +95,7 @@ class MobileNetV2ImageProcessor(BaseImageProcessor):
         self.image_std = image_std if image_std is not None else IMAGENET_STANDARD_STD
         self.do_reduce_labels = do_reduce_labels
 
-    # Copied from transformers.models.mobilenet_v1.image_processing_mobilenet_v1.MobileNetV1ImageProcessor.resize
-    def resize(
-        self,
-        image: np.ndarray,
-        size: dict[str, int],
-        resample: PILImageResampling = PILImageResampling.BICUBIC,
-        data_format: Optional[Union[str, ChannelDimension]] = None,
-        input_data_format: Optional[Union[str, ChannelDimension]] = None,
-        **kwargs,
-    ) -> np.ndarray:
+    def resize(self, image: np.ndarray, size: dict[str, int], resample: PILImageResampling=PILImageResampling.BICUBIC, data_format: Optional[Union[str, ChannelDimension]]=None, input_data_format: Optional[Union[str, ChannelDimension]]=None, **kwargs) -> np.ndarray:
         """
         Resize an image. The shortest edge of the image is resized to size["shortest_edge"], with the longest edge
         resized to keep the input aspect ratio.
@@ -169,36 +113,21 @@ class MobileNetV2ImageProcessor(BaseImageProcessor):
                 The channel dimension format of the input image. If not provided, it will be inferred.
         """
         default_to_square = True
-        if "shortest_edge" in size:
-            size = size["shortest_edge"]
+        if 'shortest_edge' in size:
+            size = size['shortest_edge']
             default_to_square = False
-        elif "height" in size and "width" in size:
-            size = (size["height"], size["width"])
+        elif 'height' in size and 'width' in size:
+            size = (size['height'], size['width'])
         else:
             raise ValueError("Size must contain either 'shortest_edge' or 'height' and 'width'.")
+        output_size = get_resize_output_image_size(image, size=size, default_to_square=default_to_square, input_data_format=input_data_format)
+        return resize(image, size=output_size, resample=resample, data_format=data_format, input_data_format=input_data_format, **kwargs)
 
-        output_size = get_resize_output_image_size(
-            image,
-            size=size,
-            default_to_square=default_to_square,
-            input_data_format=input_data_format,
-        )
-        return resize(
-            image,
-            size=output_size,
-            resample=resample,
-            data_format=data_format,
-            input_data_format=input_data_format,
-            **kwargs,
-        )
-
-    # Copied from transformers.models.beit.image_processing_beit.BeitImageProcessor.reduce_label
     def reduce_label(self, label: ImageInput) -> np.ndarray:
         label = to_numpy_array(label)
-        # Avoid using underflow conversion
-        label[label == 0] = 255
+        np.putmask(label, label == 0, 255)
         label = label - 1
-        label[label == 254] = 255
+        np.putmask(label, label == 254, 255)
         return label
 
     def __call__(self, images, segmentation_maps=None, **kwargs):
@@ -210,99 +139,33 @@ class MobileNetV2ImageProcessor(BaseImageProcessor):
         """
         return super().__call__(images, segmentation_maps=segmentation_maps, **kwargs)
 
-    def _preprocess(
-        self,
-        image: ImageInput,
-        do_reduce_labels: bool,
-        do_resize: bool,
-        do_rescale: bool,
-        do_center_crop: bool,
-        do_normalize: bool,
-        size: Optional[dict[str, int]] = None,
-        resample: Optional[PILImageResampling] = None,
-        rescale_factor: Optional[float] = None,
-        crop_size: Optional[dict[str, int]] = None,
-        image_mean: Optional[Union[float, list[float]]] = None,
-        image_std: Optional[Union[float, list[float]]] = None,
-        input_data_format: Optional[Union[str, ChannelDimension]] = None,
-    ):
+    def _preprocess(self, image: ImageInput, do_reduce_labels: bool, do_resize: bool, do_rescale: bool, do_center_crop: bool, do_normalize: bool, size: Optional[dict[str, int]]=None, resample: Optional[PILImageResampling]=None, rescale_factor: Optional[float]=None, crop_size: Optional[dict[str, int]]=None, image_mean: Optional[Union[float, list[float]]]=None, image_std: Optional[Union[float, list[float]]]=None, input_data_format: Optional[Union[str, ChannelDimension]]=None):
         if do_reduce_labels:
             image = self.reduce_label(image)
-
         if do_resize:
             image = self.resize(image=image, size=size, resample=resample, input_data_format=input_data_format)
-
         if do_center_crop:
             image = self.center_crop(image=image, size=crop_size, input_data_format=input_data_format)
-
         if do_rescale:
             image = self.rescale(image=image, scale=rescale_factor, input_data_format=input_data_format)
-
         if do_normalize:
             image = self.normalize(image=image, mean=image_mean, std=image_std, input_data_format=input_data_format)
-
         return image
 
-    def _preprocess_image(
-        self,
-        image: ImageInput,
-        do_resize: Optional[bool] = None,
-        size: Optional[dict[str, int]] = None,
-        resample: Optional[PILImageResampling] = None,
-        do_rescale: Optional[bool] = None,
-        rescale_factor: Optional[float] = None,
-        do_center_crop: Optional[bool] = None,
-        crop_size: Optional[dict[str, int]] = None,
-        do_normalize: Optional[bool] = None,
-        image_mean: Optional[Union[float, list[float]]] = None,
-        image_std: Optional[Union[float, list[float]]] = None,
-        data_format: Optional[Union[str, ChannelDimension]] = None,
-        input_data_format: Optional[Union[str, ChannelDimension]] = None,
-    ) -> np.ndarray:
+    def _preprocess_image(self, image: ImageInput, do_resize: Optional[bool]=None, size: Optional[dict[str, int]]=None, resample: Optional[PILImageResampling]=None, do_rescale: Optional[bool]=None, rescale_factor: Optional[float]=None, do_center_crop: Optional[bool]=None, crop_size: Optional[dict[str, int]]=None, do_normalize: Optional[bool]=None, image_mean: Optional[Union[float, list[float]]]=None, image_std: Optional[Union[float, list[float]]]=None, data_format: Optional[Union[str, ChannelDimension]]=None, input_data_format: Optional[Union[str, ChannelDimension]]=None) -> np.ndarray:
         """Preprocesses a single image."""
-        # All transformations expect numpy arrays.
         image = to_numpy_array(image)
         if do_rescale and is_scaled_image(image):
-            logger.warning_once(
-                "It looks like you are trying to rescale already rescaled images. If the input"
-                " images have pixel values between 0 and 1, set `do_rescale=False` to avoid rescaling them again."
-            )
+            logger.warning_once('It looks like you are trying to rescale already rescaled images. If the input images have pixel values between 0 and 1, set `do_rescale=False` to avoid rescaling them again.')
         if input_data_format is None:
             input_data_format = infer_channel_dimension_format(image)
-
-        image = self._preprocess(
-            image=image,
-            do_reduce_labels=False,
-            do_resize=do_resize,
-            size=size,
-            resample=resample,
-            do_rescale=do_rescale,
-            rescale_factor=rescale_factor,
-            do_center_crop=do_center_crop,
-            crop_size=crop_size,
-            do_normalize=do_normalize,
-            image_mean=image_mean,
-            image_std=image_std,
-            input_data_format=input_data_format,
-        )
-
+        image = self._preprocess(image=image, do_reduce_labels=False, do_resize=do_resize, size=size, resample=resample, do_rescale=do_rescale, rescale_factor=rescale_factor, do_center_crop=do_center_crop, crop_size=crop_size, do_normalize=do_normalize, image_mean=image_mean, image_std=image_std, input_data_format=input_data_format)
         image = to_channel_dimension_format(image, data_format, input_channel_dim=input_data_format)
-
         return image
 
-    def _preprocess_mask(
-        self,
-        segmentation_map: ImageInput,
-        do_reduce_labels: Optional[bool] = None,
-        do_resize: Optional[bool] = None,
-        size: Optional[dict[str, int]] = None,
-        do_center_crop: Optional[bool] = None,
-        crop_size: Optional[dict[str, int]] = None,
-        input_data_format: Optional[Union[str, ChannelDimension]] = None,
-    ) -> np.ndarray:
+    def _preprocess_mask(self, segmentation_map: ImageInput, do_reduce_labels: Optional[bool]=None, do_resize: Optional[bool]=None, size: Optional[dict[str, int]]=None, do_center_crop: Optional[bool]=None, crop_size: Optional[dict[str, int]]=None, input_data_format: Optional[Union[str, ChannelDimension]]=None) -> np.ndarray:
         """Preprocesses a single mask."""
         segmentation_map = to_numpy_array(segmentation_map)
-        # Add channel dimension if missing - needed for certain transformations
         if segmentation_map.ndim == 2:
             added_channel_dim = True
             segmentation_map = segmentation_map[None, ...]
@@ -311,47 +174,14 @@ class MobileNetV2ImageProcessor(BaseImageProcessor):
             added_channel_dim = False
             if input_data_format is None:
                 input_data_format = infer_channel_dimension_format(segmentation_map, num_channels=1)
-
-        segmentation_map = self._preprocess(
-            image=segmentation_map,
-            do_reduce_labels=do_reduce_labels,
-            do_resize=do_resize,
-            size=size,
-            resample=PILImageResampling.NEAREST,
-            do_rescale=False,
-            do_center_crop=do_center_crop,
-            crop_size=crop_size,
-            do_normalize=False,
-            image_mean=None,
-            image_std=None,
-            input_data_format=input_data_format,
-        )
-        # Remove extra channel dimension if added for processing
+        segmentation_map = self._preprocess(image=segmentation_map, do_reduce_labels=do_reduce_labels, do_resize=do_resize, size=size, resample=PILImageResampling.NEAREST, do_rescale=False, do_center_crop=do_center_crop, crop_size=crop_size, do_normalize=False, image_mean=None, image_std=None, input_data_format=input_data_format)
         if added_channel_dim:
             segmentation_map = segmentation_map.squeeze(0)
         segmentation_map = segmentation_map.astype(np.int64)
         return segmentation_map
 
     @filter_out_non_signature_kwargs()
-    def preprocess(
-        self,
-        images: ImageInput,
-        segmentation_maps: Optional[ImageInput] = None,
-        do_resize: Optional[bool] = None,
-        size: Optional[dict[str, int]] = None,
-        resample: Optional[PILImageResampling] = None,
-        do_center_crop: Optional[bool] = None,
-        crop_size: Optional[dict[str, int]] = None,
-        do_rescale: Optional[bool] = None,
-        rescale_factor: Optional[float] = None,
-        do_normalize: Optional[bool] = None,
-        image_mean: Optional[Union[float, list[float]]] = None,
-        image_std: Optional[Union[float, list[float]]] = None,
-        do_reduce_labels: Optional[bool] = None,
-        return_tensors: Optional[Union[str, TensorType]] = None,
-        data_format: Union[str, ChannelDimension] = ChannelDimension.FIRST,
-        input_data_format: Optional[Union[str, ChannelDimension]] = None,
-    ):
+    def preprocess(self, images: ImageInput, segmentation_maps: Optional[ImageInput]=None, do_resize: Optional[bool]=None, size: Optional[dict[str, int]]=None, resample: Optional[PILImageResampling]=None, do_center_crop: Optional[bool]=None, crop_size: Optional[dict[str, int]]=None, do_rescale: Optional[bool]=None, rescale_factor: Optional[float]=None, do_normalize: Optional[bool]=None, image_mean: Optional[Union[float, list[float]]]=None, image_std: Optional[Union[float, list[float]]]=None, do_reduce_labels: Optional[bool]=None, return_tensors: Optional[Union[str, TensorType]]=None, data_format: Union[str, ChannelDimension]=ChannelDimension.FIRST, input_data_format: Optional[Union[str, ChannelDimension]]=None):
         """
         Preprocess an image or batch of images.
 
@@ -404,86 +234,34 @@ class MobileNetV2ImageProcessor(BaseImageProcessor):
                 - `"channels_last"` or `ChannelDimension.LAST`: image in (height, width, num_channels) format.
                 - `"none"` or `ChannelDimension.NONE`: image in (height, width) format.
         """
-        do_resize = do_resize if do_resize is not None else self.do_resize
-        size = size if size is not None else self.size
-        size = get_size_dict(size, default_to_square=False)
-        do_reduce_labels = do_reduce_labels if do_reduce_labels is not None else self.do_reduce_labels
-        resample = resample if resample is not None else self.resample
-        do_center_crop = do_center_crop if do_center_crop is not None else self.do_center_crop
-        crop_size = crop_size if crop_size is not None else self.crop_size
-        crop_size = get_size_dict(crop_size, param_name="crop_size")
-        do_rescale = do_rescale if do_rescale is not None else self.do_rescale
-        rescale_factor = rescale_factor if rescale_factor is not None else self.rescale_factor
-        do_normalize = do_normalize if do_normalize is not None else self.do_normalize
-        image_mean = image_mean if image_mean is not None else self.image_mean
-        image_std = image_std if image_std is not None else self.image_std
-
-        images = make_flat_list_of_images(images)
-
+        local_do_resize = self.do_resize if do_resize is None else do_resize
+        local_size = self.size if size is None else get_size_dict(size, default_to_square=False)
+        local_do_reduce_labels = self.do_reduce_labels if do_reduce_labels is None else do_reduce_labels
+        local_resample = self.resample if resample is None else resample
+        local_do_center_crop = self.do_center_crop if do_center_crop is None else do_center_crop
+        local_crop_size = self.crop_size if crop_size is None else get_size_dict(crop_size, param_name='crop_size')
+        local_do_rescale = self.do_rescale if do_rescale is None else do_rescale
+        local_rescale_factor = self.rescale_factor if rescale_factor is None else rescale_factor
+        local_do_normalize = self.do_normalize if do_normalize is None else do_normalize
+        local_image_mean = self.image_mean if image_mean is None else image_mean
+        local_image_std = self.image_std if image_std is None else image_std
+        images_list = make_flat_list_of_images(images)
         if segmentation_maps is not None:
-            segmentation_maps = make_flat_list_of_images(segmentation_maps, expected_ndims=2)
-
-        if not valid_images(images):
-            raise ValueError("Invalid image type. Must be of type PIL.Image.Image, numpy.ndarray, or torch.Tensor")
-
-        if segmentation_maps is not None and not valid_images(segmentation_maps):
-            raise ValueError(
-                "Invalid segmentation map type. Must be of type PIL.Image.Image, numpy.ndarray, or torch.Tensor"
-            )
-
-        validate_preprocess_arguments(
-            do_rescale=do_rescale,
-            rescale_factor=rescale_factor,
-            do_normalize=do_normalize,
-            image_mean=image_mean,
-            image_std=image_std,
-            do_center_crop=do_center_crop,
-            crop_size=crop_size,
-            do_resize=do_resize,
-            size=size,
-            resample=resample,
-        )
-
-        images = [
-            self._preprocess_image(
-                image=img,
-                do_resize=do_resize,
-                size=size,
-                resample=resample,
-                do_rescale=do_rescale,
-                rescale_factor=rescale_factor,
-                do_center_crop=do_center_crop,
-                crop_size=crop_size,
-                do_normalize=do_normalize,
-                image_mean=image_mean,
-                image_std=image_std,
-                data_format=data_format,
-                input_data_format=input_data_format,
-            )
-            for img in images
-        ]
-
-        data = {"pixel_values": images}
-
-        if segmentation_maps is not None:
-            segmentation_maps = [
-                self._preprocess_mask(
-                    segmentation_map=segmentation_map,
-                    do_reduce_labels=do_reduce_labels,
-                    do_resize=do_resize,
-                    size=size,
-                    do_center_crop=do_center_crop,
-                    crop_size=crop_size,
-                    input_data_format=input_data_format,
-                )
-                for segmentation_map in segmentation_maps
-            ]
-            data["labels"] = segmentation_maps
-
+            segmentation_maps_list = make_flat_list_of_images(segmentation_maps, expected_ndims=2)
+        else:
+            segmentation_maps_list = None
+        if not valid_images(images_list):
+            raise ValueError('Invalid image type. Must be of type PIL.Image.Image, numpy.ndarray, or torch.Tensor')
+        if segmentation_maps_list is not None and (not valid_images(segmentation_maps_list)):
+            raise ValueError('Invalid segmentation map type. Must be of type PIL.Image.Image, numpy.ndarray, or torch.Tensor')
+        validate_preprocess_arguments(do_rescale=local_do_rescale, rescale_factor=local_rescale_factor, do_normalize=local_do_normalize, image_mean=local_image_mean, image_std=local_image_std, do_center_crop=local_do_center_crop, crop_size=local_crop_size, do_resize=local_do_resize, size=local_size, resample=local_resample)
+        images_out = [self._preprocess_image(image=img, do_resize=local_do_resize, size=local_size, resample=local_resample, do_rescale=local_do_rescale, rescale_factor=local_rescale_factor, do_center_crop=local_do_center_crop, crop_size=local_crop_size, do_normalize=local_do_normalize, image_mean=local_image_mean, image_std=local_image_std, data_format=data_format, input_data_format=input_data_format) for img in images_list]
+        data = {'pixel_values': images_out}
+        if segmentation_maps_list is not None:
+            data['labels'] = [self._preprocess_mask(segmentation_map=segmentation_map, do_reduce_labels=local_do_reduce_labels, do_resize=local_do_resize, size=local_size, do_center_crop=local_do_center_crop, crop_size=local_crop_size, input_data_format=input_data_format) for segmentation_map in segmentation_maps_list]
         return BatchFeature(data=data, tensor_type=return_tensors)
 
-    # Copied from transformers.models.beit.image_processing_beit.BeitImageProcessor.post_process_semantic_segmentation with Beit->MobileNetV2
-    def post_process_semantic_segmentation(self, outputs, target_sizes: Optional[list[tuple]] = None):
+    def post_process_semantic_segmentation(self, outputs, target_sizes: Optional[list[tuple]]=None):
         """
         Converts the output of [`MobileNetV2ForSemanticSegmentation`] into semantic segmentation maps.
 
@@ -500,30 +278,18 @@ class MobileNetV2ImageProcessor(BaseImageProcessor):
             specified). Each entry of each `torch.Tensor` correspond to a semantic class id.
         """
         logits = outputs.logits
-
-        # Resize logits and compute semantic segmentation maps
         if target_sizes is not None:
             if len(logits) != len(target_sizes):
-                raise ValueError(
-                    "Make sure that you pass in as many target sizes as the batch dimension of the logits"
-                )
-
+                raise ValueError('Make sure that you pass in as many target sizes as the batch dimension of the logits')
             if is_torch_tensor(target_sizes):
                 target_sizes = target_sizes.numpy()
-
             semantic_segmentation = []
-
             for idx in range(len(logits)):
-                resized_logits = torch.nn.functional.interpolate(
-                    logits[idx].unsqueeze(dim=0), size=target_sizes[idx], mode="bilinear", align_corners=False
-                )
+                resized_logits = torch.nn.functional.interpolate(logits[idx].unsqueeze(dim=0), size=target_sizes[idx], mode='bilinear', align_corners=False)
                 semantic_map = resized_logits[0].argmax(dim=0)
                 semantic_segmentation.append(semantic_map)
         else:
             semantic_segmentation = logits.argmax(dim=1)
             semantic_segmentation = [semantic_segmentation[i] for i in range(semantic_segmentation.shape[0])]
-
         return semantic_segmentation
-
-
-__all__ = ["MobileNetV2ImageProcessor"]
+__all__ = ['MobileNetV2ImageProcessor']
