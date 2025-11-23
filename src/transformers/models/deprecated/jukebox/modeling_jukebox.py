@@ -433,18 +433,26 @@ class JukeboxBottleneckBlock(nn.Module):
         return {"entropy": entropy, "used_curr": used_curr, "usage": usage, "dk": dk}
 
     def preprocess(self, hidden_states):
-        hidden_states = hidden_states.permute(0, 2, 1).contiguous()
-        hidden_states = hidden_states.view(-1, hidden_states.shape[-1])
+        hidden_states = hidden_states.permute(0, 2, 1)
+        # Using .reshape instead of .view for more robust handling of non-contiguous memory and to avoid .contiguous()
+        hidden_states = hidden_states.reshape(-1, hidden_states.shape[-1])
 
-        if hidden_states.shape[-1] == self.codebook_width:
-            prenorm = torch.linalg.norm(hidden_states - torch.mean(hidden_states)) / np.sqrt(
-                np.prod(hidden_states.shape)
-            )
-        elif hidden_states.shape[-1] == 2 * self.codebook_width:
-            x1, x2 = hidden_states[..., : self.codebook_width], hidden_states[..., self.codebook_width :]
-            prenorm = (torch.linalg.norm(x1 - torch.mean(x1)) / np.sqrt(np.prod(x1.shape))) + (
-                torch.linalg.norm(x2 - torch.mean(x2)) / np.sqrt(np.prod(x2.shape))
-            )
+        last_dim = hidden_states.shape[-1]
+        if last_dim == self.codebook_width:
+            # fused mean and difference operations for efficiency
+            mean_hs = torch.mean(hidden_states, dim=0, keepdim=True)
+            diff = hidden_states - mean_hs
+            prenorm = torch.linalg.norm(diff) / np.sqrt(hidden_states.numel())
+        elif last_dim == 2 * self.codebook_width:
+            x1 = hidden_states[..., : self.codebook_width]
+            x2 = hidden_states[..., self.codebook_width :]
+            # fused mean and difference operations for efficiency
+            mean_x1 = torch.mean(x1, dim=0, keepdim=True)
+            mean_x2 = torch.mean(x2, dim=0, keepdim=True)
+            norm_x1 = torch.linalg.norm(x1 - mean_x1) / np.sqrt(x1.numel())
+            norm_x2 = torch.linalg.norm(x2 - mean_x2) / np.sqrt(x2.numel())
+            prenorm = norm_x1 + norm_x2
+            # Normalise
 
             # Normalise
             hidden_states = x1 + x2
@@ -460,11 +468,13 @@ class JukeboxBottleneckBlock(nn.Module):
     def quantise(self, latent_states):
         # Calculate latent code latent_states
         codebook_weights = self.codebook.t()
-        distance = (
-            torch.sum(latent_states**2, dim=-1, keepdim=True)
-            - 2 * torch.matmul(latent_states, codebook_weights)
-            + torch.sum(codebook_weights**2, dim=0, keepdim=True)
-        )  # (batch_size * latent_states , codebook_weights)
+
+        # Use torch.cdist for efficient pairwise Euclidean distance calculation
+        # If codebook and latent_states are on different devices, move codebook to latent_states' device
+        if codebook_weights.device != latent_states.device:
+            codebook_weights = codebook_weights.to(latent_states.device)
+        # torch.cdist is faster and more memory efficient for this use-case
+        distance = torch.cdist(latent_states, codebook_weights.t(), p=2)
         min_distance, music_tokens = torch.min(distance, dim=-1)
         fit = torch.mean(min_distance)
         return music_tokens, fit
