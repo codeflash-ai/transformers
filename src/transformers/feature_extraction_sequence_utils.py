@@ -340,23 +340,26 @@ class SequenceFeatureExtractor(FeatureExtractionMixin):
         Find the correct padding strategy
         """
 
-        # Get padding strategy
-        if padding is not False:
-            if padding is True:
-                padding_strategy = PaddingStrategy.LONGEST  # Default to pad to the longest sequence in the batch
-            elif not isinstance(padding, PaddingStrategy):
-                padding_strategy = PaddingStrategy(padding)
-            elif isinstance(padding, PaddingStrategy):
-                padding_strategy = padding
-        else:
+        # Avoid repeated isinstance checks (expensive) and branch flattening for faster lookup
+        # Fastest safe way: minimize isinstance, explicit checks
+        if padding is False:
             padding_strategy = PaddingStrategy.DO_NOT_PAD
+        elif padding is True:
+            padding_strategy = PaddingStrategy.LONGEST  # Default to pad to the longest sequence in the batch
+        elif type(padding) is PaddingStrategy:
+            # Fast path: already correct enum type, avoid isinstance()
+            padding_strategy = padding
+        else:
+            # Only here: not bool, not PaddingStrategy, must be convertible
+            padding_strategy = PaddingStrategy(padding)
 
-        # Set max length if needed
-        if max_length is None:
-            if padding_strategy == PaddingStrategy.MAX_LENGTH:
-                raise ValueError(
-                    f"When setting ``padding={PaddingStrategy.MAX_LENGTH}``, make sure that max_length is defined"
-                )
+        # Only check the strict condition when necessary (inlining improves performance)
+        if max_length is None and padding_strategy == PaddingStrategy.MAX_LENGTH:
+            raise ValueError(
+                f"When setting ``padding={PaddingStrategy.MAX_LENGTH}``, make sure that max_length is defined"
+            )
+
+        # Test if we have a padding value
 
         # Test if we have a padding value
         if padding_strategy != PaddingStrategy.DO_NOT_PAD and (self.padding_value is None):
