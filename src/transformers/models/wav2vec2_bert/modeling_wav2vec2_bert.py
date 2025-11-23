@@ -604,13 +604,15 @@ def _compute_new_attention_mask(hidden_states: torch.Tensor, seq_lens: torch.Ten
     """
     batch_size, mask_seq_len = hidden_states.shape[:2]
 
-    indices = torch.arange(mask_seq_len, device=seq_lens.device).expand(batch_size, -1)
+    # Use broadcasting without expand to avoid unnecessary memory usage
+    indices = torch.arange(mask_seq_len, device=seq_lens.device).unsqueeze(0)  # (1, seq_len)
+    seq_lens_unsq = seq_lens.unsqueeze(1)  # (batch, 1)
+    bool_mask = indices >= seq_lens_unsq  # (batch, seq_len), uses broadcasting
 
-    bool_mask = indices >= seq_lens.unsqueeze(1).expand(-1, mask_seq_len)
+    # Pre-allocate mask with ones, avoid extra allocation by .masked_fill_ (in-place op)
 
     mask = hidden_states.new_ones((batch_size, mask_seq_len))
-
-    mask = mask.masked_fill(bool_mask, 0)
+    mask.masked_fill_(bool_mask, 0)
 
     return mask
 
