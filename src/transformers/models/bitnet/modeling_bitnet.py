@@ -52,10 +52,19 @@ class BitNetRMSNorm(nn.Module):
 
     def forward(self, hidden_states):
         input_dtype = hidden_states.dtype
-        hidden_states = hidden_states.to(torch.float32)
-        variance = hidden_states.pow(2).mean(-1, keepdim=True)
+        # Only cast if necessary
+        if hidden_states.dtype != torch.float32:
+            hidden_states = hidden_states.to(torch.float32)
+            need_cast_back = True
+        else:
+            need_cast_back = False
+        # Use fused operations where possible
+        variance = torch.mean(hidden_states * hidden_states, dim=-1, keepdim=True)
         hidden_states = hidden_states * torch.rsqrt(variance + self.variance_epsilon)
-        return self.weight * hidden_states.to(input_dtype)
+        if need_cast_back:
+            hidden_states = hidden_states.to(input_dtype)
+        # Use out parameter to avoid potentially unnecessary allocations
+        return self.weight * hidden_states
 
     def extra_repr(self):
         return f"{tuple(self.weight.shape)}, eps={self.variance_epsilon}"
