@@ -139,8 +139,9 @@ class LayoutLMv3TextEmbeddings(nn.Module):
         symbols are ignored. This is modified from fairseq's `utils.make_positions`.
         """
         # The series of casts and type-conversions here are carefully balanced to both work with ONNX export and XLA.
-        mask = input_ids.ne(padding_idx).int()
-        incremental_indices = (torch.cumsum(mask, dim=1).type_as(mask)) * mask
+        mask = input_ids != padding_idx
+        # Move type casting and multiplication together for efficiency
+        incremental_indices = torch.cumsum(mask, dim=1) * mask
         return incremental_indices.long() + padding_idx
 
     def create_position_ids_from_inputs_embeds(self, inputs_embeds):
