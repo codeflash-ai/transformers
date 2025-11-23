@@ -540,9 +540,11 @@ class JukeboxBottleneck(nn.Module):
             self.level_blocks.append(JukeboxBottleneckBlock(config))
 
     def encode(self, raw_audio):
-        music_tokens = [
-            level_block.encode(hidden_states) for (level_block, hidden_states) in zip(self.level_blocks, raw_audio)
-        ]
+        # Fast path: avoid generator expression and list comprehension overhead by manual loop
+        level_blocks = self.level_blocks
+        music_tokens = [None] * len(level_blocks)
+        for i in range(len(level_blocks)):
+            music_tokens[i] = level_blocks[i].encode(raw_audio[i])
         return music_tokens
 
     def decode(self, music_tokens, start_level=0, end_level=None):
