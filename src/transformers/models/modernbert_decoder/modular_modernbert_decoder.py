@@ -260,21 +260,41 @@ def eager_attention_forward(
     **kwargs,
 ) -> tuple[torch.Tensor, Optional[torch.Tensor]]:
     """A simple eager attention implementation for ModernBERT decoder."""
+    # Commonly used variables, move local for reduced repeated lookups
+    head_dim = module.head_dim
+    is_training = module.training
+
     if scaling is None:
-        scaling = module.head_dim**-0.5
+        scaling = head_dim**-0.5
 
-    # Compute attention scores
-    attn_weights = torch.matmul(query, key.transpose(2, 3)) * scaling
+    q = query
+    k = key
+    v = value
 
-    # Use the pre-computed attention mask
-    causal_mask = attention_mask[:, :, :, : key.shape[-2]]
-    attn_weights = attn_weights + causal_mask
+    # Efficiently transpose and matmul in-place where safe
+    kt = k.transpose(2, 3)
+    attn_weights = torch.matmul(q, kt)
+    attn_weights.mul_(scaling)  # in-place scaling for memory efficiency
 
-    # upcast attention to fp32
-    attn_weights = nn.functional.softmax(attn_weights, dim=-1, dtype=torch.float32).to(query.dtype)
-    attn_weights = nn.functional.dropout(attn_weights, p=dropout, training=module.training)
-    attn_output = torch.matmul(attn_weights, value)
+    # Slice mask directly only once for better cache locality
+    k_len = k.shape[-2]
+    causal_mask = attention_mask[:, :, :, :k_len]
+    attn_weights.add_(causal_mask)  # in-place add
+
+    # Use fused operations when possible, softmax+dropout in float32, then downcast
+    attn_weights = nn.functional.softmax(attn_weights, dim=-1, dtype=torch.float32)
+    if dropout > 0.0 and is_training:
+        attn_weights = nn.functional.dropout(attn_weights, p=dropout, training=is_training)
+    # Only cast back if necessary
+    if attn_weights.dtype != q.dtype:
+        attn_weights = attn_weights.to(q.dtype)
+
+    # Avoid extra copies in intermediate results
+    attn_output = torch.matmul(attn_weights, v)
+
+    # Transpose/contiguous together for improved cache/locality
     attn_output = attn_output.transpose(1, 2).contiguous()
+
     return attn_output, attn_weights
 
 
