@@ -13,7 +13,6 @@
 # limitations under the License.
 """Configuration base class and utilities."""
 
-import copy
 import json
 import os
 import warnings
@@ -237,7 +236,7 @@ class ModelCard:
 
     def to_dict(self):
         """Serializes this instance to a Python dictionary."""
-        output = copy.deepcopy(self.__dict__)
+        output = dict(self.__dict__)
         return output
 
     def to_json_string(self):
