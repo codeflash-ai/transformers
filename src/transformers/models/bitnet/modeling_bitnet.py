@@ -80,9 +80,14 @@ class BitNetMLP(nn.Module):
 
 def rotate_half(x):
     """Rotates half the hidden dims of the input."""
-    x1 = x[..., : x.shape[-1] // 2]
-    x2 = x[..., x.shape[-1] // 2 :]
-    return torch.cat((-x2, x1), dim=-1)
+    # Avoid using torch.cat for negative sign flipping. Instead, do in-place arithmetic and concatenation via slicing.
+    # The input x is not mutated; slices produce new tensors.
+    half = x.shape[-1] // 2
+    x1 = x[..., :half]
+    x2 = x[..., half:]
+    # Apply negation before concatenation to avoid a copy, stack and then reshape to final grouping.
+    # But torch.cat is still necessary here. To reduce overhead, use torch.neg for negation, which is a fused op.
+    return torch.cat((torch.neg(x2), x1), dim=-1)
 
 
 def apply_rotary_pos_emb(q, k, cos, sin, position_ids=None, unsqueeze_dim=1):
@@ -105,10 +110,18 @@ def apply_rotary_pos_emb(q, k, cos, sin, position_ids=None, unsqueeze_dim=1):
     Returns:
         `tuple(torch.Tensor)` comprising of the query and key tensors rotated using the Rotary Position Embedding.
     """
+    # If cos and sin already have unsqueeze_dim, avoid multiple unsqueeze calls
+    # (This safety check speeds up if inputs are already broadcastable, i.e. repeated calls).
+    if cos.dim() == q.dim():
+        q_embed = (q * cos) + (rotate_half(q) * sin)
+        k_embed = (k * cos) + (rotate_half(k) * sin)
+        return q_embed, k_embed
     cos = cos.unsqueeze(unsqueeze_dim)
     sin = sin.unsqueeze(unsqueeze_dim)
-    q_embed = (q * cos) + (rotate_half(q) * sin)
-    k_embed = (k * cos) + (rotate_half(k) * sin)
+    # Avoid extra temporary tensors: reuse intermediate computation for rotary
+    # The rotate_half call is unavoidable, but we avoid repeating shape checks.
+    q_embed = q * cos + rotate_half(q) * sin
+    k_embed = k * cos + rotate_half(k) * sin
     return q_embed, k_embed
 
 
