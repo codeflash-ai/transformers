@@ -24,17 +24,24 @@ class MistralConverter:
         self.additional_special_tokens = additional_special_tokens
 
     def extract_vocab_merges_from_model(self, vocab: str):
+        # Cache bytes_to_unicode() result
+        if not hasattr(bytes_to_unicode, "_cache"):
+            bytes_to_unicode._cache = bytes_to_unicode()
+        byte_encoder = bytes_to_unicode._cache
         bpe_ranks = vocab
-        byte_encoder = bytes_to_unicode()
 
         def token_bytes_to_string(b):
             return "".join([byte_encoder[ord(char)] for char in b.decode("latin-1")])
 
         merges = []
-        vocab = {}
+        vocab_dict = {}
+
+        # Using set for faster lookup if additional_special_tokens is non-None
+        add_special = set(self.additional_special_tokens) if self.additional_special_tokens is not None else set()
+
         for idx, (token, rank) in enumerate(bpe_ranks.items()):
-            if token not in self.additional_special_tokens:
-                vocab[token_bytes_to_string(token)] = idx
+            if token not in add_special:
+                vocab_dict[token_bytes_to_string(token)] = idx
                 if len(token) == 1:
                     continue
                 local = []
@@ -45,10 +52,10 @@ class MistralConverter:
                 local = sorted(local, key=lambda x: (bpe_ranks[x[0]], bpe_ranks[x[1]]), reverse=False)
                 merges.extend(local)
             else:
-                vocab[token] = idx
+                vocab_dict[token] = idx
         merges = sorted(merges, key=lambda val: val[2], reverse=False)
         merges = [(token_bytes_to_string(val[0]), token_bytes_to_string(val[1])) for val in merges]
-        return vocab, merges
+        return vocab_dict, merges
 
     def tokenizer(self):
         vocab_scores, merges = self.extract_vocab_merges_from_model(self.vocab)
