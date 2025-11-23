@@ -95,8 +95,8 @@ class MultiHeadAttention(nn.Module):
         self.dense = nn.Linear(d_model_size, d_model_size)
 
     def split_into_heads(self, x, batch_size):
-        x = x.reshape(batch_size, -1, self.num_heads, self.depth)
-        return x.permute([0, 2, 1, 3])
+        x = x.view(batch_size, -1, self.num_heads, self.depth)
+        return x.transpose(1, 2)
 
     def forward(
         self,
