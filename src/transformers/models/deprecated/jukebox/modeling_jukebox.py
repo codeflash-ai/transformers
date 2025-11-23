@@ -92,16 +92,32 @@ def get_relevant_lyric_tokens(full_tokens, max_n_lyric_tokens, total_length, off
             which represent the overall length of the signal,
     """
     full_tokens = full_tokens[0]
-    if len(full_tokens) < max_n_lyric_tokens:
-        tokens = torch.cat(
-            [torch.zeros(max_n_lyric_tokens - len(full_tokens), dtype=torch.long).to(full_tokens.device), full_tokens]
-        )
-        indices = [-1] * (max_n_lyric_tokens - len(full_tokens)) + list(range(0, len(full_tokens)))
+    full_tokens_len = len(full_tokens)
+    half_n = max_n_lyric_tokens // 2
+
+    if full_tokens_len < max_n_lyric_tokens:
+        pad_len = max_n_lyric_tokens - full_tokens_len
+        # Preallocate tensor and copy full_tokens into it (faster than torch.cat for large arrays)
+        tokens = torch.zeros(max_n_lyric_tokens, dtype=torch.long, device=full_tokens.device)
+        if full_tokens_len > 0:
+            tokens[pad_len:] = full_tokens
+        indices = [-1] * pad_len
+        if full_tokens_len > 0:
+            indices.extend(range(full_tokens_len))
     else:
-        midpoint = int(len(full_tokens) * (offset + duration / 2.0) / total_length)
-        midpoint = min(max(midpoint, max_n_lyric_tokens // 2), len(full_tokens) - max_n_lyric_tokens // 2)
-        tokens = full_tokens[midpoint - max_n_lyric_tokens // 2 : midpoint + max_n_lyric_tokens // 2]
-        indices = list(range(midpoint - max_n_lyric_tokens // 2, midpoint + max_n_lyric_tokens // 2))
+        # Precompute bounds once, avoid repetitive computation
+        midpoint = int(full_tokens_len * (offset + duration / 2.0) / total_length)
+        lo = midpoint - half_n
+        hi = midpoint + half_n
+        # Both min/max in a single shot, avoiding double calc
+        if lo < 0:
+            lo = 0
+            hi = max_n_lyric_tokens
+        elif hi > full_tokens_len:
+            hi = full_tokens_len
+            lo = full_tokens_len - max_n_lyric_tokens
+        tokens = full_tokens[lo:hi]
+        indices = list(range(lo, hi))
     return tokens.unsqueeze(dim=0), indices
 
 
