@@ -40,42 +40,60 @@ from transformers import (
 )
 
 
+_HIERA_TINY_DET_CONFIG = Sam2HieraDetConfig()
+
+_HIERA_TINY_VISION_CONFIG = Sam2VisionConfig(backbone_config=_HIERA_TINY_DET_CONFIG)
+
+_HIERA_SMALL_DET_CONFIG = Sam2HieraDetConfig(blocks_per_stage=[1, 2, 11, 2], global_attention_blocks=[7, 10, 13])
+
+_HIERA_SMALL_VISION_CONFIG = Sam2VisionConfig(backbone_config=_HIERA_SMALL_DET_CONFIG)
+
+_HIERA_BASE_PLUS_DET_CONFIG = Sam2HieraDetConfig(
+    hidden_size=112,
+    embed_dim_per_stage=[112, 224, 448, 896],
+    num_attention_heads_per_stage=[2, 4, 8, 16],
+    blocks_per_stage=[2, 3, 16, 3],
+    global_attention_blocks=[12, 16, 20],
+    window_positional_embedding_background_size=(14, 14),
+)
+
+_HIERA_BASE_PLUS_VISION_CONFIG = Sam2VisionConfig(
+    backbone_config=_HIERA_BASE_PLUS_DET_CONFIG,
+    backbone_channel_list=[896, 448, 224, 112],
+)
+
+_HIERA_LARGE_DET_CONFIG = Sam2HieraDetConfig(
+    hidden_size=144,
+    embed_dim_per_stage=[144, 288, 576, 1152],
+    num_attention_heads_per_stage=[2, 4, 8, 16],
+    blocks_per_stage=[2, 6, 36, 4],
+    global_attention_blocks=[23, 33, 43],
+    window_positional_embedding_background_size=(7, 7),
+    window_size_per_stage=[8, 4, 16, 8],
+)
+
+_HIERA_LARGE_VISION_CONFIG = Sam2VisionConfig(
+    backbone_config=_HIERA_LARGE_DET_CONFIG,
+    backbone_channel_list=[1152, 576, 288, 144],
+)
+
+_PROMPT_ENCODER_CONFIG = Sam2VideoPromptEncoderConfig()
+
+_MASK_DECODER_CONFIG = Sam2VideoMaskDecoderConfig()
+
+
 def get_config(model_name):
     if "hiera_tiny" in model_name:
-        hiera_det_config = Sam2HieraDetConfig()
-        vision_config = Sam2VisionConfig(backbone_config=hiera_det_config)
+        vision_config = _HIERA_TINY_VISION_CONFIG
     elif "hiera_small" in model_name:
-        hiera_det_config = Sam2HieraDetConfig(blocks_per_stage=[1, 2, 11, 2], global_attention_blocks=[7, 10, 13])
-        vision_config = Sam2VisionConfig(backbone_config=hiera_det_config)
+        vision_config = _HIERA_SMALL_VISION_CONFIG
     elif "hiera_base_plus" in model_name:
-        hiera_det_config = Sam2HieraDetConfig(
-            hidden_size=112,
-            embed_dim_per_stage=[112, 224, 448, 896],
-            num_attention_heads_per_stage=[2, 4, 8, 16],
-            blocks_per_stage=[2, 3, 16, 3],
-            global_attention_blocks=[12, 16, 20],
-            window_positional_embedding_background_size=(14, 14),
-        )
-        vision_config = Sam2VisionConfig(
-            backbone_config=hiera_det_config,
-            backbone_channel_list=[896, 448, 224, 112],
-        )
+        vision_config = _HIERA_BASE_PLUS_VISION_CONFIG
     elif "hiera_large" in model_name:
-        hiera_det_config = Sam2HieraDetConfig(
-            hidden_size=144,
-            embed_dim_per_stage=[144, 288, 576, 1152],
-            num_attention_heads_per_stage=[2, 4, 8, 16],
-            blocks_per_stage=[2, 6, 36, 4],
-            global_attention_blocks=[23, 33, 43],
-            window_positional_embedding_background_size=(7, 7),
-            window_size_per_stage=[8, 4, 16, 8],
-        )
-        vision_config = Sam2VisionConfig(
-            backbone_config=hiera_det_config,
-            backbone_channel_list=[1152, 576, 288, 144],
-        )
-    prompt_encoder_config = Sam2VideoPromptEncoderConfig()
-    mask_decoder_config = Sam2VideoMaskDecoderConfig()
+        vision_config = _HIERA_LARGE_VISION_CONFIG
+
+    prompt_encoder_config = _PROMPT_ENCODER_CONFIG
+    mask_decoder_config = _MASK_DECODER_CONFIG
 
     if "sam2.1" in model_name:
         enable_temporal_pos_encoding_for_object_pointers = True
