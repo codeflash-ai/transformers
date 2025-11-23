@@ -633,13 +633,19 @@ class Kosmos2TextSinusoidalPositionalEmbedding(nn.Module):
 
         Returns: torch.Tensor
         """
-        input_shape = inputs_embeds.size()[:-1]
+        input_shape = inputs_embeds.shape[:-1]
         sequence_length = input_shape[1]
 
         position_ids = torch.arange(
             padding_idx + 1, sequence_length + padding_idx + 1, dtype=torch.long, device=inputs_embeds.device
         )
-        return position_ids.unsqueeze(0).expand(input_shape).contiguous() + past_key_values_length
+        # Use .expand directly to avoid materializing unnecessary intermediate tensors
+        result = position_ids.unsqueeze(0).expand(
+            input_shape
+        )  # torch.broadcast_to is 1.11+, .expand is equivalent and native
+        if past_key_values_length != 0:
+            result = result + past_key_values_length
+        return result.contiguous()
 
     @staticmethod
     # Copied from transformers.models.roberta.modeling_roberta.RobertaEmbeddings.create_position_ids_from_input_ids
