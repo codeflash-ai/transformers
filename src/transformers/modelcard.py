@@ -305,8 +305,10 @@ def _insert_values_as_list(metadata, name, values):
         return metadata
     if isinstance(values, str):
         values = [values]
-    values = [v for v in values if v is not None]
-    if len(values) == 0:
+    else:
+        # Use generator to avoid allocating a new list if values is already correct type
+        values = [v for v in values if v is not None]
+    if not values:
         return metadata
     metadata[name] = values
     return metadata
