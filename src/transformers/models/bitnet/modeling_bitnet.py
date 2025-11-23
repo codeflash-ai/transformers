@@ -311,10 +311,14 @@ class BitNetRotaryEmbedding(nn.Module):
 
         attention_factor = 1.0  # Unused in this type of RoPE
 
-        # Compute the inverse frequencies
-        inv_freq = 1.0 / (
-            base ** (torch.arange(0, dim, 2, dtype=torch.int64).to(device=device, dtype=torch.float) / dim)
-        )
+        # Compute the inverse frequencies (optimized memory and speed: avoid chained .to, re-use computation)
+        # Allocate float arange directly and avoid .to with dtype conversion in arithmetic
+        device_arg = {"device": device} if device is not None else {}
+        arange = torch.arange(0, dim, 2, dtype=torch.float, **device_arg)
+        # torch.pow for base ** exponent; exponent is now float tensor
+        # Avoid repeated division by reusing value
+        exponent = arange / dim
+        inv_freq = torch.pow(base, -exponent)
         return inv_freq, attention_factor
 
     @torch.no_grad()
