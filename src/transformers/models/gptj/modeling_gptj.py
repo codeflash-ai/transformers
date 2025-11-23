@@ -168,7 +168,7 @@ class GPTJAttention(nn.Module):
         if embed_positions.device != position_ids.device:
             embed_positions = embed_positions.to(position_ids.device)
             self.embed_positions = embed_positions
-        return embed_positions.repeat(position_ids.shape[0], 1, 1)
+        return embed_positions.expand(position_ids.shape[0], -1, -1)
 
     def forward(
         self,
