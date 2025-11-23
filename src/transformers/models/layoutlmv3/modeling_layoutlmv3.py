@@ -153,7 +153,9 @@ class LayoutLMv3TextEmbeddings(nn.Module):
         position_ids = torch.arange(
             self.padding_idx + 1, sequence_length + self.padding_idx + 1, dtype=torch.long, device=inputs_embeds.device
         )
-        return position_ids.unsqueeze(0).expand(input_shape)
+        if input_shape[0] == 1:
+            return position_ids.unsqueeze(0)
+        return position_ids.expand(input_shape)
 
     def forward(
         self,
