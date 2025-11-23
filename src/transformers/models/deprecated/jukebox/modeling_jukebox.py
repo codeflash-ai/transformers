@@ -383,7 +383,8 @@ class JukeboxBottleneckBlock(nn.Module):
         self.init = False
         self.codebook_sum = None
         self.codebook_elem = None
-        self.register_buffer("codebook", torch.zeros(self.nb_discrete_codes, self.codebook_width))
+        # register_buffer uses torch.zeros (already fast), but pin_memory=False avoids unnecessary pinning
+        self.register_buffer("codebook", torch.zeros(self.nb_discrete_codes, self.codebook_width, pin_memory=False))
 
     def _tile(self, hidden_states):
         dim, embed_width = hidden_states.shape
@@ -453,8 +454,8 @@ class JukeboxBottleneckBlock(nn.Module):
 
     def postprocess(self, latent_states, dequantised_states, x_shape):
         batch_size, time = x_shape
-        dequantised_states = dequantised_states.view(batch_size, time, -1).permute(0, 2, 1).contiguous()
-        latent_states = latent_states.view(batch_size, time)
+        dequantised_states = dequantised_states.reshape(batch_size, time, -1).permute(0, 2, 1)
+        latent_states = latent_states.reshape(batch_size, time)
         return latent_states, dequantised_states
 
     def quantise(self, latent_states):
