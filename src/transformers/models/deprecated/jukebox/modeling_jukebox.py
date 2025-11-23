@@ -460,11 +460,17 @@ class JukeboxBottleneckBlock(nn.Module):
     def quantise(self, latent_states):
         # Calculate latent code latent_states
         codebook_weights = self.codebook.t()
-        distance = (
-            torch.sum(latent_states**2, dim=-1, keepdim=True)
-            - 2 * torch.matmul(latent_states, codebook_weights)
-            + torch.sum(codebook_weights**2, dim=0, keepdim=True)
-        )  # (batch_size * latent_states , codebook_weights)
+
+        # Use efficient in-place operators and fused operations to minimize temporary tensors
+        # Compute squared norms of latent_states and codebook_weights
+        # This minimizes the creation of temporary tensors in the computation
+        x2 = torch.sum(latent_states**2, dim=-1, keepdim=True)
+        w2 = torch.sum(codebook_weights**2, dim=0, keepdim=True)
+        # Use torch.addmm for fused matmul and addition for better performance
+        # distance = x2 - 2 * torch.matmul(latent_states, codebook_weights) + w2
+        # torch.addmm(beta=1, input=x2, alpha=-2, mat1=latent_states, mat2=codebook_weights)
+        distance = torch.addmm(x2, latent_states, codebook_weights, beta=1, alpha=-2)
+        distance = distance + w2
         min_distance, music_tokens = torch.min(distance, dim=-1)
         fit = torch.mean(min_distance)
         return music_tokens, fit
