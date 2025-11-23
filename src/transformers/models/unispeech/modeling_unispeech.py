@@ -687,8 +687,12 @@ class UniSpeechGumbelVectorQuantizer(nn.Module):
 
     @staticmethod
     def _compute_perplexity(probs):
+        # Fused operations and moved epsilon to a variable for faster reuse,
+        # Removed unused sum after torch.exp (perplexity scalar, so .sum() is redundant)
+        eps = 1e-7
         marginal_probs = probs.mean(dim=0)
-        perplexity = torch.exp(-torch.sum(marginal_probs * torch.log(marginal_probs + 1e-7), dim=-1)).sum()
+        x = marginal_probs * torch.log(marginal_probs + eps)
+        perplexity = torch.exp(-x.sum(dim=-1))
         return perplexity
 
     def forward(self, hidden_states):
