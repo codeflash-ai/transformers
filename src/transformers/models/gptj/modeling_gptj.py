@@ -128,14 +128,20 @@ class GPTJAttention(nn.Module):
         """
         Merges attn_head_size dim and num_attn_heads dim into hidden dim
         """
-        if len(tensor.shape) == 5:
-            tensor = tensor.permute(0, 1, 3, 2, 4).contiguous()
-        elif len(tensor.shape) == 4:
-            tensor = tensor.permute(0, 2, 1, 3).contiguous()
+        # Optimization: avoid .permute/.contiguous where possible, optimize .view for memory layout
+        # Most time is spent in .view. Prefer using .reshape unless stride is guaranteed.
+        shape = tensor.shape
+        if len(shape) == 5:
+            # [batch, seq, num_heads, kv_seq, head_dim] -> [batch, seq, kv_seq, num_heads * head_dim]
+            tensor = tensor.permute(0, 1, 3, 2, 4).reshape(
+                shape[0], shape[1], shape[3], num_attention_heads * attn_head_size
+            )
+        elif len(shape) == 4:
+            # [batch, num_heads, seq, head_dim] -> [batch, seq, num_heads * head_dim]
+            tensor = tensor.permute(0, 2, 1, 3).reshape(shape[0], shape[2], num_attention_heads * attn_head_size)
         else:
-            raise ValueError(f"Input tensor rank should be one of [4, 5], but is: {len(tensor.shape)}")
-        new_shape = tensor.size()[:-2] + (num_attention_heads * attn_head_size,)
-        return tensor.view(new_shape)
+            raise ValueError(f"Input tensor rank should be one of [4, 5], but is: {len(shape)}")
+        return tensor
 
     def _attn(
         self,
