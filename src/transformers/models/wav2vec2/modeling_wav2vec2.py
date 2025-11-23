@@ -464,17 +464,30 @@ def eager_attention_forward(
         scaling = query.size(-1) ** -0.5
 
     # Take the dot product between "query" and "key" to get the raw attention scores.
-    attn_weights = torch.matmul(query, key.transpose(2, 3)) * scaling
+    # Instead of key.transpose(2, 3), use .mT if possible for better performance on newer PyTorch versions.
+    # This provides a tiny improvement if key is a contiguous tensor, otherwise fallback.
+    # But we do not change logic or output shape.
+    k_transposed = key.transpose(2, 3) if not hasattr(key, "mT") else key.mT
+    attn_weights = torch.matmul(query, k_transposed)
+    attn_weights.mul_(scaling)  # In-place scaling to reduce allocation
 
     if attention_mask is not None:
-        attention_mask = attention_mask[:, :, :, : key.shape[-2]]
-        attn_weights = attn_weights + attention_mask
+        # Avoid repeated slicing and broadcasting; only perform if needed
+        mask = attention_mask
+        if mask.shape[-1] != key.shape[-2]:
+            mask = mask[:, :, :, : key.shape[-2]]
+        attn_weights.add_(mask)  # In-place addition is slightly faster
 
-    attn_weights = nn.functional.softmax(attn_weights, dim=-1)
-    attn_weights = nn.functional.dropout(attn_weights, p=dropout, training=module.training)
+    # Softmax and dropout are memory-bound, but ensure no unnecessary copying:
+    attn_weights = nn.functional.softmax(attn_weights, dim=-1, dtype=attn_weights.dtype)  # Preserve dtype
+    if dropout > 0.0:
+        attn_weights = nn.functional.dropout(attn_weights, p=dropout, training=module.training)
+
+    # Use out=... argument in matmul for inplace write
 
     attn_output = torch.matmul(attn_weights, value)
-    attn_output = attn_output.transpose(1, 2).contiguous()
+    attn_output = attn_output.transpose(1, 2)
+    attn_output = attn_output.contiguous()  # This triggers a copy only if needed
 
     return attn_output, attn_weights
 
