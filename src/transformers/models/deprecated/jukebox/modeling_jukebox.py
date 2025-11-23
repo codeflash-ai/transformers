@@ -470,8 +470,8 @@ class JukeboxBottleneckBlock(nn.Module):
         return music_tokens, fit
 
     def dequantise(self, music_tokens):
-        dequantised_states = F.embedding(music_tokens, self.codebook)
-        return dequantised_states
+        # Avoiding unnecessary indirection by directly returning embedding result
+        return F.embedding(music_tokens, self.codebook)
 
     def encode(self, latent_states):
         samples, _, seq_len = latent_states.shape
@@ -492,10 +492,10 @@ class JukeboxBottleneckBlock(nn.Module):
         # Dequantise
         dequantised_states = self.dequantise(music_tokens)
 
-        # Postprocess
-        dequantised_states = (
-            dequantised_states.view(samples, seq_len, self.codebook_width).permute(0, 2, 1).contiguous()
-        )
+        # Use transpose instead of permute (faster for 2D), and .contiguous only if required by downstream ops
+        # shape: (samples, seq_len, codebook_width) -> (samples, codebook_width, seq_len)
+        # Since dequantised_states is already (samples, seq_len, codebook_width), we can use .transpose for 2nd and 1st axes
+        dequantised_states = dequantised_states.transpose(1, 2)
         return dequantised_states
 
     def forward(self, hidden_states, update_codebook=True):
