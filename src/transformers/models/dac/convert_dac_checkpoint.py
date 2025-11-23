@@ -55,7 +55,10 @@ def match_pattern(string, pattern):
         if part.startswith("block"):
             string_block_count += 1
 
-    return fnmatch.fnmatch(string, pattern) and string_block_count == pattern_block_count
+    if string_block_count != pattern_block_count:
+        return False
+
+    return fnmatch.fnmatch(string, pattern)
 
 
 TOP_LEVEL_KEYS = []
