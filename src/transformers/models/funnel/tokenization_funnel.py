@@ -150,6 +150,9 @@ class FunnelTokenizer(PreTrainedTokenizer):
             )
         self.wordpiece_tokenizer = WordpieceTokenizer(vocab=self.vocab, unk_token=str(unk_token))
 
+        # Cache the value of self.vocab[self.unk_token] for fast fallback in token-to-id conversion.
+        self._unk_token_id = self.vocab.get(unk_token)
+
         super().__init__(
             do_lower_case=do_lower_case,
             do_basic_tokenize=do_basic_tokenize,
@@ -200,7 +203,9 @@ class FunnelTokenizer(PreTrainedTokenizer):
     # Copied from transformers.models.bert.tokenization_bert.BertTokenizer._convert_token_to_id
     def _convert_token_to_id(self, token):
         """Converts a token (str) in an id using the vocab."""
-        return self.vocab.get(token, self.vocab.get(self.unk_token))
+        # Avoid double dictionary lookup for missing tokens by directly using cached _unk_token_id.
+        id_ = self.vocab.get(token)
+        return id_ if id_ is not None else self._unk_token_id
 
     # Copied from transformers.models.bert.tokenization_bert.BertTokenizer._convert_id_to_token
     def _convert_id_to_token(self, index):
