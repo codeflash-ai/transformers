@@ -34,6 +34,10 @@ from ...utils import (
 from .configuration_ctrl import CTRLConfig
 
 
+# Caching sequential module definitions for reuse with (d_model_size, dff) as keys
+_pointwise_ffn_cache: dict[tuple[int, int], nn.Sequential] = {}
+
+
 logger = logging.get_logger(__name__)
 
 
@@ -132,7 +136,13 @@ class MultiHeadAttention(nn.Module):
 
 
 def point_wise_feed_forward_network(d_model_size, dff):
-    return nn.Sequential(nn.Linear(d_model_size, dff), nn.ReLU(), nn.Linear(dff, d_model_size))
+    key = (d_model_size, dff)
+    try:
+        return _pointwise_ffn_cache[key]
+    except KeyError:
+        seq = nn.Sequential(nn.Linear(d_model_size, dff), nn.ReLU(), nn.Linear(dff, d_model_size))
+        _pointwise_ffn_cache[key] = seq
+        return seq
 
 
 class EncoderLayer(nn.Module):
