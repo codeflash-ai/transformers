@@ -74,43 +74,71 @@ class Wav2Vec2BertRelPositionalEmbedding(nn.Module):
         self.max_len = config.max_source_positions
         self.d_model = config.hidden_size
         self.pe = None
+        # Precompute base tensors to avoid repeated computation
+        self._base_position = torch.arange(0, self.max_len, dtype=torch.float32).unsqueeze(1)
+        self._base_div_term = torch.exp(
+            torch.arange(0, self.d_model, 2, dtype=torch.float32) * -(math.log(10000.0) / self.d_model)
+        )
         self.extend_pe(torch.tensor(0.0).expand(1, self.max_len))
 
     def extend_pe(self, x):
         # Reset the positional encodings
+        # Reset the positional encodings
+        seq_len = x.size(1)
+        pe_len = seq_len * 2 - 1
+
         if self.pe is not None:
-            # self.pe contains both positive and negative parts
-            # the length of self.pe is 2 * input_len - 1
-            if self.pe.size(1) >= x.size(1) * 2 - 1:
+            if self.pe.size(1) >= pe_len:
                 if self.pe.dtype != x.dtype or self.pe.device != x.device:
                     self.pe = self.pe.to(dtype=x.dtype, device=x.device)
                 return
-        # Suppose `i` is the position of query vector and `j` is the
-        # position of key vector. We use positive relative positions when keys
-        # are to the left (i>j) and negative relative positions otherwise (i<j).
-        pe_positive = torch.zeros(x.size(1), self.d_model)
-        pe_negative = torch.zeros(x.size(1), self.d_model)
-        position = torch.arange(0, x.size(1), dtype=torch.int64).float().unsqueeze(1)
-        div_term = torch.exp(
-            torch.arange(0, self.d_model, 2, dtype=torch.int64).float() * -(math.log(10000.0) / self.d_model)
-        )
-        pe_positive[:, 0::2] = torch.sin(position * div_term)
-        pe_positive[:, 1::2] = torch.cos(position * div_term)
-        pe_negative[:, 0::2] = torch.sin(-1 * position * div_term)
-        pe_negative[:, 1::2] = torch.cos(-1 * position * div_term)
+
+        # Fast path: use precomputed float32 position/div_term, cast at use if necessary
+        # Avoid repeated arange/exp by slicing and casting base tensors
+        device = x.device
+        dtype = x.dtype
+
+        # position: [seq_len, 1]
+        if self._base_position.size(0) >= seq_len:
+            position = self._base_position[:seq_len].to(dtype=dtype, device=device)
+        else:
+            # fallback if max_len underestimated
+            position = torch.arange(0, seq_len, device=device, dtype=dtype).unsqueeze(1)
+
+        # div_term: [(d_model+1)//2]
+        if self._base_div_term.size(0) >= (self.d_model // 2 + self.d_model % 2):
+            div_term = self._base_div_term[: ((self.d_model + 1) // 2)].to(dtype=dtype, device=device)
+        else:
+            div_term = torch.exp(
+                torch.arange(0, self.d_model, 2, device=device, dtype=dtype) * -(math.log(10000.0) / self.d_model)
+            )
+
+        # Compute both pos/neg in one step
+        pos_mul = position * div_term  # [seq_len, d_model//2]
+        neg_mul = -pos_mul
+
+        pe_positive = torch.empty((seq_len, self.d_model), dtype=dtype, device=device)
+        pe_negative = torch.empty((seq_len, self.d_model), dtype=dtype, device=device)
+
+        pe_positive[:, 0::2] = torch.sin(pos_mul)
+        pe_positive[:, 1::2] = torch.cos(pos_mul)
+        pe_negative[:, 0::2] = torch.sin(neg_mul)
+        pe_negative[:, 1::2] = torch.cos(neg_mul)
 
         # Reverse the order of positive indices and concat both positive and
         # negative indices. This is used to support the shifting trick
         # as in https://huggingface.co/papers/1901.02860
-        pe_positive = torch.flip(pe_positive, [0]).unsqueeze(0)
+        pe_positive = pe_positive.flip([0]).unsqueeze(0)
         pe_negative = pe_negative[1:].unsqueeze(0)
         pe = torch.cat([pe_positive, pe_negative], dim=1)
-        self.pe = pe.to(device=x.device, dtype=x.dtype)
+        self.pe = pe
 
     def forward(self, hidden_states: torch.Tensor):
         self.extend_pe(hidden_states)
-        start_idx = self.pe.size(1) // 2 - hidden_states.size(1) + 1
-        end_idx = self.pe.size(1) // 2 + hidden_states.size(1)
+        seq_len = hidden_states.size(1)
+        mid = self.pe.size(1) // 2
+        start_idx = mid - seq_len + 1
+        end_idx = mid + seq_len
         relative_position_embeddings = self.pe[:, start_idx:end_idx]
 
         return relative_position_embeddings
