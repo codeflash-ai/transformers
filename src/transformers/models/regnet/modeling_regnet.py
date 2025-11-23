@@ -180,7 +180,7 @@ class RegNetYLayer(nn.Module):
         residual = hidden_state
         hidden_state = self.layer(hidden_state)
         residual = self.shortcut(residual)
-        hidden_state += residual
+        hidden_state.add_(residual)
         hidden_state = self.activation(hidden_state)
         return hidden_state
 
