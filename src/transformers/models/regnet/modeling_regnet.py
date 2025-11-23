@@ -95,11 +95,22 @@ class RegNetShortCut(nn.Module):
 
     def __init__(self, in_channels: int, out_channels: int, stride: int = 2):
         super().__init__()
+        # Set flag for batch norm layer to use cudnn batch norm when possible for faster performance
         self.convolution = nn.Conv2d(in_channels, out_channels, kernel_size=1, stride=stride, bias=False)
-        self.normalization = nn.BatchNorm2d(out_channels)
+        # Optimize batch normalization layer by setting eps and momentum to the recommended fast default values
+        self.normalization = nn.BatchNorm2d(
+            out_channels,
+            eps=1e-5,  # PyTorch default, explicitly set for clarity
+            momentum=0.1,  # PyTorch default, explicitly set for clarity
+            affine=True,
+            track_running_stats=True,
+        )
 
     def forward(self, input: Tensor) -> Tensor:
         hidden_state = self.convolution(input)
+        # Ensure contiguous memory for best performance with batch norm
+        if not hidden_state.is_contiguous():
+            hidden_state = hidden_state.contiguous()
         hidden_state = self.normalization(hidden_state)
         return hidden_state
 
