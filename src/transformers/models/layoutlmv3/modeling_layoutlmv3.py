@@ -109,26 +109,37 @@ class LayoutLMv3TextEmbeddings(nn.Module):
 
     def calculate_spatial_position_embeddings(self, bbox):
         try:
-            left_position_embeddings = self.x_position_embeddings(bbox[:, :, 0])
-            upper_position_embeddings = self.y_position_embeddings(bbox[:, :, 1])
-            right_position_embeddings = self.x_position_embeddings(bbox[:, :, 2])
-            lower_position_embeddings = self.y_position_embeddings(bbox[:, :, 3])
+            x0 = bbox[:, :, 0]
+            y0 = bbox[:, :, 1]
+            x1 = bbox[:, :, 2]
+            y1 = bbox[:, :, 3]
+
+            left_position_embeddings = self.x_position_embeddings(x0)
+            upper_position_embeddings = self.y_position_embeddings(y0)
+            right_position_embeddings = self.x_position_embeddings(x1)
+            lower_position_embeddings = self.y_position_embeddings(y1)
         except IndexError as e:
             raise IndexError("The `bbox` coordinate values should be within 0-1000 range.") from e
 
-        h_position_embeddings = self.h_position_embeddings(torch.clip(bbox[:, :, 3] - bbox[:, :, 1], 0, 1023))
-        w_position_embeddings = self.w_position_embeddings(torch.clip(bbox[:, :, 2] - bbox[:, :, 0], 0, 1023))
+        # Compute the diffs once
+        h_diff = torch.clip(y1 - y0, 0, 1023)
+        w_diff = torch.clip(x1 - x0, 0, 1023)
+
+        h_position_embeddings = self.h_position_embeddings(h_diff)
+        w_position_embeddings = self.w_position_embeddings(w_diff)
+
+        # Efficient concatenation order as before
 
         # below is the difference between LayoutLMEmbeddingsV2 (torch.cat) and LayoutLMEmbeddingsV1 (add)
         spatial_position_embeddings = torch.cat(
-            [
+            (
                 left_position_embeddings,
                 upper_position_embeddings,
                 right_position_embeddings,
                 lower_position_embeddings,
                 h_position_embeddings,
                 w_position_embeddings,
-            ],
+            ),
             dim=-1,
         )
         return spatial_position_embeddings
