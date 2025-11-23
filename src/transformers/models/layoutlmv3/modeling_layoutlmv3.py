@@ -251,9 +251,16 @@ class LayoutLMv3SelfAttention(nn.Module):
         cogview_attention_probs, atol=1e-08) for comparison. The smaller atol (e.g., 1e-08), the better.
         """
         scaled_attention_scores = attention_scores / alpha
-        max_value = scaled_attention_scores.amax(dim=(-1)).unsqueeze(-1)
-        new_attention_scores = (scaled_attention_scores - max_value) * alpha
-        return nn.Softmax(dim=-1)(new_attention_scores)
+
+        # Use keepdim=True to avoid unsqueeze(-1) allocation
+        max_value = scaled_attention_scores.amax(dim=-1, keepdim=True)
+
+        # Fusing sub/max and scale into one operation, and use out in-place for memory efficiency
+        # This saves allocation for the intermediate tensor (scaled_attention_scores - max_value)
+        new_attention_scores = scaled_attention_scores.sub(max_value).mul_(alpha)
+
+        # Use functional softmax (lower overhead than class instantiation)
+        return torch.nn.functional.softmax(new_attention_scores, dim=-1)
 
     def forward(
         self,
