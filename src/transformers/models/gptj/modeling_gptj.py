@@ -57,7 +57,10 @@ def create_sinusoidal_positions(num_pos: int, dim: int) -> torch.Tensor:
 
 
 def get_embed_positions(embed_positions, position_ids):
-    return embed_positions.to(position_ids.device).repeat(position_ids.shape[0], 1, 1)
+    device = position_ids.device
+    if embed_positions.device != device:
+        embed_positions = embed_positions.to(device)
+    return embed_positions.unsqueeze(0).expand(position_ids.shape[0], -1, -1)
 
 
 def rotate_every_two(x: torch.Tensor) -> torch.Tensor:
