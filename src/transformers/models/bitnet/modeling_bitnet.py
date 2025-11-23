@@ -320,17 +320,31 @@ class BitNetRotaryEmbedding(nn.Module):
     @torch.no_grad()
     @dynamic_rope_update  # power user: used with advanced RoPE types (e.g. dynamic rope)
     def forward(self, x, position_ids):
-        inv_freq_expanded = self.inv_freq[None, :, None].float().expand(position_ids.shape[0], -1, 1).to(x.device)
-        position_ids_expanded = position_ids[:, None, :].float()
+        # Optimize tensor construction and broadcasting for freq calculation.
+        batch_size = position_ids.shape[0]
+        seq_len = position_ids.shape[1]
+        # position_ids: [batch, seq_len]
+        # inv_freq: [dim]
+        # We'll want to get [batch, seq_len, dim]
+        device = x.device
+        inv_freq = self.inv_freq.to(device, dtype=torch.float)  # ensure on right device, float for precision
 
-        device_type = x.device.type if isinstance(x.device.type, str) and x.device.type != "mps" else "cpu"
-        with torch.autocast(device_type=device_type, enabled=False):  # Force float32
-            freqs = (inv_freq_expanded.float() @ position_ids_expanded.float()).transpose(1, 2)
-            emb = torch.cat((freqs, freqs), dim=-1)
-            cos = emb.cos() * self.attention_scaling
-            sin = emb.sin() * self.attention_scaling
+        # Use torch.outer to compute frequencies, avoid expand/broadcast/cat for performance
+        # position_ids_expanded: [batch, seq_len]
+        # freq_mat: [batch, seq_len, dim]
+        position_ids = position_ids.to(device, dtype=torch.float)
+        freq_mat = torch.einsum("bi,j->bij", position_ids, inv_freq)
+        # emb: [batch, seq_len, 2 * dim] by concatenating freq with itself (axis=-1)
+        emb = torch.cat((freq_mat, freq_mat), dim=-1)
+        emb = emb.float()  # force float32 for cos/sin
+        cos = emb.cos().mul_(self.attention_scaling)
+        sin = emb.sin().mul_(self.attention_scaling)
 
-        return cos.to(dtype=x.dtype), sin.to(dtype=x.dtype)
+        # Cast to x.dtype before return (to preserve output behavior)
+        cos = cos.to(dtype=x.dtype)
+        sin = sin.to(dtype=x.dtype)
+
+        return cos, sin
 
 
 @auto_docstring
