@@ -1001,21 +1001,25 @@ class ContinuousBatchingManager:
 
     @traced(span_name="generation_loop")
     def _inner_generation_loop(self, batch_processor: ContinuousBatchProcessor) -> None:
-        # Pre-loop synchronization
-        if torch.cuda.is_available():
-            torch.cuda.synchronize()
+        # Only synchronize CUDA (very expensive) if strict profiling is enabled
+        if getattr(self, "profile", False):
+            if torch.cuda.is_available():
+                torch.cuda.synchronize()
+        # Loop body ends if there is no requests in the batch
         # Loop body ends if there is no requests in the batch
         if not batch_processor.prepare_next_batch():
             return
-        # Debug logging of the current memory usage
-        if logger.level <= logging.DEBUG:
+        # Debug logging of the current memory usage - skip expensive device/memory checks unless profiling
+        if logger.level <= logging.DEBUG and getattr(self, "profile", False):
             device, total, reserved, allocated = get_device_and_memory_breakdown()
             logger.debug(f"[Memory] Device: {device}, Total: {total}, Reserved: {reserved}, Allocated: {allocated}")
 
         self._generation_step()
 
-        if torch.cuda.is_available():
-            torch.cuda.synchronize()
+        # Only synchronize CUDA if profiling is enabled
+        if getattr(self, "profile", False):
+            if torch.cuda.is_available():
+                torch.cuda.synchronize()
         # Processor updates the batch after generation step is truly over
         batch_processor.update_batch()
 

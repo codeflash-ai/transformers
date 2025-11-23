@@ -30,8 +30,6 @@ logger = logging.getLogger("ContinuousBatchingLogger")
 def get_device_and_memory_breakdown() -> tuple[torch.device, int, int, int]:
     if torch.cuda.is_available():
         device = torch.device("cuda")
-        torch.cuda.empty_cache()
-        torch.cuda.synchronize()
         total_memory = torch.cuda.get_device_properties(device).total_memory
         reserved_memory = torch.cuda.memory_reserved(device)
         allocated_memory = torch.cuda.memory_allocated(device)
