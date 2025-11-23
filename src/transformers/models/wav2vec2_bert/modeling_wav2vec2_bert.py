@@ -74,6 +74,7 @@ class Wav2Vec2BertRelPositionalEmbedding(nn.Module):
         self.max_len = config.max_source_positions
         self.d_model = config.hidden_size
         self.pe = None
+        self._precomputed_pe = self._compute_pe(self.max_len, torch.float32, "cpu")
         self.extend_pe(torch.tensor(0.0).expand(1, self.max_len))
 
     def extend_pe(self, x):
@@ -85,14 +86,30 @@ class Wav2Vec2BertRelPositionalEmbedding(nn.Module):
                 if self.pe.dtype != x.dtype or self.pe.device != x.device:
                     self.pe = self.pe.to(dtype=x.dtype, device=x.device)
                 return
+        if x.size(1) <= self.max_len:
+            pe = self._precomputed_pe[:, : x.size(1) * 2 - 1]
+            self.pe = pe.to(device=x.device, dtype=x.dtype)
+            return
+        pe = self._compute_pe(x.size(1), x.dtype, x.device)
+        self.pe = pe
+
+    def forward(self, hidden_states: torch.Tensor):
+        self.extend_pe(hidden_states)
+        start_idx = self.pe.size(1) // 2 - hidden_states.size(1) + 1
+        end_idx = self.pe.size(1) // 2 + hidden_states.size(1)
+        relative_position_embeddings = self.pe[:, start_idx:end_idx]
+
+        return relative_position_embeddings
+
+    def _compute_pe(self, length, dtype, device):
         # Suppose `i` is the position of query vector and `j` is the
         # position of key vector. We use positive relative positions when keys
         # are to the left (i>j) and negative relative positions otherwise (i<j).
-        pe_positive = torch.zeros(x.size(1), self.d_model)
-        pe_negative = torch.zeros(x.size(1), self.d_model)
-        position = torch.arange(0, x.size(1), dtype=torch.int64).float().unsqueeze(1)
+        pe_positive = torch.zeros(length, self.d_model, dtype=dtype, device=device)
+        pe_negative = torch.zeros(length, self.d_model, dtype=dtype, device=device)
+        position = torch.arange(0, length, dtype=dtype, device=device).unsqueeze(1)
         div_term = torch.exp(
-            torch.arange(0, self.d_model, 2, dtype=torch.int64).float() * -(math.log(10000.0) / self.d_model)
+            torch.arange(0, self.d_model, 2, dtype=dtype, device=device) * -(math.log(10000.0) / self.d_model)
         )
         pe_positive[:, 0::2] = torch.sin(position * div_term)
         pe_positive[:, 1::2] = torch.cos(position * div_term)
@@ -105,15 +122,7 @@ class Wav2Vec2BertRelPositionalEmbedding(nn.Module):
         pe_positive = torch.flip(pe_positive, [0]).unsqueeze(0)
         pe_negative = pe_negative[1:].unsqueeze(0)
         pe = torch.cat([pe_positive, pe_negative], dim=1)
-        self.pe = pe.to(device=x.device, dtype=x.dtype)
-
-    def forward(self, hidden_states: torch.Tensor):
-        self.extend_pe(hidden_states)
-        start_idx = self.pe.size(1) // 2 - hidden_states.size(1) + 1
-        end_idx = self.pe.size(1) // 2 + hidden_states.size(1)
-        relative_position_embeddings = self.pe[:, start_idx:end_idx]
-
-        return relative_position_embeddings
+        return pe
 
 
 class Wav2Vec2BertFeatureProjection(nn.Module):
