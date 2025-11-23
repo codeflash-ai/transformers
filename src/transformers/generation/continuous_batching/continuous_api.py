@@ -19,7 +19,6 @@ from collections.abc import Generator
 from dataclasses import dataclass
 from functools import partial
 from itertools import count
-from math import ceil
 from time import perf_counter
 from typing import Optional, Union
 
@@ -62,7 +61,7 @@ def pad_by_intervals(size: int, max_value: int, nb_intervals: int) -> int:
     interval_size = max_value // nb_intervals
     if interval_size == 0:
         return max_value
-    padded = ceil(size / interval_size) * interval_size
+    padded = -(-size // interval_size) * interval_size
     return min(padded, max_value)
 
 
