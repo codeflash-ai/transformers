@@ -63,6 +63,88 @@ def whitespace_tokenize(text):
     return tokens
 
 
+# Copied from transformers.models.bert.tokenization_bert._is_control
+def _is_control(char):
+    """Checks whether `char` is a control character."""
+    # These are technically control characters but we count them as whitespace
+    # characters.
+    if char == "\t" or char == "\n" or char == "\r":
+        return False
+    cat = unicodedata.category(char)
+    if cat.startswith("C"):
+        return True
+    return False
+
+
+# Copied from transformers.models.bert.tokenization_bert._is_whitespace
+def _is_whitespace(char):
+    """Checks whether `char` is a whitespace character."""
+    # \t, \n, and \r are technically control characters but we treat them
+    # as whitespace since they are generally considered as such.
+    if char == " " or char == "\t" or char == "\n" or char == "\r":
+        return True
+    cat = unicodedata.category(char)
+    if cat == "Zs":
+        return True
+    return False
+
+
+# Copied from transformers.models.bert.tokenization_bert._is_punctuation
+def _is_punctuation(char):
+    """Checks whether `char` is a punctuation character."""
+    cp = ord(char)
+    # We treat all non-letter/non-number ASCII as punctuation.
+    # Characters such as "^", "$", and "`" are not in the Unicode
+    # Punctuation class but we treat them as punctuation anyways, for
+    # consistency.
+    if (cp >= 33 and cp <= 47) or (cp >= 58 and cp <= 64) or (cp >= 91 and cp <= 96) or (cp >= 123 and cp <= 126):
+        return True
+    cat = unicodedata.category(char)
+    if cat.startswith("P"):
+        return True
+    return False
+
+
+def _is_chinese_char(cp):
+    """Checks whether CP is the codepoint of a CJK character."""
+    # This defines a "chinese character" as anything in the CJK Unicode block:
+    #   https://en.wikipedia.org/wiki/CJK_Unified_Ideographs_(Unicode_block)
+    #
+    # Note that the CJK Unicode block is NOT all Japanese and Korean characters,
+    # despite its name. The modern Korean Hangul alphabet is a different block,
+    # as is Japanese Hiragana and Katakana. Those alphabets are used to write
+    # space-separated words, so they are not treated as Chinese characters.
+    if (
+        (cp >= 0x4E00 and cp <= 0x9FFF)
+        or (cp >= 0x3400 and cp <= 0x4DBF)  #
+        or (cp >= 0x20000 and cp <= 0x2A6DF)  #
+        or (cp >= 0x2A700 and cp <= 0x2B73F)  #
+        or (cp >= 0x2B740 and cp <= 0x2B81F)  #
+        or (cp >= 0x2B820 and cp <= 0x2CEAF)  #
+        or (cp >= 0xF900 and cp <= 0xFAFF)  #
+        or (cp >= 0x2F800 and cp <= 0x2FA1F)  #
+    ):  #
+        return True
+
+    return False
+
+
+def _is_chinese_char(cp: int) -> bool:
+    # This logic comes directly from tokenization_funnel.py and is referenced by BasicTokenizer
+    # This implementation is provided for completeness and performance, to avoid more lookups:
+    # See: https://github.com/huggingface/transformers/blob/main/src/transformers/models/bert/tokenization_bert.py
+    return (
+        (0x4E00 <= cp <= 0x9FFF)
+        or (0x3400 <= cp <= 0x4DBF)
+        or (0x20000 <= cp <= 0x2A6DF)
+        or (0x2A700 <= cp <= 0x2B73F)
+        or (0x2B740 <= cp <= 0x2B81F)
+        or (0x2B820 <= cp <= 0x2CEAF)
+        or (0xF900 <= cp <= 0xFAFF)
+        or (0x2F800 <= cp <= 0x2FA1F)
+    )
+
+
 class FunnelTokenizer(PreTrainedTokenizer):
     r"""
     Construct a Funnel Transformer tokenizer. Based on WordPiece.
@@ -184,17 +266,23 @@ class FunnelTokenizer(PreTrainedTokenizer):
     # Copied from transformers.models.bert.tokenization_bert.BertTokenizer._tokenize
     def _tokenize(self, text, split_special_tokens=False):
         split_tokens = []
-        if self.do_basic_tokenize:
-            for token in self.basic_tokenizer.tokenize(
-                text, never_split=self.all_special_tokens if not split_special_tokens else None
-            ):
-                # If the token is part of the never_split set
-                if token in self.basic_tokenizer.never_split:
+        never_split_set = self.all_special_tokens if not split_special_tokens else None
+        # Cache attribute lookup
+        do_basic_tokenize = self.do_basic_tokenize
+        basic_tokenizer = self.basic_tokenizer if do_basic_tokenize else None
+        wordpiece_tokenizer = self.wordpiece_tokenizer
+
+        if do_basic_tokenize:
+            # Store reference to never_split set for fast lookup
+            basic_never_split = basic_tokenizer.never_split
+            for token in basic_tokenizer.tokenize(text, never_split=never_split_set):
+                if token in basic_never_split:
                     split_tokens.append(token)
                 else:
-                    split_tokens += self.wordpiece_tokenizer.tokenize(token)
+                    # Avoid += (which is O(n)) with extend (which is O(k))
+                    split_tokens.extend(wordpiece_tokenizer.tokenize(token))
         else:
-            split_tokens = self.wordpiece_tokenizer.tokenize(text)
+            split_tokens = wordpiece_tokenizer.tokenize(text)
         return split_tokens
 
     # Copied from transformers.models.bert.tokenization_bert.BertTokenizer._convert_token_to_id
@@ -368,8 +456,8 @@ class BasicTokenizer:
                 Kept for backward compatibility purposes. Now implemented directly at the base class level (see
                 [`PreTrainedTokenizer.tokenize`]) List of token not to split.
         """
-        # union() returns a new set by concatenating the two sets.
-        never_split = self.never_split.union(set(never_split)) if never_split else self.never_split
+        # Use sorted union, avoid set() conversion each iteration if possible
+        never_split = self.never_split if not never_split else self.never_split.union(set(never_split))
         text = self._clean_text(text)
 
         # This was added on November 1st, 2018 for the multilingual and Chinese
@@ -384,15 +472,24 @@ class BasicTokenizer:
         unicode_normalized_text = unicodedata.normalize("NFC", text)
         orig_tokens = whitespace_tokenize(unicode_normalized_text)
         split_tokens = []
+        # Micro-optimization: cache for attribute lookups and method calls
+        do_lower_case = self.do_lower_case
+        strip_accents = self.strip_accents
+        run_strip_accents = self._run_strip_accents
+        run_split_on_punc = self._run_split_on_punc
+
         for token in orig_tokens:
             if token not in never_split:
-                if self.do_lower_case:
+                if do_lower_case:
                     token = token.lower()
-                    if self.strip_accents is not False:
-                        token = self._run_strip_accents(token)
-                elif self.strip_accents:
-                    token = self._run_strip_accents(token)
-            split_tokens.extend(self._run_split_on_punc(token, never_split))
+                    if strip_accents is not False:
+                        token = run_strip_accents(token)
+                elif strip_accents:
+                    token = run_strip_accents(token)
+            split_tokens.extend(run_split_on_punc(token, never_split))
+
+        # whitespace_tokenize can be fast; avoid intermediate string concatenation overhead with list
+        # But join is still more efficient than manually building while splitting
 
         output_tokens = whitespace_tokenize(" ".join(split_tokens))
         return output_tokens
@@ -506,23 +603,31 @@ class WordpieceTokenizer:
         """
 
         output_tokens = []
-        for token in whitespace_tokenize(text):
-            chars = list(token)
-            if len(chars) > self.max_input_chars_per_word:
-                output_tokens.append(self.unk_token)
+        vocab = self.vocab
+        unk_token = self.unk_token
+        max_input_chars_per_word = self.max_input_chars_per_word
+        whitespace_tok = whitespace_tokenize
+
+        # Micro optimize: reduce attribute lookup, move method calls out of inner loop
+        for token in whitespace_tok(text):
+            if len(token) > max_input_chars_per_word:
+                output_tokens.append(unk_token)
                 continue
 
             is_bad = False
             start = 0
             sub_tokens = []
-            while start < len(chars):
-                end = len(chars)
+            chars = token  # Already a string, use slicing for substrings
+            token_len = len(chars)
+            while start < token_len:
+                end = token_len
                 cur_substr = None
                 while start < end:
-                    substr = "".join(chars[start:end])
+                    # Slice the substring once
+                    substr = chars[start:end]
                     if start > 0:
                         substr = "##" + substr
-                    if substr in self.vocab:
+                    if substr in vocab:
                         cur_substr = substr
                         break
                     end -= 1
@@ -533,7 +638,7 @@ class WordpieceTokenizer:
                 start = end
 
             if is_bad:
-                output_tokens.append(self.unk_token)
+                output_tokens.append(unk_token)
             else:
                 output_tokens.extend(sub_tokens)
         return output_tokens
