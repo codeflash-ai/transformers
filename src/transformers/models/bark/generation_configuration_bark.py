@@ -14,7 +14,6 @@
 # limitations under the License.
 """BARK model generation configuration"""
 
-import copy
 from typing import Optional
 
 from ...generation.configuration_utils import GenerationConfig
@@ -319,7 +318,8 @@ class BarkGenerationConfig(GenerationConfig):
         Returns:
             `dict[str, any]`: Dictionary of all the attributes that make up this configuration instance,
         """
-        output = copy.deepcopy(self.__dict__)
+        # Optimization: avoid expensive deep copying of already nested configs
+        output = self.__dict__.copy()  # shallow copy is sufficient and much faster
 
         output["semantic_config"] = self.semantic_config.to_dict()
         output["coarse_acoustics_config"] = self.coarse_acoustics_config.to_dict()
