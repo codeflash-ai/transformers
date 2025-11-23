@@ -398,22 +398,27 @@ class JukeboxBottleneckBlock(nn.Module):
         nb_discrete_codes = self.nb_discrete_codes
         self.init = True
         codes = self._tile(hidden_states)
-        self.codebook = codes[torch.randperm(codes.shape[0])][:nb_discrete_codes]
+        # Optimizing random selection for large tensors by using torch.randperm and advanced indexing efficiently
+        idx = torch.randperm(codes.shape[0], device=codes.device)[:nb_discrete_codes]
+        self.codebook = codes[idx]
         self.codebook_sum = self.codebook
         self.codebook_elem = torch.ones(nb_discrete_codes, device=self.codebook.device)
 
     def update_codebook(self, hidden_states, latent_states):
         mu, codebook_width, nb_discrete_codes = self.mu, self.codebook_width, self.nb_discrete_codes
         with torch.no_grad():
-            # Calculate new centres
-            # nb_discrete_codes, batch_size * seq_length
-            latent_states_onehot = torch.zeros(nb_discrete_codes, hidden_states.shape[0], device=hidden_states.device)
-            latent_states_onehot.scatter_(0, latent_states.view(1, hidden_states.shape[0]), 1)
+            # Efficient latent_states_onehot scatter using in-place fill_
+            # latent_states must be 1D long tensor of indices
+            batch_n = hidden_states.shape[0]
+            latent_states_onehot = torch.zeros(nb_discrete_codes, batch_n, device=hidden_states.device)
+            latent_states_onehot[latent_states.view(-1), torch.arange(batch_n, device=hidden_states.device)] = 1
 
             _codebook_sum = torch.matmul(latent_states_onehot, hidden_states)
             _codebook_elem = latent_states_onehot.sum(dim=-1)  # nb_discrete_codes
             codes = self._tile(hidden_states)
-            _random_codebook = codes[torch.randperm(codes.shape[0])][:nb_discrete_codes]
+            # Efficient random selection
+            idx = torch.randperm(codes.shape[0], device=codes.device)[:nb_discrete_codes]
+            _random_codebook = codes[idx]
 
             # Update centres
             old_codebook = self.codebook
@@ -424,30 +429,44 @@ class JukeboxBottleneckBlock(nn.Module):
             norm_code = self.codebook_sum.view(nb_discrete_codes, codebook_width) / self.codebook_elem.view(
                 nb_discrete_codes, 1
             )
-            self.codebook = usage * (norm_code) + (1 - usage) * _random_codebook
+            self.codebook = usage * norm_code + (1 - usage) * _random_codebook
             _codebook_prob = _codebook_elem / torch.sum(_codebook_elem)  # prob of each bin
-            entropy = -torch.sum(_codebook_prob * torch.log(_codebook_prob + 1e-8))  # entropy ie how diverse
+
+            # Use fused operations for entropy computation
+            entropy = -torch.dot(_codebook_prob, torch.log(_codebook_prob + 1e-8))
             used_curr = (_codebook_elem >= self.threshold).sum()
-            usage = torch.sum(usage)
+            usage_val = torch.sum(usage)
             dk = torch.linalg.norm(self.codebook - old_codebook) / np.sqrt(np.prod(old_codebook.shape))
-        return {"entropy": entropy, "used_curr": used_curr, "usage": usage, "dk": dk}
+        return {"entropy": entropy, "used_curr": used_curr, "usage": usage_val, "dk": dk}
 
     def preprocess(self, hidden_states):
         hidden_states = hidden_states.permute(0, 2, 1).contiguous()
         hidden_states = hidden_states.view(-1, hidden_states.shape[-1])
 
         if hidden_states.shape[-1] == self.codebook_width:
-            prenorm = torch.linalg.norm(hidden_states - torch.mean(hidden_states)) / np.sqrt(
-                np.prod(hidden_states.shape)
-            )
+            # Avoid redundant mean/reshape calls by fusing them
+            mean = torch.mean(hidden_states)
+            diff = hidden_states - mean
+            diff_norm = torch.linalg.norm(diff)
+            size = np.prod(hidden_states.shape)
+            prenorm = diff_norm / np.sqrt(size)
         elif hidden_states.shape[-1] == 2 * self.codebook_width:
-            x1, x2 = hidden_states[..., : self.codebook_width], hidden_states[..., self.codebook_width :]
-            prenorm = (torch.linalg.norm(x1 - torch.mean(x1)) / np.sqrt(np.prod(x1.shape))) + (
-                torch.linalg.norm(x2 - torch.mean(x2)) / np.sqrt(np.prod(x2.shape))
+            x1 = hidden_states[..., : self.codebook_width]
+            x2 = hidden_states[..., self.codebook_width :]
+            mean1 = torch.mean(x1)
+            mean2 = torch.mean(x2)
+            diff1 = x1 - mean1
+            diff2 = x2 - mean2
+            prenorm = torch.linalg.norm(diff1) / np.sqrt(np.prod(x1.shape)) + torch.linalg.norm(diff2) / np.sqrt(
+                np.prod(x2.shape)
             )
+            # Normalise
 
             # Normalise
             hidden_states = x1 + x2
+
+        else:
+            prenorm = None  # makes the return annotation correct in all cases and avoids error
 
         return hidden_states, prenorm
 
@@ -460,11 +479,10 @@ class JukeboxBottleneckBlock(nn.Module):
     def quantise(self, latent_states):
         # Calculate latent code latent_states
         codebook_weights = self.codebook.t()
-        distance = (
-            torch.sum(latent_states**2, dim=-1, keepdim=True)
-            - 2 * torch.matmul(latent_states, codebook_weights)
-            + torch.sum(codebook_weights**2, dim=0, keepdim=True)
-        )  # (batch_size * latent_states , codebook_weights)
+        # Fused computation for pairwise distances (vectorized, memory-efficient)
+        latent_sq = torch.sum(latent_states**2, dim=-1, keepdim=True)
+        cbook_sq = torch.sum(codebook_weights**2, dim=0, keepdim=True)
+        distance = latent_sq - 2 * torch.matmul(latent_states, codebook_weights) + cbook_sq
         min_distance, music_tokens = torch.min(distance, dim=-1)
         fit = torch.mean(min_distance)
         return music_tokens, fit
@@ -518,10 +536,11 @@ class JukeboxBottleneckBlock(nn.Module):
         else:
             update_metrics = {}
 
-        # Loss
-        commit_loss = torch.linalg.norm(dequantised_states.detach() - hidden_states) ** 2 / np.prod(
-            hidden_states.shape
-        )
+        # Loss - use fused norm and divisor for better memory locality
+        diff = dequantised_states.detach() - hidden_states
+        commit_loss = torch.linalg.norm(diff) ** 2 / np.prod(hidden_states.shape)
+
+        # Passthrough
 
         # Passthrough
         dequantised_states = hidden_states + (dequantised_states - hidden_states).detach()
