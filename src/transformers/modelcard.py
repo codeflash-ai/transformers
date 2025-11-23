@@ -294,10 +294,9 @@ METRIC_TAGS = [
 def _listify(obj):
     if obj is None:
         return []
-    elif isinstance(obj, str):
+    if isinstance(obj, str):
         return [obj]
-    else:
-        return obj
+    return obj
 
 
 def _insert_values_as_list(metadata, name, values):
