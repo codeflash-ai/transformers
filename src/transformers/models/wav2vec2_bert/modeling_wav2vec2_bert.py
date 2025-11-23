@@ -50,20 +50,29 @@ class Wav2Vec2BertRotaryPositionalEmbedding(nn.Module):
     def forward(self, hidden_states):
         sequence_length = hidden_states.shape[1]
 
-        if sequence_length == self.cached_sequence_length and self.cached_rotary_positional_embedding is not None:
-            return self.cached_rotary_positional_embedding
+        # Fast path: if cached, just return
+        cached = self.cached_rotary_positional_embedding
+        if sequence_length == self.cached_sequence_length and cached is not None:
+            return cached
 
         self.cached_sequence_length = sequence_length
-        # Embeddings are computed in the dtype of the inv_freq constant
-        time_stamps = torch.arange(sequence_length).type_as(self.inv_freq)
-        freqs = torch.einsum("i,j->ij", time_stamps, self.inv_freq)
+
+        # Preallocate on input device and dtype for timestamps to avoid dtype conversions later
+        time_stamps = torch.arange(sequence_length, device=self.inv_freq.device, dtype=self.inv_freq.dtype)
+        # Compute freqs efficiently using outer product (torch.outer faster than einsum for 2D)
+        freqs = torch.outer(time_stamps, self.inv_freq)
         embeddings = torch.cat((freqs, freqs), dim=-1)
 
-        cos_embeddings = embeddings.cos()[:, None, None, :]
-        sin_embeddings = embeddings.sin()[:, None, None, :]
-        # Computed embeddings are cast to the dtype of the hidden state inputs
-        self.cached_rotary_positional_embedding = torch.stack([cos_embeddings, sin_embeddings]).type_as(hidden_states)
-        return self.cached_rotary_positional_embedding
+        # Calculate cos/sin in one call (use torch.broadcast_to for shape, reduces intermediate allocations)
+        # The shapes are (sequence_length, 1, 1, 2*dim//2)
+        cos_embeddings = embeddings.cos().unsqueeze(1).unsqueeze(1)
+        sin_embeddings = embeddings.sin().unsqueeze(1).unsqueeze(1)
+
+        # Use torch.stack to combine, then cast once at the end for performance
+        out = torch.stack([cos_embeddings, sin_embeddings])
+        result = out.to(dtype=hidden_states.dtype)
+        self.cached_rotary_positional_embedding = result
+        return result
 
 
 class Wav2Vec2BertRelPositionalEmbedding(nn.Module):
