@@ -454,8 +454,9 @@ class LayoutLMv3Encoder(nn.Module):
         #
         # Without this no_grad context, training speed slows down significantly
         with torch.no_grad():
-            rel_pos = self.rel_pos_bias.weight.t()[rel_pos].permute(0, 3, 1, 2)
-        rel_pos = rel_pos.contiguous()
+            # torch's gather or index_select are not more efficient in this context due to shape requirements, so keep advanced indexing
+            rel_pos_bias_weight_t = self.rel_pos_bias.weight.t()
+            rel_pos = rel_pos_bias_weight_t[rel_pos].permute(0, 3, 1, 2).contiguous()
         return rel_pos
 
     def _cal_2d_pos_emb(self, bbox):
@@ -478,11 +479,11 @@ class LayoutLMv3Encoder(nn.Module):
         #
         # Without this no_grad context, training speed slows down significantly
         with torch.no_grad():
-            rel_pos_x = self.rel_pos_x_bias.weight.t()[rel_pos_x].permute(0, 3, 1, 2)
-            rel_pos_y = self.rel_pos_y_bias.weight.t()[rel_pos_y].permute(0, 3, 1, 2)
-        rel_pos_x = rel_pos_x.contiguous()
-        rel_pos_y = rel_pos_y.contiguous()
-        rel_2d_pos = rel_pos_x + rel_pos_y
+            rel_pos_x_bias_weight_t = self.rel_pos_x_bias.weight.t()
+            rel_pos_y_bias_weight_t = self.rel_pos_y_bias.weight.t()
+            rel_pos_x = rel_pos_x_bias_weight_t[rel_pos_x].permute(0, 3, 1, 2)
+            rel_pos_y = rel_pos_y_bias_weight_t[rel_pos_y].permute(0, 3, 1, 2)
+        rel_2d_pos = (rel_pos_x + rel_pos_y).contiguous()
         return rel_2d_pos
 
     def forward(
@@ -497,15 +498,19 @@ class LayoutLMv3Encoder(nn.Module):
         patch_height=None,
         patch_width=None,
     ):
-        all_hidden_states = () if output_hidden_states else None
-        all_self_attentions = () if output_attentions else None
+        # Use list to accumulate hidden states/attentions and convert at the end for more efficient memory use
+        all_hidden_states = [] if output_hidden_states else None
+        all_self_attentions = [] if output_attentions else None
+
+        # Move position embedding calculation *before* the for loop, avoid repeated computation
 
         rel_pos = self._cal_1d_pos_emb(position_ids) if self.has_relative_attention_bias else None
         rel_2d_pos = self._cal_2d_pos_emb(bbox) if self.has_spatial_attention_bias else None
 
         for i, layer_module in enumerate(self.layer):
             if output_hidden_states:
-                all_hidden_states = all_hidden_states + (hidden_states,)
+                # Use append for better performance
+                all_hidden_states.append(hidden_states)
 
             layer_outputs = layer_module(
                 hidden_states,
@@ -517,25 +522,27 @@ class LayoutLMv3Encoder(nn.Module):
 
             hidden_states = layer_outputs[0]
             if output_attentions:
-                all_self_attentions = all_self_attentions + (layer_outputs[1],)
+                all_self_attentions.append(layer_outputs[1])
 
         if output_hidden_states:
-            all_hidden_states = all_hidden_states + (hidden_states,)
+            all_hidden_states.append(hidden_states)
+
+        # Convert lists to tuples only at the end, reduces tuple concatenation overhead
 
         if not return_dict:
             return tuple(
                 v
                 for v in [
                     hidden_states,
-                    all_hidden_states,
-                    all_self_attentions,
+                    tuple(all_hidden_states) if all_hidden_states is not None else None,
+                    tuple(all_self_attentions) if all_self_attentions is not None else None,
                 ]
                 if v is not None
             )
         return BaseModelOutput(
             last_hidden_state=hidden_states,
-            hidden_states=all_hidden_states,
-            attentions=all_self_attentions,
+            hidden_states=tuple(all_hidden_states) if all_hidden_states is not None else None,
+            attentions=tuple(all_self_attentions) if all_self_attentions is not None else None,
         )
 
 
