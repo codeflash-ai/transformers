@@ -561,8 +561,8 @@ class WhisperPreTrainedModel(PreTrainedModel):
         """
         Computes the output length of the convolutional layers
         """
-        input_lengths = (input_lengths - 1) // 2 + 1
-
+        # Use torch operations in-place to reduce memory and handling overhead.
+        input_lengths = torch.div(input_lengths - 1, 2, rounding_mode="floor").add_(1)
         return input_lengths
 
 
