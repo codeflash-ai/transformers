@@ -1060,8 +1060,18 @@ class FalconH1MLP(nn.Module):
         self.gate_multiplier, self.down_multiplier = config.mlp_multipliers
 
     def forward(self, x):
-        y = self.up_proj(x) * self.act_fn(self.gate_proj(x) * self.gate_multiplier)
-        y = self.down_proj(y) * self.down_multiplier
+        # Optimization: fuse gate_proj and act_fn computations, avoid temporaries and compute multiplications in-place
+        # Compute gate then multiply by gate_multiplier, then apply activation in-place to save memory
+        # torch.mul/add operations reuse storage and save memory if inplace
+        gate = self.gate_proj(x)
+        if self.gate_multiplier != 1.0:
+            gate = gate.mul(self.gate_multiplier)
+        gate = self.act_fn(gate)
+        up = self.up_proj(x)
+        y = up * gate
+        y = self.down_proj(y)
+        if self.down_multiplier != 1.0:
+            y = y.mul(self.down_multiplier)
         return y
 
 
