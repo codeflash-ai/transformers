@@ -57,10 +57,18 @@ def sinusoids(length: int, channels: int, max_timescale: float = 10000) -> torch
         raise ValueError(
             f"Number of channels has to be divisible by 2 for sinusoidal positional embeddings, got {channels} channels."
         )
-    log_timescale_increment = math.log(max_timescale) / (channels // 2 - 1)
-    inv_timescales = torch.exp(-log_timescale_increment * torch.arange(channels // 2))
-    scaled_time = torch.arange(length).view(-1, 1) * inv_timescales.view(1, -1)
-    return torch.cat([scaled_time.sin(), scaled_time.cos()], dim=1)
+    # Precompute as much as possible
+    half_channels = channels // 2
+    log_timescale_increment = math.log(max_timescale) / (half_channels - 1)
+    # Use torch.arange with dtype for efficiency, and create on default device
+    inv_timescales = torch.exp(-log_timescale_increment * torch.arange(half_channels, dtype=torch.float32))
+    # Use torch.outer for more efficient scaled_time computation
+    scaled_time = torch.outer(torch.arange(length, dtype=torch.float32), inv_timescales)
+    # Use torch.sin and torch.cos in-place if possible for memory savings
+    sin = torch.sin(scaled_time)
+    cos = torch.cos(scaled_time)
+    # Use torch.cat efficiently
+    return torch.cat((sin, cos), dim=1)
 
 
 # Copied from transformers.models.bart.modeling_bart.shift_tokens_right
