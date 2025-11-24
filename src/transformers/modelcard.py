@@ -719,50 +719,73 @@ _TRAINING_ARGS_KEYS = [
 
 
 def extract_hyperparameters_from_trainer(trainer):
-    hyperparameters = {k: getattr(trainer.args, k) for k in _TRAINING_ARGS_KEYS}
+    args = trainer.args  # local ref to avoid repeated attribute lookups
 
-    if trainer.args.parallel_mode not in [ParallelMode.NOT_PARALLEL, ParallelMode.NOT_DISTRIBUTED]:
-        hyperparameters["distributed_type"] = (
-            "multi-GPU" if trainer.args.parallel_mode == ParallelMode.DISTRIBUTED else trainer.args.parallel_mode.value
-        )
-    if trainer.args.world_size > 1:
-        hyperparameters["num_devices"] = trainer.args.world_size
-    if trainer.args.gradient_accumulation_steps > 1:
-        hyperparameters["gradient_accumulation_steps"] = trainer.args.gradient_accumulation_steps
+    # Use list comprehension and locals instead of getattr repeatedly
+    hyperparameters = {
+        "learning_rate": args.learning_rate,
+        "train_batch_size": args.train_batch_size,
+        "eval_batch_size": args.eval_batch_size,
+        "seed": args.seed,
+    }
 
-    total_train_batch_size = (
-        trainer.args.train_batch_size * trainer.args.world_size * trainer.args.gradient_accumulation_steps
-    )
-    if total_train_batch_size != hyperparameters["train_batch_size"]:
+    parallel_mode = args.parallel_mode
+    world_size = args.world_size
+    grad_acc_steps = args.gradient_accumulation_steps
+    train_batch_size = args.train_batch_size
+    eval_batch_size = args.eval_batch_size
+
+    # Optimize list membership check by swapping to tuple and only perform once
+    if parallel_mode not in (ParallelMode.NOT_PARALLEL, ParallelMode.NOT_DISTRIBUTED):
+        # Store local value for conditional and reuse it below
+        if parallel_mode == ParallelMode.DISTRIBUTED:
+            hyperparameters["distributed_type"] = "multi-GPU"
+        else:
+            hyperparameters["distributed_type"] = parallel_mode.value
+
+    if world_size > 1:
+        hyperparameters["num_devices"] = world_size
+    if grad_acc_steps > 1:
+        hyperparameters["gradient_accumulation_steps"] = grad_acc_steps
+
+    total_train_batch_size = train_batch_size * world_size * grad_acc_steps
+    if total_train_batch_size != train_batch_size:
         hyperparameters["total_train_batch_size"] = total_train_batch_size
-    total_eval_batch_size = trainer.args.eval_batch_size * trainer.args.world_size
-    if total_eval_batch_size != hyperparameters["eval_batch_size"]:
+    total_eval_batch_size = eval_batch_size * world_size
+    if total_eval_batch_size != eval_batch_size:
         hyperparameters["total_eval_batch_size"] = total_eval_batch_size
 
-    if trainer.args.optim:
-        optimizer_name = trainer.args.optim
-        optimizer_args = trainer.args.optim_args if trainer.args.optim_args else "No additional optimizer arguments"
-
-        if "adam" in optimizer_name.lower():
+    optim = args.optim
+    if optim:
+        optimizer_name = optim
+        optimizer_args = args.optim_args if args.optim_args else "No additional optimizer arguments"
+        lower_optimizer_name = optimizer_name.lower()
+        if "adam" in lower_optimizer_name:
             hyperparameters["optimizer"] = (
-                f"Use {optimizer_name} with betas=({trainer.args.adam_beta1},{trainer.args.adam_beta2}) and"
-                f" epsilon={trainer.args.adam_epsilon} and optimizer_args={optimizer_args}"
+                f"Use {optimizer_name} with betas=({args.adam_beta1},{args.adam_beta2}) and"
+                f" epsilon={args.adam_epsilon} and optimizer_args={optimizer_args}"
             )
         else:
             hyperparameters["optimizer"] = f"Use {optimizer_name} and the args are:\n{optimizer_args}"
 
-    hyperparameters["lr_scheduler_type"] = trainer.args.lr_scheduler_type.value
-    if trainer.args.warmup_steps != 0.0:
-        hyperparameters["lr_scheduler_warmup_steps"] = trainer.args.warmup_steps
-    if trainer.args.max_steps != -1:
-        hyperparameters["training_steps"] = trainer.args.max_steps
-    else:
-        hyperparameters["num_epochs"] = trainer.args.num_train_epochs
+    lr_scheduler_type = args.lr_scheduler_type.value
+    hyperparameters["lr_scheduler_type"] = lr_scheduler_type
 
-    if trainer.args.fp16:
+    warmup_steps = args.warmup_steps
+    if warmup_steps != 0.0:
+        hyperparameters["lr_scheduler_warmup_steps"] = warmup_steps
+
+    max_steps = args.max_steps
+    if max_steps != -1:
+        hyperparameters["training_steps"] = max_steps
+    else:
+        hyperparameters["num_epochs"] = args.num_train_epochs
+
+    if args.fp16:
         hyperparameters["mixed_precision_training"] = "Native AMP"
 
-    if trainer.args.label_smoothing_factor != 0.0:
-        hyperparameters["label_smoothing_factor"] = trainer.args.label_smoothing_factor
+    label_smoothing_factor = args.label_smoothing_factor
+    if label_smoothing_factor != 0.0:
+        hyperparameters["label_smoothing_factor"] = label_smoothing_factor
 
     return hyperparameters
