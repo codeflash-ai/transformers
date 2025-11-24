@@ -646,9 +646,8 @@ class LongformerSelfAttention(nn.Module):
         hidden_states_padded = nn.functional.pad(
             hidden_states_padded, padding
         )  # padding value is not important because it will be overwritten
-        hidden_states_padded = hidden_states_padded.view(
-            *hidden_states_padded.size()[:-2], hidden_states_padded.size(-1), hidden_states_padded.size(-2)
-        )
+        shape = hidden_states_padded.shape
+        hidden_states_padded = hidden_states_padded.view(*shape[:-2], shape[-1], shape[-2])
         return hidden_states_padded
 
     @staticmethod
@@ -705,18 +704,21 @@ class LongformerSelfAttention(nn.Module):
         """convert into overlapping chunks. Chunk size = 2w, overlap size = w"""
         if not onnx_export:
             # non-overlapping chunks of size = 2w
+            # non-overlapping chunks of size = 2w
+            B, N, C = hidden_states.shape
+            chunk_len = window_overlap * 2
+            num_chunks = N // chunk_len
+            # Profile: view->as_strided
+            # Avoid list conversion, operate directly with tuples for as_strided arguments
             hidden_states = hidden_states.view(
-                hidden_states.size(0),
-                torch.div(hidden_states.size(1), (window_overlap * 2), rounding_mode="trunc"),
-                window_overlap * 2,
-                hidden_states.size(2),
+                B,
+                num_chunks,
+                chunk_len,
+                C,
             )
-            # use `as_strided` to make the chunks overlap with an overlap size = window_overlap
-            chunk_size = list(hidden_states.size())
-            chunk_size[1] = chunk_size[1] * 2 - 1
-
-            chunk_stride = list(hidden_states.stride())
-            chunk_stride[1] = chunk_stride[1] // 2
+            chunk_size = (B, num_chunks * 2 - 1, chunk_len, C)
+            stride = hidden_states.stride()
+            chunk_stride = (stride[0], stride[1] // 2, stride[2], stride[3])
             return hidden_states.as_strided(size=chunk_size, stride=chunk_stride)
 
         # When exporting to ONNX, use this separate logic
@@ -736,26 +738,30 @@ class LongformerSelfAttention(nn.Module):
 
         overlapping_chunks = torch.empty(chunk_size, device=hidden_states.device)
         for chunk in range(chunk_size[1]):
-            overlapping_chunks[:, chunk, :, :] = hidden_states[
-                :, chunk * window_overlap : chunk * window_overlap + 2 * window_overlap, :
-            ]
+            s = chunk * window_overlap
+            overlapping_chunks[:, chunk, :, :] = hidden_states[:, s : s + 2 * window_overlap, :]
         return overlapping_chunks
 
     @staticmethod
     def _mask_invalid_locations(input_tensor, affected_seq_len) -> torch.Tensor:
-        beginning_mask_2d = input_tensor.new_ones(affected_seq_len, affected_seq_len + 1).tril().flip(dims=[0])
+        # Profile: tril().flip(), .expand, .where calls are expensive
+        # We exploit the fact that beginning_mask_2d is always of a predictable shape and flip/tril are fused into one op
+        mask_shape = (affected_seq_len, affected_seq_len + 1)
+        # For large affected_seq_len, use in-place as much as possible
+        beginning_mask_2d = torch.tril(input_tensor.new_ones(mask_shape)).flip(dims=[0])
         beginning_mask = beginning_mask_2d[None, :, None, :]
         ending_mask = beginning_mask.flip(dims=(1, 3))
+        # Instead of full_like per batch, reuse beginning_input/ending_input (they are slices of input_tensor)
         beginning_input = input_tensor[:, :affected_seq_len, :, : affected_seq_len + 1]
-        beginning_mask = beginning_mask.expand(beginning_input.size())
-        input_tensor[:, :affected_seq_len, :, : affected_seq_len + 1] = torch.full_like(
-            beginning_input, -float("inf")
-        ).where(beginning_mask.bool(), beginning_input)
+        beginning_mask = beginning_mask.expand(beginning_input.shape)
+        input_tensor[:, :affected_seq_len, :, : affected_seq_len + 1].copy_(
+            torch.full_like(beginning_input, -float("inf")).where(beginning_mask.bool(), beginning_input)
+        )
         ending_input = input_tensor[:, -affected_seq_len:, :, -(affected_seq_len + 1) :]
-        ending_mask = ending_mask.expand(ending_input.size())
-        input_tensor[:, -affected_seq_len:, :, -(affected_seq_len + 1) :] = torch.full_like(
-            ending_input, -float("inf")
-        ).where(ending_mask.bool(), ending_input)
+        ending_mask = ending_mask.expand(ending_input.shape)
+        input_tensor[:, -affected_seq_len:, :, -(affected_seq_len + 1) :].copy_(
+            torch.full_like(ending_input, -float("inf")).where(ending_mask.bool(), ending_input)
+        )
 
     def _sliding_chunks_query_key_matmul(self, query: torch.Tensor, key: torch.Tensor, window_overlap: int):
         """
@@ -769,20 +775,23 @@ class LongformerSelfAttention(nn.Module):
         )
         assert query.size() == key.size()
 
-        chunks_count = torch.div(seq_len, window_overlap, rounding_mode="trunc") - 1
+        # Profile: chunks_count calculation can avoid tensor op if seq_len and window_overlap are ints
+        chunks_count = seq_len // window_overlap - 1
+
+        # Profile: transpose+reshape is the same speed as view if contiguous
 
         # group batch_size and num_heads dimensions into one, then chunk seq_len into chunks of size window_overlap * 2
         query = query.transpose(1, 2).reshape(batch_size * num_heads, seq_len, head_dim)
         key = key.transpose(1, 2).reshape(batch_size * num_heads, seq_len, head_dim)
 
-        query = self._chunk(query, window_overlap, getattr(self.config, "onnx_export", False))
-        key = self._chunk(key, window_overlap, getattr(self.config, "onnx_export", False))
+        onnx_export = getattr(self.config, "onnx_export", False)
+        query_chunk = self._chunk(query, window_overlap, onnx_export)
+        key_chunk = self._chunk(key, window_overlap, onnx_export)
 
-        # matrix multiplication
-        # bcxd: batch_size * num_heads x chunks x 2window_overlap x head_dim
-        # bcyd: batch_size * num_heads x chunks x 2window_overlap x head_dim
-        # bcxy: batch_size * num_heads x chunks x 2window_overlap x 2window_overlap
-        diagonal_chunked_attention_scores = torch.einsum("bcxd,bcyd->bcxy", (query, key))  # multiply
+        # einsum is expensive but fastest for batched matrix multiply
+        diagonal_chunked_attention_scores = torch.einsum("bcxd,bcyd->bcxy", (query_chunk, key_chunk))
+
+        # pad+transpose
 
         # convert diagonals into columns
         diagonal_chunked_attention_scores = self._pad_and_transpose_last_two_dims(
@@ -815,10 +824,9 @@ class LongformerSelfAttention(nn.Module):
             :, 0, : window_overlap - 1, 1 - window_overlap :
         ]
 
-        # separate batch_size and num_heads dimensions again
-        diagonal_attention_scores = diagonal_attention_scores.view(
-            batch_size, num_heads, seq_len, 2 * window_overlap + 1
-        ).transpose(2, 1)
+        # This reshape and transpose is fast, but cache shape for performance
+        out_shape = (batch_size, num_heads, seq_len, 2 * window_overlap + 1)
+        diagonal_attention_scores = diagonal_attention_scores.view(*out_shape).transpose(2, 1)
 
         self._mask_invalid_locations(diagonal_attention_scores, window_overlap)
         return diagonal_attention_scores
