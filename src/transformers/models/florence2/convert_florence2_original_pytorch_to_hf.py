@@ -83,104 +83,27 @@ def vision_spatial_block(stage_idx, block_idx):
         idx: stage number in original model
         cnt: count of blocks in each stage
     """
-    spatial_block = []
-    spatial_block.append(
-        (
-            f"vision_tower.blocks.{stage_idx}.{block_idx}.spatial_block.conv1.fn.dw.weight",
-            f"model.vision_tower.blocks.{stage_idx}.{block_idx}.spatial_block.conv1.weight",
-        )
-    )
-    spatial_block.append(
-        (
-            f"vision_tower.blocks.{stage_idx}.{block_idx}.spatial_block.conv1.fn.dw.bias",
-            f"model.vision_tower.blocks.{stage_idx}.{block_idx}.spatial_block.conv1.bias",
-        )
-    )
-    spatial_block.append(
-        (
-            f"vision_tower.blocks.{stage_idx}.{block_idx}.spatial_block.window_attn.norm.weight",
-            f"model.vision_tower.blocks.{stage_idx}.{block_idx}.spatial_block.norm1.weight",
-        )
-    )
-    spatial_block.append(
-        (
-            f"vision_tower.blocks.{stage_idx}.{block_idx}.spatial_block.window_attn.norm.bias",
-            f"model.vision_tower.blocks.{stage_idx}.{block_idx}.spatial_block.norm1.bias",
-        )
-    )
-    spatial_block.append(
-        (
-            f"vision_tower.blocks.{stage_idx}.{block_idx}.spatial_block.window_attn.fn.qkv.weight",
-            f"model.vision_tower.blocks.{stage_idx}.{block_idx}.spatial_block.window_attn.qkv.weight",
-        )
-    )
-    spatial_block.append(
-        (
-            f"vision_tower.blocks.{stage_idx}.{block_idx}.spatial_block.window_attn.fn.qkv.bias",
-            f"model.vision_tower.blocks.{stage_idx}.{block_idx}.spatial_block.window_attn.qkv.bias",
-        )
-    )
-    spatial_block.append(
-        (
-            f"vision_tower.blocks.{stage_idx}.{block_idx}.spatial_block.window_attn.fn.proj.weight",
-            f"model.vision_tower.blocks.{stage_idx}.{block_idx}.spatial_block.window_attn.proj.weight",
-        )
-    )
-    spatial_block.append(
-        (
-            f"vision_tower.blocks.{stage_idx}.{block_idx}.spatial_block.window_attn.fn.proj.bias",
-            f"model.vision_tower.blocks.{stage_idx}.{block_idx}.spatial_block.window_attn.proj.bias",
-        )
-    )
-    spatial_block.append(
-        (
-            f"vision_tower.blocks.{stage_idx}.{block_idx}.spatial_block.conv2.fn.dw.weight",
-            f"model.vision_tower.blocks.{stage_idx}.{block_idx}.spatial_block.conv2.weight",
-        )
-    )
-    spatial_block.append(
-        (
-            f"vision_tower.blocks.{stage_idx}.{block_idx}.spatial_block.conv2.fn.dw.bias",
-            f"model.vision_tower.blocks.{stage_idx}.{block_idx}.spatial_block.conv2.bias",
-        )
-    )
-    spatial_block.append(
-        (
-            f"vision_tower.blocks.{stage_idx}.{block_idx}.spatial_block.ffn.norm.weight",
-            f"model.vision_tower.blocks.{stage_idx}.{block_idx}.spatial_block.norm2.weight",
-        )
-    )
-    spatial_block.append(
-        (
-            f"vision_tower.blocks.{stage_idx}.{block_idx}.spatial_block.ffn.norm.bias",
-            f"model.vision_tower.blocks.{stage_idx}.{block_idx}.spatial_block.norm2.bias",
-        )
-    )
-    spatial_block.append(
-        (
-            f"vision_tower.blocks.{stage_idx}.{block_idx}.spatial_block.ffn.fn.net.fc1.weight",
-            f"model.vision_tower.blocks.{stage_idx}.{block_idx}.spatial_block.ffn.fc1.weight",
-        )
-    )
-    spatial_block.append(
-        (
-            f"vision_tower.blocks.{stage_idx}.{block_idx}.spatial_block.ffn.fn.net.fc1.bias",
-            f"model.vision_tower.blocks.{stage_idx}.{block_idx}.spatial_block.ffn.fc1.bias",
-        )
-    )
-    spatial_block.append(
-        (
-            f"vision_tower.blocks.{stage_idx}.{block_idx}.spatial_block.ffn.fn.net.fc2.weight",
-            f"model.vision_tower.blocks.{stage_idx}.{block_idx}.spatial_block.ffn.fc2.weight",
-        )
-    )
-    spatial_block.append(
-        (
-            f"vision_tower.blocks.{stage_idx}.{block_idx}.spatial_block.ffn.fn.net.fc2.bias",
-            f"model.vision_tower.blocks.{stage_idx}.{block_idx}.spatial_block.ffn.fc2.bias",
-        )
-    )
-    return spatial_block
+    prefix1 = f"vision_tower.blocks.{stage_idx}.{block_idx}.spatial_block"
+    prefix2 = f"model.vision_tower.blocks.{stage_idx}.{block_idx}.spatial_block"
+
+    return [
+        (f"{prefix1}.conv1.fn.dw.weight", f"{prefix2}.conv1.weight"),
+        (f"{prefix1}.conv1.fn.dw.bias", f"{prefix2}.conv1.bias"),
+        (f"{prefix1}.window_attn.norm.weight", f"{prefix2}.norm1.weight"),
+        (f"{prefix1}.window_attn.norm.bias", f"{prefix2}.norm1.bias"),
+        (f"{prefix1}.window_attn.fn.qkv.weight", f"{prefix2}.window_attn.qkv.weight"),
+        (f"{prefix1}.window_attn.fn.qkv.bias", f"{prefix2}.window_attn.qkv.bias"),
+        (f"{prefix1}.window_attn.fn.proj.weight", f"{prefix2}.window_attn.proj.weight"),
+        (f"{prefix1}.window_attn.fn.proj.bias", f"{prefix2}.window_attn.proj.bias"),
+        (f"{prefix1}.conv2.fn.dw.weight", f"{prefix2}.conv2.weight"),
+        (f"{prefix1}.conv2.fn.dw.bias", f"{prefix2}.conv2.bias"),
+        (f"{prefix1}.ffn.norm.weight", f"{prefix2}.norm2.weight"),
+        (f"{prefix1}.ffn.norm.bias", f"{prefix2}.norm2.bias"),
+        (f"{prefix1}.ffn.fn.net.fc1.weight", f"{prefix2}.ffn.fc1.weight"),
+        (f"{prefix1}.ffn.fn.net.fc1.bias", f"{prefix2}.ffn.fc1.bias"),
+        (f"{prefix1}.ffn.fn.net.fc2.weight", f"{prefix2}.ffn.fc2.weight"),
+        (f"{prefix1}.ffn.fn.net.fc2.bias", f"{prefix2}.ffn.fc2.bias"),
+    ]
 
 
 def vision_channel_block(stage_idx, block_idx):
