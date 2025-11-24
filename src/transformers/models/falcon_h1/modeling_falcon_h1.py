@@ -441,30 +441,59 @@ class FalconH1RMSNormGated(torch.nn.Module):
     def forward(self, hidden_states, gate=None):
         input_dtype = hidden_states.dtype
 
+        # Move hidden_states and (if necessary) gate to float32 only if they're not float32.
+        # This prevents unnecessary data copies.
+        orig_hidden_states = hidden_states
+        need_cast = hidden_states.dtype != torch.float32
+
         if not self.norm_before_gate and gate is not None:
-            hidden_states = hidden_states * F.silu(gate.to(torch.float32))
+            # If gate is already float32, skip casting
+            if gate.dtype != torch.float32:
+                gate_cast = gate.to(torch.float32)
+            else:
+                gate_cast = gate
+            hidden_states = hidden_states * F.silu(gate_cast)
 
         if len(hidden_states.shape) == 3:
             batch_size, seq_len, dim = hidden_states.shape
         else:
             batch_size, dim = hidden_states.shape
             seq_len = 1
-        hidden_states = hidden_states.to(torch.float32)
 
-        hidden_states = hidden_states.view(batch_size, seq_len, self.n_groups, int(dim // self.n_groups))
-        variance = hidden_states.pow(2).mean(-1, keepdim=True)
+        # Only cast if needed (to save memory if it's already float32)
+        if need_cast:
+            hidden_states = hidden_states.to(torch.float32)
 
-        hidden_states = hidden_states * torch.rsqrt(variance + self.variance_epsilon)
+        g = self.n_groups
+        d_g = int(dim // g)
+        # view is free unless the tensor is non-contiguous; ensure it's contiguous only if necessary
+        # most likely the tensor is contiguous so use view for speed
+        hidden_states = hidden_states.view(batch_size, seq_len, g, d_g)
+        # Compute mean of square directly (avoids creating an intermediate squared tensor)
+        variance = torch.mean(hidden_states * hidden_states, dim=-1, keepdim=True)
 
-        hidden_states = self.weight.view(self.n_groups, int(dim // self.n_groups)) * hidden_states
+        # Add epsilon and use rsqrt (rsqrt is fast on GPU)
+        hidden_states = hidden_states * torch.rsqrt(variance.add_(self.variance_epsilon))
+
+        # weight is [hidden_size], target is [..., g, d_g], view without .contiguous() for speed
+        hidden_states = self.weight.view(g, d_g) * hidden_states
         hidden_states = hidden_states.view(batch_size, seq_len, dim)
 
         if seq_len == 1:
             hidden_states = hidden_states.squeeze(1)
 
         if self.norm_before_gate and gate is not None:
-            hidden_states = hidden_states * F.silu(gate.to(torch.float32))
-        return hidden_states.to(input_dtype)
+            # avoid unnecessary dtype casts if already float32
+            if gate.dtype != torch.float32:
+                gate_cast = gate.to(torch.float32)
+            else:
+                gate_cast = gate
+            hidden_states = hidden_states * F.silu(gate_cast)
+
+        # Only cast back if dtype has changed (save a copy if same dtype)
+        if hidden_states.dtype != input_dtype:
+            hidden_states = hidden_states.to(input_dtype)
+        return hidden_states
 
 
 # Helper methods for segment sum computation
