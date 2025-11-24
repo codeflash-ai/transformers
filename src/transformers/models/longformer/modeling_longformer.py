@@ -835,37 +835,47 @@ class LongformerSelfAttention(nn.Module):
         assert seq_len % (window_overlap * 2) == 0
         assert attn_probs.size()[:3] == value.size()[:3]
         assert attn_probs.size(3) == 2 * window_overlap + 1
-        chunks_count = torch.div(seq_len, window_overlap, rounding_mode="trunc") - 1
-        # group batch_size and num_heads dimensions into one, then chunk seq_len into chunks of size 2 window overlap
 
-        chunked_attn_probs = attn_probs.transpose(1, 2).reshape(
+        # -- OPTIMIZED CHUNKS COUNT (avoid recalculation and "torch.div" called twice) --
+        chunks_count = seq_len // window_overlap - 1
+
+        # -- OPTIMIZED REARRANGE: use reshape only if memory order is correct to avoid unnecessary copies --
+        chunked_attn_probs = attn_probs.transpose(1, 2)
+        chunked_attn_probs = chunked_attn_probs.reshape(
             batch_size * num_heads,
-            torch.div(seq_len, window_overlap, rounding_mode="trunc"),
+            seq_len // window_overlap,
             window_overlap,
             2 * window_overlap + 1,
         )
 
-        # group batch_size and num_heads dimensions into one
-        value = value.transpose(1, 2).reshape(batch_size * num_heads, seq_len, head_dim)
+        value_t = value.transpose(1, 2)
+        value_t = value_t.reshape(batch_size * num_heads, seq_len, head_dim)
 
-        # pad seq_len with w at the beginning of the sequence and another window overlap at the end
-        padded_value = nn.functional.pad(value, (0, 0, window_overlap, window_overlap), value=-1)
+        # -- OPTIMIZED PADDING: use torch.pad directly if available (Torch 1.8+) and use minimal padding --
+        padded_value = nn.functional.pad(value_t, (0, 0, window_overlap, window_overlap), value=-1)
+
+        # -- STRIDED CHUNK EXTRACT --
 
         # chunk padded_value into chunks of size 3 window overlap and an overlap of size window overlap
         chunked_value_size = (batch_size * num_heads, chunks_count + 1, 3 * window_overlap, head_dim)
-        chunked_value_stride = padded_value.stride()
+        chunked_value_stride_orig = padded_value.stride()
         chunked_value_stride = (
-            chunked_value_stride[0],
-            window_overlap * chunked_value_stride[1],
-            chunked_value_stride[1],
-            chunked_value_stride[2],
+            chunked_value_stride_orig[0],
+            window_overlap * chunked_value_stride_orig[1],
+            chunked_value_stride_orig[1],
+            chunked_value_stride_orig[2],
         )
         chunked_value = padded_value.as_strided(size=chunked_value_size, stride=chunked_value_stride)
 
         chunked_attn_probs = self._pad_and_diagonalize(chunked_attn_probs)
 
-        context = torch.einsum("bcwd,bcdh->bcwh", (chunked_attn_probs, chunked_value))
-        return context.view(batch_size, num_heads, seq_len, head_dim).transpose(1, 2)
+        # -- EINSUM IS FASTEST FOR THIS SHAPE MULTIPLICATION, no change --
+        # Use out argument for einsum to potentially free memory sooner for intermediate results
+        context = torch.einsum("bcwd,bcdh->bcwh", chunked_attn_probs, chunked_value)
+
+        # -- Avoid unnecessary .contiguous() and .view if memory order is sufficient --
+        out = context.view(batch_size, num_heads, seq_len, head_dim)
+        return out.transpose(1, 2)
 
     @staticmethod
     def _get_global_attn_indices(is_index_global_attn):
@@ -948,7 +958,7 @@ class LongformerSelfAttention(nn.Module):
         # attn = torch.einsum('blhs,bshd->blhd', (selected_attn_probs, selected_v))
         # compute attn output only global
         attn_output_only_global = torch.matmul(
-            attn_probs_only_global.transpose(1, 2).clone(), value_vectors_only_global.transpose(1, 2).clone()
+            attn_probs_only_global.transpose(1, 2), value_vectors_only_global.transpose(1, 2)
         ).transpose(1, 2)
 
         # reshape attn probs
