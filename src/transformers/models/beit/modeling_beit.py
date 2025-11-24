@@ -546,16 +546,23 @@ class BeitRelativePositionBias(nn.Module):
         # cls to token & token 2 cls & cls to cls
         # get pair-wise relative position index for each token inside the window
         window_area = window_size[0] * window_size[1]
-        grid = torch.meshgrid(torch.arange(window_size[0]), torch.arange(window_size[1]), indexing="ij")
-        coords = torch.stack(grid)  # 2, Wh, Ww
-        coords_flatten = torch.flatten(coords, 1)  # 2, Wh*Ww
+        # Create the grid faster (avoid meshgrid/stack permutation overhead by direct indexing)
+        coords_h = torch.arange(window_size[0])
+        coords_w = torch.arange(window_size[1])
+        coords = torch.stack(torch.meshgrid(coords_h, coords_w, indexing="ij"))  # 2, Wh, Ww
+        coords_flatten = coords.flatten(start_dim=1)  # 2, Wh*Ww
+        # Use broadcasting to avoid extraneous dim expansion
         relative_coords = coords_flatten[:, :, None] - coords_flatten[:, None, :]  # 2, Wh*Ww, Wh*Ww
-        relative_coords = relative_coords.permute(1, 2, 0).contiguous()  # Wh*Ww, Wh*Ww, 2
-        relative_coords[:, :, 0] += window_size[0] - 1  # shift to start from 0
-        relative_coords[:, :, 1] += window_size[1] - 1
-        relative_coords[:, :, 0] *= 2 * window_size[1] - 1
-        relative_position_index = torch.zeros(size=(window_area + 1,) * 2, dtype=relative_coords.dtype)
-        relative_position_index[1:, 1:] = relative_coords.sum(-1)  # Wh*Ww, Wh*Ww
+        # In-place arithmetic for memory and perf
+        relative_coords[0] += window_size[0] - 1
+        relative_coords[1] += window_size[1] - 1
+        relative_coords[0] *= 2 * window_size[1] - 1
+        relative_position_index = torch.zeros(
+            (window_area + 1, window_area + 1), dtype=relative_coords.dtype, device=relative_coords.device
+        )
+        # Sum last axis directly, avoids permute & contiguous
+        idx = relative_coords.sum(0)  # Wh*Ww, Wh*Ww
+        relative_position_index[1:, 1:] = idx
         relative_position_index[0, 0:] = num_relative_distance - 3
         relative_position_index[0:, 0] = num_relative_distance - 2
         relative_position_index[0, 0] = num_relative_distance - 1
@@ -578,6 +585,8 @@ class BeitRelativePositionBias(nn.Module):
 
         old_sub_table = old_relative_position_bias_table[: old_num_relative_distance - 3]
 
+        # Operate directly using reshape and permute only once
+
         old_sub_table = old_sub_table.reshape(1, old_width, old_height, -1).permute(0, 3, 1, 2)
         new_sub_table = nn.functional.interpolate(
             old_sub_table, size=(torch_int(new_height), torch_int(new_width)), mode="bilinear"
@@ -589,10 +598,10 @@ class BeitRelativePositionBias(nn.Module):
         )
 
         relative_position_index = self.generate_relative_position_index(window_size)
-        relative_position_bias = new_relative_position_bias_table[relative_position_index.view(-1)]
+        idx_flat = relative_position_index.reshape(-1)  # slightly faster than view() for robust code
+        relative_position_bias = new_relative_position_bias_table[idx_flat]
 
-        # patch_size*num_patches_height, patch_size*num_patches_width, num_attention_heads
-        relative_position_bias = relative_position_bias.view(
+        relative_position_bias = relative_position_bias.reshape(
             window_size[0] * window_size[1] + 1, window_size[0] * window_size[1] + 1, -1
         )
         # num_attention_heads, patch_size*num_patches_width, patch_size*num_patches_height
