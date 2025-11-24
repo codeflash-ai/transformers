@@ -1075,6 +1075,9 @@ class FalconH1RMSNorm(nn.Module):
         self.weight = nn.Parameter(torch.ones(hidden_size))
         self.variance_epsilon = eps
 
+        # Precompute the shape string for extra_repr for efficiency
+        self._extra_repr_shape = str((hidden_size,))
+
     def forward(self, hidden_states):
         input_dtype = hidden_states.dtype
         hidden_states = hidden_states.to(torch.float32)
@@ -1083,7 +1086,8 @@ class FalconH1RMSNorm(nn.Module):
         return self.weight * hidden_states.to(input_dtype)
 
     def extra_repr(self):
-        return f"{tuple(self.weight.shape)}, eps={self.variance_epsilon}"
+        # Use the precomputed shape string for efficiency since .weight.shape never changes
+        return f"{self._extra_repr_shape}, eps={self.variance_epsilon}"
 
 
 class FalconH1DecoderLayer(GradientCheckpointingLayer):
