@@ -36,6 +36,8 @@ if is_levenshtein_available():
 if is_nltk_available():
     import nltk
 
+_CLEAN_PATTERN = re.compile(r"(?:[\d_]|\*\*)")
+
 
 logger = logging.get_logger(__name__)
 
@@ -234,14 +236,11 @@ def truncate_repetitions(text: str, min_len: int = 30) -> str:
 
 def remove_numbers(lines):
     def _clean(s):
-        return re.sub(r"(?:[\d_]|\*\*)", "", s).strip()
+        return _CLEAN_PATTERN.sub("", s).strip()
 
     if isinstance(lines, str):
         return _clean(lines)
-    out = []
-    for l in lines:
-        out.append(_clean(l))
-    return out
+    return [_clean(l) for l in lines]
 
 
 def get_slices(lines, clean_lines):
