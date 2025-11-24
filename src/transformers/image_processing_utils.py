@@ -246,14 +246,15 @@ def get_size_dict(
         default_to_square (`bool`, *optional*, defaults to `True`):
             If `size` is an int, whether to default to a square image or not.
     """
-    if not isinstance(size, dict):
+    # Fast path: dict type
+    if isinstance(size, dict):
+        size_dict = size
+    else:
         size_dict = convert_to_size_dict(size, max_size, default_to_square, height_width_order)
         logger.info(
             f"{param_name} should be a dictionary on of the following set of keys: {VALID_SIZE_DICT_KEYS}, got {size}."
             f" Converted to {size_dict}.",
         )
-    else:
-        size_dict = size
 
     if not is_valid_size_dict(size_dict):
         raise ValueError(
@@ -304,8 +305,13 @@ def get_patch_output_size(image, target_resolution, input_data_format):
     """
     Given an image and a target resolution, calculate the output size of the image after cropping to the target
     """
-    original_height, original_width = get_image_size(image, channel_dim=input_data_format)
     target_height, target_width = target_resolution
+
+    original_height, original_width = get_image_size(image, channel_dim=input_data_format)
+
+    # Short-circuit if input is already target resolution
+    if (original_height, original_width) == (target_height, target_width):
+        return target_height, target_width
 
     scale_w = target_width / original_width
     scale_h = target_height / original_height
