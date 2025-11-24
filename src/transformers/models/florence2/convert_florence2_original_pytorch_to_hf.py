@@ -191,104 +191,26 @@ def vision_channel_block(stage_idx, block_idx):
         idx: stage number in original model
         cnt: count of blocks in each stage
     """
-    channel_block = []
-    channel_block.append(
-        (
-            f"vision_tower.blocks.{stage_idx}.{block_idx}.channel_block.conv1.fn.dw.weight",
-            f"model.vision_tower.blocks.{stage_idx}.{block_idx}.channel_block.conv1.weight",
-        )
-    )
-    channel_block.append(
-        (
-            f"vision_tower.blocks.{stage_idx}.{block_idx}.channel_block.conv1.fn.dw.bias",
-            f"model.vision_tower.blocks.{stage_idx}.{block_idx}.channel_block.conv1.bias",
-        )
-    )
-    channel_block.append(
-        (
-            f"vision_tower.blocks.{stage_idx}.{block_idx}.channel_block.channel_attn.norm.weight",
-            f"model.vision_tower.blocks.{stage_idx}.{block_idx}.channel_block.norm1.weight",
-        )
-    )
-    channel_block.append(
-        (
-            f"vision_tower.blocks.{stage_idx}.{block_idx}.channel_block.channel_attn.norm.bias",
-            f"model.vision_tower.blocks.{stage_idx}.{block_idx}.channel_block.norm1.bias",
-        )
-    )
-    channel_block.append(
-        (
-            f"vision_tower.blocks.{stage_idx}.{block_idx}.channel_block.channel_attn.fn.qkv.weight",
-            f"model.vision_tower.blocks.{stage_idx}.{block_idx}.channel_block.channel_attn.qkv.weight",
-        )
-    )
-    channel_block.append(
-        (
-            f"vision_tower.blocks.{stage_idx}.{block_idx}.channel_block.channel_attn.fn.qkv.bias",
-            f"model.vision_tower.blocks.{stage_idx}.{block_idx}.channel_block.channel_attn.qkv.bias",
-        )
-    )
-    channel_block.append(
-        (
-            f"vision_tower.blocks.{stage_idx}.{block_idx}.channel_block.channel_attn.fn.proj.weight",
-            f"model.vision_tower.blocks.{stage_idx}.{block_idx}.channel_block.channel_attn.proj.weight",
-        )
-    )
-    channel_block.append(
-        (
-            f"vision_tower.blocks.{stage_idx}.{block_idx}.channel_block.channel_attn.fn.proj.bias",
-            f"model.vision_tower.blocks.{stage_idx}.{block_idx}.channel_block.channel_attn.proj.bias",
-        )
-    )
-    channel_block.append(
-        (
-            f"vision_tower.blocks.{stage_idx}.{block_idx}.channel_block.conv2.fn.dw.weight",
-            f"model.vision_tower.blocks.{stage_idx}.{block_idx}.channel_block.conv2.weight",
-        )
-    )
-    channel_block.append(
-        (
-            f"vision_tower.blocks.{stage_idx}.{block_idx}.channel_block.conv2.fn.dw.bias",
-            f"model.vision_tower.blocks.{stage_idx}.{block_idx}.channel_block.conv2.bias",
-        )
-    )
-    channel_block.append(
-        (
-            f"vision_tower.blocks.{stage_idx}.{block_idx}.channel_block.ffn.norm.weight",
-            f"model.vision_tower.blocks.{stage_idx}.{block_idx}.channel_block.norm2.weight",
-        )
-    )
-    channel_block.append(
-        (
-            f"vision_tower.blocks.{stage_idx}.{block_idx}.channel_block.ffn.norm.bias",
-            f"model.vision_tower.blocks.{stage_idx}.{block_idx}.channel_block.norm2.bias",
-        )
-    )
-    channel_block.append(
-        (
-            f"vision_tower.blocks.{stage_idx}.{block_idx}.channel_block.ffn.fn.net.fc1.weight",
-            f"model.vision_tower.blocks.{stage_idx}.{block_idx}.channel_block.ffn.fc1.weight",
-        )
-    )
-    channel_block.append(
-        (
-            f"vision_tower.blocks.{stage_idx}.{block_idx}.channel_block.ffn.fn.net.fc1.bias",
-            f"model.vision_tower.blocks.{stage_idx}.{block_idx}.channel_block.ffn.fc1.bias",
-        )
-    )
-    channel_block.append(
-        (
-            f"vision_tower.blocks.{stage_idx}.{block_idx}.channel_block.ffn.fn.net.fc2.weight",
-            f"model.vision_tower.blocks.{stage_idx}.{block_idx}.channel_block.ffn.fc2.weight",
-        )
-    )
-    channel_block.append(
-        (
-            f"vision_tower.blocks.{stage_idx}.{block_idx}.channel_block.ffn.fn.net.fc2.bias",
-            f"model.vision_tower.blocks.{stage_idx}.{block_idx}.channel_block.ffn.fc2.bias",
-        )
-    )
-    return channel_block
+    vision_prefix = f"vision_tower.blocks.{stage_idx}.{block_idx}.channel_block"
+    model_prefix = f"model.vision_tower.blocks.{stage_idx}.{block_idx}.channel_block"
+    return [
+        (f"{vision_prefix}.conv1.fn.dw.weight", f"{model_prefix}.conv1.weight"),
+        (f"{vision_prefix}.conv1.fn.dw.bias", f"{model_prefix}.conv1.bias"),
+        (f"{vision_prefix}.channel_attn.norm.weight", f"{model_prefix}.norm1.weight"),
+        (f"{vision_prefix}.channel_attn.norm.bias", f"{model_prefix}.norm1.bias"),
+        (f"{vision_prefix}.channel_attn.fn.qkv.weight", f"{model_prefix}.channel_attn.qkv.weight"),
+        (f"{vision_prefix}.channel_attn.fn.qkv.bias", f"{model_prefix}.channel_attn.qkv.bias"),
+        (f"{vision_prefix}.channel_attn.fn.proj.weight", f"{model_prefix}.channel_attn.proj.weight"),
+        (f"{vision_prefix}.channel_attn.fn.proj.bias", f"{model_prefix}.channel_attn.proj.bias"),
+        (f"{vision_prefix}.conv2.fn.dw.weight", f"{model_prefix}.conv2.weight"),
+        (f"{vision_prefix}.conv2.fn.dw.bias", f"{model_prefix}.conv2.bias"),
+        (f"{vision_prefix}.ffn.norm.weight", f"{model_prefix}.norm2.weight"),
+        (f"{vision_prefix}.ffn.norm.bias", f"{model_prefix}.norm2.bias"),
+        (f"{vision_prefix}.ffn.fn.net.fc1.weight", f"{model_prefix}.ffn.fc1.weight"),
+        (f"{vision_prefix}.ffn.fn.net.fc1.bias", f"{model_prefix}.ffn.fc1.bias"),
+        (f"{vision_prefix}.ffn.fn.net.fc2.weight", f"{model_prefix}.ffn.fc2.weight"),
+        (f"{vision_prefix}.ffn.fn.net.fc2.bias", f"{model_prefix}.ffn.fc2.bias"),
+    ]
 
 
 def multi_modal_projector():
