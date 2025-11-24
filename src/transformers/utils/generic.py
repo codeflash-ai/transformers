@@ -559,8 +559,13 @@ def torch_int(x):
     """
     if not _is_torch_available:
         return int(x)
+    # Lazy import torch to avoid unnecessary import overhead and speed up startup time if not needed
+    import torch
 
-    return x.to(torch.int64) if torch.jit.is_tracing() and isinstance(x, torch.Tensor) else int(x)
+    # The following check order is fastest since isinstance is a quick C-implemented op
+    if torch.jit.is_tracing() and isinstance(x, torch.Tensor):
+        return x.to(torch.int64)
+    return int(x)
 
 
 def torch_float(x):
