@@ -188,13 +188,28 @@ class AutoformerStdScaler(nn.Module):
                 (`(batch_size, sequence_length, num_input_channels)`,`(batch_size, 1, num_input_channels)`,
                 `(batch_size, 1, num_input_channels)`)
         """
-        denominator = observed_indicator.sum(self.dim, keepdim=self.keepdim)
-        denominator = denominator.clamp_min(1.0)
-        loc = (data * observed_indicator).sum(self.dim, keepdim=self.keepdim) / denominator
+        # Use type promotion only once and inplace operations to save memory where possible.
+        # Cast observed_indicator once as float for all computations needing it.
+        obs = observed_indicator.float()
 
-        variance = (((data - loc) * observed_indicator) ** 2).sum(self.dim, keepdim=self.keepdim) / denominator
-        scale = torch.sqrt(variance + self.minimum_scale)
-        return (data - loc) / scale, loc, scale
+        denominator = obs.sum(self.dim, keepdim=self.keepdim)
+        denominator.clamp_min_(1.0)  # In-place to save memory allocation
+        data_masked = data * obs
+
+        loc = data_masked.sum(self.dim, keepdim=self.keepdim)
+        loc /= denominator
+
+        # Precompute the mean-broadcasted view to avoid recomputation
+        centered = data - loc  # shape: same as data
+        centered_masked = centered * obs
+        # Avoid pow(2) which is slightly slower than direct ** 2
+        centered_masked_sq = centered_masked * centered_masked
+        variance = centered_masked_sq.sum(self.dim, keepdim=self.keepdim)
+        variance /= denominator
+
+        scale = torch.sqrt(variance.add(self.minimum_scale))  # avoid creating a new tensor by using .add()
+        normed = centered / scale
+        return normed, loc, scale
 
 
 # Copied from transformers.models.time_series_transformer.modeling_time_series_transformer.TimeSeriesMeanScaler with TimeSeriesTransformer->Autoformer,TimeSeries->Autoformer
