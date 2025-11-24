@@ -265,10 +265,26 @@ class FalconH1RotaryEmbedding(nn.Module):
 
         attention_factor = 1.0  # Unused in this type of RoPE
 
-        # Compute the inverse frequencies
-        inv_freq = 1.0 / (
-            base ** (torch.arange(0, dim, 2, dtype=torch.int64).to(device=device, dtype=torch.float) / dim)
-        )
+        # --- Optimization begins ---
+        # The original code:
+        # inv_freq = 1.0 / (
+        #     base ** (torch.arange(0, dim, 2, dtype=torch.int64).to(device=device, dtype=torch.float) / dim)
+        # )
+        #
+        # Problems:
+        # - Calls `.to(device=device, dtype=torch.float)` on an int tensor, which is slower than creating the right type.
+        # - torch.arange creates a tensor in int64 then casts to float. This allocates/initializes twice as much memory as necessary.
+        # - The device argument is repeated in .to() and torch.arange.
+
+        # Solution:
+        # 1. Use torch.arange(..., dtype=torch.float, device=device) to create directly on the correct device and type.
+        # 2. Use the result directly in the computation (avoid unnecessary casting or operations).
+        # 3. Use torch.pow(base, ...) instead of base ** ... to avoid Python-level exponentiation, and enable possible
+        #    backend optimizations.
+
+        arange_float = torch.arange(0, dim, 2, dtype=torch.float, device=device)
+        inv_freq = 1.0 / torch.pow(base, arange_float / dim)
+        # --- Optimization ends ---
         return inv_freq, attention_factor
 
     @torch.no_grad()
