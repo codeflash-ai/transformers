@@ -676,8 +676,12 @@ def parse_log_history(log_history):
 
 
 def _maybe_round(v, decimals=4):
-    if isinstance(v, float) and len(str(v).split(".")) > 1 and len(str(v).split(".")[1]) > decimals:
-        return f"{v:.{decimals}f}"
+    if isinstance(v, float):
+        s = str(v)
+        dot_idx = s.find(".")
+        if dot_idx != -1 and len(s) - dot_idx - 1 > decimals:
+            return f"{v:.{decimals}f}"
+        return s
     return str(v)
 
 
