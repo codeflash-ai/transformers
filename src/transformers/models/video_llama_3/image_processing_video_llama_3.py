@@ -80,20 +80,38 @@ def smart_resize(
     3. The aspect ratio of the image is maintained as closely as possible.
 
     """
-    if max(height, width) / min(height, width) > 200:
-        raise ValueError(
-            f"absolute aspect ratio must be smaller than 200, got {max(height, width) / min(height, width)}"
-        )
-    h_bar = round(height / factor) * factor
-    w_bar = round(width / factor) * factor
-    if h_bar * w_bar > max_pixels:
-        beta = math.sqrt((height * width) / max_pixels)
-        h_bar = max(factor, math.floor(height / beta / factor) * factor)
-        w_bar = max(factor, math.floor(width / beta / factor) * factor)
-    elif h_bar * w_bar < min_pixels:
-        beta = math.sqrt(min_pixels / (height * width))
-        h_bar = math.ceil(height * beta / factor) * factor
-        w_bar = math.ceil(width * beta / factor) * factor
+    # Minimize repeated calculations for max(), min()
+    hmax = max(height, width)
+    hmin = min(height, width)
+
+    aspect_ratio = hmax / hmin
+    if aspect_ratio > 200:
+        raise ValueError(f"absolute aspect ratio must be smaller than 200, got {aspect_ratio}")
+
+    inv_factor = 1.0 / factor
+
+    # Use direct calculation for rounding and avoid repeated /factor
+    h_round = round(height * inv_factor)
+    w_round = round(width * inv_factor)
+    h_bar = h_round * factor
+    w_bar = w_round * factor
+    hw_bar = h_bar * w_bar
+
+    if hw_bar > max_pixels:
+        # To avoid recalculating numerators/denominators unnecessarily
+        hw = height * width
+        beta = math.sqrt(hw / max_pixels)
+        h_scaled = height / beta
+        w_scaled = width / beta
+        h_bar = max(factor, math.floor(h_scaled * inv_factor) * factor)
+        w_bar = max(factor, math.floor(w_scaled * inv_factor) * factor)
+    elif hw_bar < min_pixels:
+        hw = height * width
+        beta = math.sqrt(min_pixels / hw)
+        h_scaled = height * beta
+        w_scaled = width * beta
+        h_bar = math.ceil(h_scaled * inv_factor) * factor
+        w_bar = math.ceil(w_scaled * inv_factor) * factor
     return h_bar, w_bar
 
 
