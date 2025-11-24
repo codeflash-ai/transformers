@@ -28,6 +28,11 @@ from transformers.tokenization_utils_base import TOKENIZER_CONFIG_FILE
 from transformers.utils import WEIGHTS_NAME, logging
 
 
+_re_atat = re.compile(r"@@$")
+
+_re_end = re.compile(r"$")
+
+
 logging.set_verbosity_warning()
 
 json_indent = 2
@@ -145,10 +150,19 @@ class Dictionary:
 
 
 def rewrite_dict_keys(d):
-    # (1) remove word breaking symbol, (2) add word ending symbol where the word is not broken up,
-    # e.g.: d = {'le@@': 5, 'tt@@': 6, 'er': 7} => {'le': 5, 'tt': 6, 'er</w>': 7}
-    d2 = dict((re.sub(r"@@$", "", k), v) if k.endswith("@@") else (re.sub(r"$", "</w>", k), v) for k, v in d.items())
     keep_keys = ["<s>", "<pad>", "</s>", "<unk>"]
+    # restore the special tokens
+    # avoid unnecessary re.sub by using slicing for "@@" and string-concatenation for regular words
+    d2 = {}
+    append_w = "</w>"
+    for k, v in d.items():
+        if k.endswith("@@"):
+            # Remove '@@' without regex for better efficiency
+            nk = k[:-2]
+            d2[nk] = v
+        else:
+            # Equivalent to re.sub(r"$", "</w>", k)
+            d2[k + append_w] = v
     # restore the special tokens
     for k in keep_keys:
         del d2[f"{k}</w>"]
