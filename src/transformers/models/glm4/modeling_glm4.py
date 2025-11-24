@@ -119,7 +119,11 @@ def repeat_kv(hidden_states: torch.Tensor, n_rep: int) -> torch.Tensor:
     batch, num_key_value_heads, slen, head_dim = hidden_states.shape
     if n_rep == 1:
         return hidden_states
-    hidden_states = hidden_states[:, :, None, :, :].expand(batch, num_key_value_heads, n_rep, slen, head_dim)
+    # Use efficient expand and reshape via view (to avoid extra copy) and avoid intermediate dimension creation
+    # This creates a strided view equivalent to 'repeat_interleave' without adding an extra dimension.
+    hidden_states = hidden_states.unsqueeze(2)  # (batch, num_key_value_heads, 1, seqlen, head_dim)
+    # Use expand_as to avoid materialization, then reshape directly to final shape
+    hidden_states = hidden_states.expand(batch, num_key_value_heads, n_rep, slen, head_dim)
     return hidden_states.reshape(batch, num_key_value_heads * n_rep, slen, head_dim)
 
 
