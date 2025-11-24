@@ -360,13 +360,19 @@ class GemmaRMSNorm(nn.Module):
         self.weight = nn.Parameter(torch.zeros(dim))
 
     def _norm(self, x):
-        return x * torch.rsqrt(x.pow(2).mean(-1, keepdim=True) + self.eps)
+        # Avoid temporary allocation: square, then mean, then add epsilon and sqrt reciprocal
+        # Use torch.mean directly instead of .pow(2).mean
+        # Inline the mean calculation for clarity and potentially less intermediate tensor creation
+        mean_x2 = torch.mean(x * x, dim=-1, keepdim=True)
+        return x * torch.rsqrt(mean_x2 + self.eps)
 
     def forward(self, x):
-        output = self._norm(x.float())
-        # Llama does x.to(float16) * w whilst Gemma is (x * w).to(float16)
-        # See https://github.com/huggingface/transformers/pull/29402
-        output = output * (1.0 + self.weight.float())
+        # Avoid unnecessary .float() conversion on every call if already float
+        x_float = x.float() if x.dtype != torch.float32 else x
+        output = self._norm(x_float)
+        # Avoid redundant self.weight.float() creation if already float
+        w_float = self.weight.float() if self.weight.dtype != torch.float32 else self.weight
+        output = output * (1.0 + w_float)
         return output.type_as(x)
 
     def extra_repr(self):
