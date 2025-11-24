@@ -47,31 +47,15 @@ def vision_conv_embeddings(idx):
     Args:
         idx: stage number in original model
     """
-    convs = []
-    convs.append(
-        (
-            f"vision_tower.convs.{idx}.proj.weight",
-            f"model.vision_tower.convs.{idx}.conv.weight",
-        )
-    )
-    convs.append(
-        (
-            f"vision_tower.convs.{idx}.proj.bias",
-            f"model.vision_tower.convs.{idx}.conv.bias",
-        )
-    )
-    convs.append(
-        (
-            f"vision_tower.convs.{idx}.norm.weight",
-            f"model.vision_tower.convs.{idx}.norm.weight",
-        )
-    )
-    convs.append(
-        (
-            f"vision_tower.convs.{idx}.norm.bias",
-            f"model.vision_tower.convs.{idx}.norm.bias",
-        )
-    )
+    prefix_src = f"vision_tower.convs.{idx}"
+    prefix_dst = f"model.vision_tower.convs.{idx}"
+
+    convs = [
+        (f"{prefix_src}.proj.weight", f"{prefix_dst}.conv.weight"),
+        (f"{prefix_src}.proj.bias", f"{prefix_dst}.conv.bias"),
+        (f"{prefix_src}.norm.weight", f"{prefix_dst}.norm.weight"),
+        (f"{prefix_src}.norm.bias", f"{prefix_dst}.norm.bias"),
+    ]
     return convs
 
 
