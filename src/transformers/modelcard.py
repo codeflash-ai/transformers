@@ -316,10 +316,13 @@ def infer_metric_tags_from_eval_results(eval_results):
     if eval_results is None:
         return {}
     result = {}
+    metric_tags_set = set(METRIC_TAGS)
     for key in eval_results:
-        if key.lower().replace(" ", "_") in METRIC_TAGS:
-            result[key.lower().replace(" ", "_")] = key
-        elif key.lower() == "rouge1":
+        key_lower = key.lower()
+        key_proc = key_lower.replace(" ", "_")
+        if key_proc in metric_tags_set:
+            result[key_proc] = key
+        elif key_lower == "rouge1":
             result["rouge"] = key
     return result
 
