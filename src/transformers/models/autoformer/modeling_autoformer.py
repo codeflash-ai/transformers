@@ -558,9 +558,16 @@ class AutoformerAttention(nn.Module):
         if self.training:
             autocorrelations_mean_on_bsz = torch.mean(autocorrelations_mean_on_head_channel, dim=0)
             _, top_k_delays_index = torch.topk(autocorrelations_mean_on_bsz, top_k)
-            top_k_autocorrelations = torch.stack(
-                [autocorrelations_mean_on_head_channel[:, top_k_delays_index[i]] for i in range(top_k)], dim=-1
+
+            # Instead of Python list comprehension, use vectorized indexing for all batch elements
+            # top_k_delays_index: top_k values in [tgt_len]
+            # autocorrelations_mean_on_head_channel: bsz x tgt_len
+            # We want bsz x top_k
+
+            gather_indices = top_k_delays_index.unsqueeze(0).expand(
+                autocorrelations_mean_on_head_channel.shape[0], top_k
             )
+            top_k_autocorrelations = torch.gather(autocorrelations_mean_on_head_channel, 1, gather_indices)
         else:
             top_k_autocorrelations, top_k_delays_index = torch.topk(
                 autocorrelations_mean_on_head_channel, top_k, dim=1
@@ -579,21 +586,23 @@ class AutoformerAttention(nn.Module):
                 .to(value_states.device)
             )
 
-        delays_agg = torch.zeros_like(value_states).float()  # bsz x time_length x channel
+        delays_agg = torch.zeros_like(value_states)
+        repeat_shape = (self.num_heads, tgt_len, channel)  # precompute for efficiency
+
         for i in range(top_k):
             # compute value_states roll delay
             if not self.training:
-                tmp_delay = init_index + top_k_delays_index[:, i].view(-1, 1, 1).repeat(
-                    self.num_heads, tgt_len, channel
-                )
+                # Top-k delays are batch-wise, so need to repeat and reshape properly
+                # Vectorize index calculation
+                batch_delay = top_k_delays_index[:, i].view(-1, 1, 1)
+                batch_delay = batch_delay.repeat(self.num_heads, tgt_len, channel)
+                tmp_delay = init_index + batch_delay
                 value_states_roll_delay = torch.gather(tmp_values, dim=1, index=tmp_delay)
             else:
-                value_states_roll_delay = value_states.roll(shifts=-int(top_k_delays_index[i]), dims=1)
+                shift_i = -int(top_k_delays_index[i])
+                value_states_roll_delay = value_states.roll(shifts=shift_i, dims=1)
 
-            # aggregation
-            top_k_autocorrelations_at_delay = (
-                top_k_autocorrelations[:, i].view(-1, 1, 1).repeat(self.num_heads, tgt_len, channel)
-            )
+            top_k_autocorrelations_at_delay = top_k_autocorrelations[:, i].view(-1, 1, 1).repeat(*repeat_shape)
             delays_agg += value_states_roll_delay * top_k_autocorrelations_at_delay
 
         attn_output = delays_agg.contiguous()
