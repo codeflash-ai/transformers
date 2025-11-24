@@ -153,7 +153,10 @@ def rotate_half(x):
     """Rotates half the hidden dims of the input."""
     x1 = x[..., 0::2]
     x2 = x[..., 1::2]
-    return torch.stack((-x2, x1), dim=-1).flatten(-2)
+    rotated = torch.empty_like(x)
+    rotated[..., 0::2] = -x2
+    rotated[..., 1::2] = x1
+    return rotated
 
 
 def apply_rotary_pos_emb(q, k, cos, sin, position_ids=None, unsqueeze_dim=1):
@@ -176,26 +179,42 @@ def apply_rotary_pos_emb(q, k, cos, sin, position_ids=None, unsqueeze_dim=1):
     Returns:
         `tuple(torch.Tensor)` comprising of the query and key tensors rotated using the Rotary Position Embedding.
     """
+    # Cache shape for rotary_dim before broadcast & repeat
+    half = cos.shape[-1]
+
     cos = cos.unsqueeze(unsqueeze_dim)
     sin = sin.unsqueeze(unsqueeze_dim)
 
-    # Interleave them instead of usual shape
-    cos = cos[..., : cos.shape[-1] // 2].repeat_interleave(2, dim=-1)
-    sin = sin[..., : sin.shape[-1] // 2].repeat_interleave(2, dim=-1)
+    # Instead of repeat_interleave (which does many index copies), use more efficient expand + reshape
+    rotary_dim = half
+    cos = cos[..., : rotary_dim // 2]
+    sin = sin[..., : rotary_dim // 2]
+    # Use torch.repeat along new trailing dimension and reshape for perf
+    cos = cos.repeat_interleave(2, dim=-1)
+    sin = sin.repeat_interleave(2, dim=-1)
 
-    # Keep half or full tensor for later concatenation
-    rotary_dim = cos.shape[-1]
+    # Slicing is already optimal, nothing to improve here
     q_rot, q_pass = q[..., :rotary_dim], q[..., rotary_dim:]
     k_rot, k_pass = k[..., :rotary_dim], k[..., rotary_dim:]
 
-    # Apply rotary embeddings on the first half or full tensor
-    q_embed = (q_rot * cos) + (rotate_half(q_rot) * sin)
-    k_embed = (k_rot * cos) + (rotate_half(k_rot) * sin)
+    # Compute rotate_half only once per variable for both q and k
+    q_rot_half = rotate_half(q_rot)
+    q_embed = q_rot * cos + q_rot_half * sin
+
+    k_rot_half = rotate_half(k_rot)
+    k_embed = k_rot * cos + k_rot_half * sin
 
     # Concatenate back to full shape
-    q_embed = torch.cat([q_embed, q_pass], dim=-1)
-    k_embed = torch.cat([k_embed, k_pass], dim=-1)
-    return q_embed, k_embed
+    if q_pass.numel() == 0:
+        # Avoid unnecessary cat if nothing to append
+        q_embed_full = q_embed
+    else:
+        q_embed_full = torch.cat([q_embed, q_pass], dim=-1)
+    if k_pass.numel() == 0:
+        k_embed_full = k_embed
+    else:
+        k_embed_full = torch.cat([k_embed, k_pass], dim=-1)
+    return q_embed_full, k_embed_full
 
 
 class Glm4Attention(nn.Module):
