@@ -156,9 +156,9 @@ def find_next_punctuation(text: str, start_idx=0):
         start_idx (`int`, *optional*)
             Index where to start
     """
-
+    punctuation_set = {".", "?", "!", "\n"}
     for i in range(start_idx, len(text)):
-        if text[i] in [".", "?", "!", "\n"]:
+        if text[i] in punctuation_set:
             return i
 
     return None
@@ -188,15 +188,13 @@ def truncate_repetitions(text: str, min_len: int = 30) -> str:
 
     # try to find a length at which the tail is repeating
     max_repetition_length = None
-    for repetition_length in range(min_len, int(text_length / 2)):
-        # check if there is a repetition at the end
-        same = True
-        for i in range(0, repetition_length):
-            if text_lower[text_length - repetition_length - i - 1] != text_lower[text_length - i - 1]:
-                same = False
-                break
-
-        if same:
+    last_half = text_lower[-(text_length // 2) :] if text_length // 2 > 0 else ""
+    # Create lookup for tail slices to avoid repeated slicing in the inner loop
+    for repetition_length in range(min_len, text_length // 2):
+        base_tail = text_lower[text_length - repetition_length :]
+        prev_tail = text_lower[text_length - 2 * repetition_length : text_length - repetition_length]
+        # Use simple string comparison on the whole substring rather than char-by-char
+        if base_tail == prev_tail:
             max_repetition_length = repetition_length
 
     if max_repetition_length is None:
@@ -207,12 +205,16 @@ def truncate_repetitions(text: str, min_len: int = 30) -> str:
     # remove all but the last repetition
     substituted_text = text
     substituted_text_lower = text_lower
+    tail_index = len(substituted_text_lower)
     while substituted_text_lower.endswith(lcs):
-        substituted_text = substituted_text[:-max_repetition_length]
-        substituted_text_lower = substituted_text_lower[:-max_repetition_length]
+        tail_index -= max_repetition_length
+        substituted_text = substituted_text[:tail_index]
+        substituted_text_lower = substituted_text_lower[:tail_index]
 
     # this is the tail with the repetitions
     repeating_tail = text_lower[len(substituted_text_lower) :]
+
+    # Add until next punctuation and make sure last sentence is not repeating
 
     # add until next punctuation and make sure last sentence is not repeating
     substituted_text_lower_out = substituted_text_lower
