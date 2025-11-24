@@ -627,32 +627,38 @@ def dequantize_higgs(model, current_key_name=None):
     """
 
     with torch.no_grad():
-        for name, module in model.named_children():
-            if current_key_name is None:
-                current_key_name = []
-            current_key_name.append(name)
+        stack = [model]
+        while stack:
+            parent = stack.pop()
+            for name, module in parent.named_children():
+                # Replace HiggsLinear with torch.nn.Linear if necessary
+                if isinstance(module, HiggsLinear):
+                    # Cache attribute accesses
+                    in_features = module.in_features
+                    out_features = module.out_features
+                    scales_device = module.scales.device
+                    scales_dtype = module.scales.dtype
+                    bias_present = module.bias is not None
 
-            if isinstance(module, HiggsLinear):
-                in_features = module.in_features
-                out_features = module.out_features
+                    new_linear = torch.nn.Linear(
+                        in_features,
+                        out_features,
+                        bias=bias_present,
+                        device=scales_device,
+                        dtype=scales_dtype,
+                    )
 
-                model._modules[name] = torch.nn.Linear(
-                    in_features,
-                    out_features,
-                    bias=module.bias is not None,
-                    device=module.scales.device,
-                    dtype=module.scales.dtype,
-                )
+                    # Perform dequantization using module as a function on identity matrix
+                    new_linear.weight.data = module(
+                        torch.eye(in_features, device=scales_device, dtype=scales_dtype)
+                    ).T.contiguous()
+                    parent._modules[name] = new_linear
 
-                model._modules[name].weight.data = module(
-                    torch.eye(in_features, device=module.scales.device, dtype=module.scales.dtype)
-                ).T.contiguous()
-
-            if len(list(module.children())) > 0:
-                _ = dequantize_higgs(
-                    module,
-                    current_key_name=current_key_name,
-                )
-            # Remove the last key for recursion
-            current_key_name.pop(-1)
+                    # In case the replaced module has children, handle via stack anyway.
+                    if any(module.children()):
+                        stack.append(parent._modules[name])
+                else:
+                    # Only add modules to the stack if they have children
+                    if any(module.children()):
+                        stack.append(module)
         return model
