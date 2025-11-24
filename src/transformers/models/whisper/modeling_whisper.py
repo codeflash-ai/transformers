@@ -224,13 +224,17 @@ def eager_attention_forward(
     if scaling is None:
         scaling = query.size(-1) ** -0.5
 
-    attn_weights = torch.matmul(query, key.transpose(2, 3)) * scaling
+    attn_weights = torch.matmul(query, key.transpose(2, 3))
+    attn_weights.mul_(scaling)
+
     if attention_mask is not None and attention_mask.ndim == 4:
-        attn_weights = attn_weights + attention_mask[:, :, :, : key.shape[-2]]
+        attn_weights.add_(attention_mask[:, :, :, : key.shape[-2]])
 
     attn_weights = nn.functional.softmax(attn_weights, dim=-1)
 
-    attn_weights = nn.functional.dropout(attn_weights, p=dropout, training=module.training)
+    if dropout > 0.0:
+        attn_weights = nn.functional.dropout(attn_weights, p=dropout, training=module.training)
+
     attn_output = torch.matmul(attn_weights, value)
     attn_output = attn_output.transpose(1, 2).contiguous()
 
