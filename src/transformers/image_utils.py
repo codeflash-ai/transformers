@@ -21,6 +21,7 @@ from typing import Optional, Union
 
 import httpx
 import numpy as np
+import PIL.Image
 
 from .utils import (
     ExplicitEnum,
@@ -132,14 +133,14 @@ def concatenate_list(input_list):
 
 
 def valid_images(imgs):
-    # If we have an list of images, make sure every image is valid
-    if isinstance(imgs, (list, tuple)):
-        for img in imgs:
-            if not valid_images(img):
-                return False
-    # If not a list of tuple, we have been given a single image or batched tensor of images
-    elif not is_valid_image(imgs):
-        return False
+    # Iteratively validate images/batches/lists for improved performance (no recursion)
+    stack = [imgs]
+    while stack:
+        img = stack.pop()
+        if isinstance(img, (list, tuple)):
+            stack.extend(img)
+        elif not is_valid_image(img):
+            return False
     return True
 
 
@@ -222,15 +223,16 @@ def make_flat_list_of_images(
         return [img for img_list in images for img in img_list]
 
     if isinstance(images, (list, tuple)) and is_valid_list_of_images(images):
-        if is_pil_image(images[0]) or images[0].ndim == expected_ndims:
+        first_img = images[0]
+        if is_pil_image(first_img) or getattr(first_img, "ndim", None) == expected_ndims:
             return images
-        if images[0].ndim == expected_ndims + 1:
+        if getattr(first_img, "ndim", None) == expected_ndims + 1:
             return [img for img_list in images for img in img_list]
 
     if is_valid_image(images):
-        if is_pil_image(images) or images.ndim == expected_ndims:
+        if is_pil_image(images) or getattr(images, "ndim", None) == expected_ndims:
             return [images]
-        if images.ndim == expected_ndims + 1:
+        if getattr(images, "ndim", None) == expected_ndims + 1:
             return list(images)
 
     raise ValueError(f"Could not make a flat list of images from {images}")
@@ -281,6 +283,8 @@ def to_numpy_array(img) -> np.ndarray:
 
     if is_vision_available() and isinstance(img, PIL.Image.Image):
         return np.array(img)
+    if isinstance(img, np.ndarray):
+        return img
     return to_numpy(img)
 
 
@@ -299,8 +303,14 @@ def infer_channel_dimension_format(
     Returns:
         The channel dimension of the image.
     """
-    num_channels = num_channels if num_channels is not None else (1, 3)
-    num_channels = (num_channels,) if isinstance(num_channels, int) else num_channels
+    # Provide default without recomputing tuple unless necessary
+    default_num_channels = (1, 3)
+    num_channels = num_channels if num_channels is not None else default_num_channels
+    if isinstance(num_channels, int):
+        num_channels = (num_channels,)
+
+    # Use local variables/shortcuts for shape access
+    shape = image.shape
 
     if image.ndim == 3:
         first_dim, last_dim = 0, 2
@@ -311,14 +321,20 @@ def infer_channel_dimension_format(
     else:
         raise ValueError(f"Unsupported number of image dimensions: {image.ndim}")
 
-    if image.shape[first_dim] in num_channels and image.shape[last_dim] in num_channels:
+    # Only access shape indices once for efficiency
+    first_val = shape[first_dim]
+    last_val = shape[last_dim]
+
+    if first_val in num_channels and last_val in num_channels:
+        from transformers.image_utils import logger
+
         logger.warning(
-            f"The channel dimension is ambiguous. Got image shape {image.shape}. Assuming channels are the first dimension. Use the [input_data_format](https://huggingface.co/docs/transformers/main/internal/image_processing_utils#transformers.image_transforms.rescale.input_data_format) parameter to assign the channel dimension."
+            f"The channel dimension is ambiguous. Got image shape {shape}. Assuming channels are the first dimension. Use the [input_data_format](https://huggingface.co/docs/transformers/main/internal/image_processing_utils#transformers.image_transforms.rescale.input_data_format) parameter to assign the channel dimension."
         )
         return ChannelDimension.FIRST
-    elif image.shape[first_dim] in num_channels:
+    elif first_val in num_channels:
         return ChannelDimension.FIRST
-    elif image.shape[last_dim] in num_channels:
+    elif last_val in num_channels:
         return ChannelDimension.LAST
     raise ValueError("Unable to infer channel dimension format")
 
