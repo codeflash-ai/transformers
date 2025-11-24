@@ -344,7 +344,7 @@ def _get_mapping_values(mapping):
     result = []
     for v in mapping.values():
         if isinstance(v, (tuple, list)):
-            result += list(v)
+            result.extend(v)
         else:
             result.append(v)
     return result
@@ -556,32 +556,43 @@ class TrainingSummary:
         if is_hf_dataset(one_dataset) and (dataset_tags is None or dataset_args is None or dataset_metadata is None):
             default_tag = one_dataset.builder_name
             # Those are not real datasets from the Hub so we exclude them.
-            if default_tag not in ["csv", "json", "pandas", "parquet", "text"]:
+            if default_tag not in {"csv", "json", "pandas", "parquet", "text"}:
+                config_name = one_dataset.config_name
+                split = str(one_dataset.split)
                 if dataset_metadata is None:
-                    dataset_metadata = [{"config": one_dataset.config_name, "split": str(one_dataset.split)}]
+                    dataset_metadata = [{"config": config_name, "split": split}]
                 if dataset_tags is None:
                     dataset_tags = [default_tag]
                 if dataset_args is None:
-                    dataset_args = [one_dataset.config_name]
+                    dataset_args = [config_name]
 
         if dataset is None and dataset_tags is not None:
             dataset = dataset_tags
 
         # Infer default finetuned_from
+
+        # Infer default finetuned_from
+        model_config = trainer.model.config
         if (
             finetuned_from is None
-            and hasattr(trainer.model.config, "_name_or_path")
-            and not os.path.isdir(trainer.model.config._name_or_path)
+            and hasattr(model_config, "_name_or_path")
+            and not os.path.isdir(model_config._name_or_path)
         ):
-            finetuned_from = trainer.model.config._name_or_path
+            finetuned_from = model_config._name_or_path
+
+        # Infer default task tag using set lookup for efficiency
 
         # Infer default task tag:
         if tasks is None:
             model_class_name = trainer.model.__class__.__name__
             for task, mapping in TASK_MAPPING.items():
-                if model_class_name in _get_mapping_values(mapping):
+                mapping_values = _get_mapping_values(mapping)
+                if model_class_name in mapping_values:
                     tasks = task
 
+                    break
+
+        # Use output_dir basename directly
         if model_name is None:
             model_name = Path(trainer.args.output_dir).name
         if len(model_name) == 0:
@@ -592,7 +603,7 @@ class TrainingSummary:
             tags = ["generated_from_trainer"]
         elif isinstance(tags, str) and tags != "generated_from_trainer":
             tags = [tags, "generated_from_trainer"]
-        elif "generated_from_trainer" not in tags:
+        elif isinstance(tags, list) and "generated_from_trainer" not in tags:
             tags.append("generated_from_trainer")
 
         _, eval_lines, eval_results = parse_log_history(trainer.state.log_history)
@@ -619,13 +630,16 @@ def parse_log_history(log_history):
     """
     Parse the `log_history` of a Trainer to get the intermediate and final evaluation results.
     """
+    n = len(log_history)
     idx = 0
-    while idx < len(log_history) and "train_runtime" not in log_history[idx]:
+    # Find the first train log
+    while idx < n and "train_runtime" not in log_history[idx]:
         idx += 1
 
     # If there are no training logs
-    if idx == len(log_history):
-        idx -= 1
+    if idx == n:
+        # Find first eval_loss from the back
+        idx = n - 1
         while idx >= 0 and "eval_loss" not in log_history[idx]:
             idx -= 1
 
@@ -639,36 +653,39 @@ def parse_log_history(log_history):
     lines = []
     training_loss = "No log"
     for i in range(idx):
-        if "loss" in log_history[i]:
-            training_loss = log_history[i]["loss"]
-        if "eval_loss" in log_history[i]:
-            metrics = log_history[i].copy()
-            _ = metrics.pop("total_flos", None)
+        h = log_history[i]
+        if "loss" in h:
+            training_loss = h["loss"]
+        if "eval_loss" in h:
+            metrics = h.copy()
+            metrics.pop("total_flos", None)
             epoch = metrics.pop("epoch", None)
             step = metrics.pop("step", None)
-            _ = metrics.pop("eval_runtime", None)
-            _ = metrics.pop("eval_samples_per_second", None)
-            _ = metrics.pop("eval_steps_per_second", None)
+            metrics.pop("eval_runtime", None)
+            metrics.pop("eval_samples_per_second", None)
+            metrics.pop("eval_steps_per_second", None)
             values = {"Training Loss": training_loss, "Epoch": epoch, "Step": step}
             for k, v in metrics.items():
                 if k == "eval_loss":
                     values["Validation Loss"] = v
                 else:
                     splits = k.split("_")
-                    name = " ".join([part.capitalize() for part in splits[1:]])
+                    # Only build joined name if splits[1:] is not empty
+                    name = " ".join([part.capitalize() for part in splits[1:]]) if len(splits) > 1 else k
                     values[name] = v
             lines.append(values)
 
-    idx = len(log_history) - 1
+    # Find summary eval_result from end
+    idx = n - 1
     while idx >= 0 and "eval_loss" not in log_history[idx]:
         idx -= 1
 
     if idx > 0:
         eval_results = {}
         for key, value in log_history[idx].items():
-            key = key.removeprefix("eval_")
-            if key not in ["runtime", "samples_per_second", "steps_per_second", "epoch", "step"]:
-                camel_cased_key = " ".join([part.capitalize() for part in key.split("_")])
+            key_nm = key.removeprefix("eval_")
+            if key_nm not in {"runtime", "samples_per_second", "steps_per_second", "epoch", "step"}:
+                camel_cased_key = " ".join([part.capitalize() for part in key_nm.split("_")])
                 eval_results[camel_cased_key] = value
         return train_log, lines, eval_results
     else:
@@ -719,50 +736,50 @@ _TRAINING_ARGS_KEYS = [
 
 
 def extract_hyperparameters_from_trainer(trainer):
-    hyperparameters = {k: getattr(trainer.args, k) for k in _TRAINING_ARGS_KEYS}
+    args = trainer.args
+    # Localize lookups
+    hyperparameters = {k: getattr(args, k) for k in _TRAINING_ARGS_KEYS}
 
-    if trainer.args.parallel_mode not in [ParallelMode.NOT_PARALLEL, ParallelMode.NOT_DISTRIBUTED]:
+    if args.parallel_mode not in (ParallelMode.NOT_PARALLEL, ParallelMode.NOT_DISTRIBUTED):
         hyperparameters["distributed_type"] = (
-            "multi-GPU" if trainer.args.parallel_mode == ParallelMode.DISTRIBUTED else trainer.args.parallel_mode.value
+            "multi-GPU" if args.parallel_mode == ParallelMode.DISTRIBUTED else args.parallel_mode.value
         )
-    if trainer.args.world_size > 1:
-        hyperparameters["num_devices"] = trainer.args.world_size
-    if trainer.args.gradient_accumulation_steps > 1:
-        hyperparameters["gradient_accumulation_steps"] = trainer.args.gradient_accumulation_steps
+    if args.world_size > 1:
+        hyperparameters["num_devices"] = args.world_size
+    if args.gradient_accumulation_steps > 1:
+        hyperparameters["gradient_accumulation_steps"] = args.gradient_accumulation_steps
 
-    total_train_batch_size = (
-        trainer.args.train_batch_size * trainer.args.world_size * trainer.args.gradient_accumulation_steps
-    )
+    total_train_batch_size = args.train_batch_size * args.world_size * args.gradient_accumulation_steps
     if total_train_batch_size != hyperparameters["train_batch_size"]:
         hyperparameters["total_train_batch_size"] = total_train_batch_size
-    total_eval_batch_size = trainer.args.eval_batch_size * trainer.args.world_size
+    total_eval_batch_size = args.eval_batch_size * args.world_size
     if total_eval_batch_size != hyperparameters["eval_batch_size"]:
         hyperparameters["total_eval_batch_size"] = total_eval_batch_size
 
-    if trainer.args.optim:
-        optimizer_name = trainer.args.optim
-        optimizer_args = trainer.args.optim_args if trainer.args.optim_args else "No additional optimizer arguments"
+    if args.optim:
+        optimizer_name = args.optim
+        optimizer_args = args.optim_args if args.optim_args else "No additional optimizer arguments"
 
         if "adam" in optimizer_name.lower():
             hyperparameters["optimizer"] = (
-                f"Use {optimizer_name} with betas=({trainer.args.adam_beta1},{trainer.args.adam_beta2}) and"
-                f" epsilon={trainer.args.adam_epsilon} and optimizer_args={optimizer_args}"
+                f"Use {optimizer_name} with betas=({args.adam_beta1},{args.adam_beta2}) and"
+                f" epsilon={args.adam_epsilon} and optimizer_args={optimizer_args}"
             )
         else:
             hyperparameters["optimizer"] = f"Use {optimizer_name} and the args are:\n{optimizer_args}"
 
-    hyperparameters["lr_scheduler_type"] = trainer.args.lr_scheduler_type.value
-    if trainer.args.warmup_steps != 0.0:
-        hyperparameters["lr_scheduler_warmup_steps"] = trainer.args.warmup_steps
-    if trainer.args.max_steps != -1:
-        hyperparameters["training_steps"] = trainer.args.max_steps
+    hyperparameters["lr_scheduler_type"] = args.lr_scheduler_type.value
+    if args.warmup_steps != 0.0:
+        hyperparameters["lr_scheduler_warmup_steps"] = args.warmup_steps
+    if args.max_steps != -1:
+        hyperparameters["training_steps"] = args.max_steps
     else:
-        hyperparameters["num_epochs"] = trainer.args.num_train_epochs
+        hyperparameters["num_epochs"] = args.num_train_epochs
 
-    if trainer.args.fp16:
+    if args.fp16:
         hyperparameters["mixed_precision_training"] = "Native AMP"
 
-    if trainer.args.label_smoothing_factor != 0.0:
-        hyperparameters["label_smoothing_factor"] = trainer.args.label_smoothing_factor
+    if args.label_smoothing_factor != 0.0:
+        hyperparameters["label_smoothing_factor"] = args.label_smoothing_factor
 
     return hyperparameters
