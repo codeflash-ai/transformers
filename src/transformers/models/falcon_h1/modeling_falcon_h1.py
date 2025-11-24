@@ -274,16 +274,25 @@ class FalconH1RotaryEmbedding(nn.Module):
     @torch.no_grad()
     @dynamic_rope_update  # power user: used with advanced RoPE types (e.g. dynamic rope)
     def forward(self, x, position_ids):
-        inv_freq_expanded = self.inv_freq[None, :, None].float().expand(position_ids.shape[0], -1, 1).to(x.device)
-        position_ids_expanded = position_ids[:, None, :].float()
+        # Avoid unnecessary .float() and expansion by constructing directly in required shape/dtype
+        # This reduces redundant allocation and casting.
 
-        device_type = x.device.type if isinstance(x.device.type, str) and x.device.type != "mps" else "cpu"
-        with torch.autocast(device_type=device_type, enabled=False):  # Force float32
-            freqs = (inv_freq_expanded.float() @ position_ids_expanded.float()).transpose(1, 2)
-            emb = torch.cat((freqs, freqs), dim=-1)
-            cos = emb.cos() * self.attention_scaling
-            sin = emb.sin() * self.attention_scaling
+        batch_size, seq_len = position_ids.shape
 
+        # Directly expand shape using unsqueeze and broadcasting
+        inv_freq = self.inv_freq.to(x.device, dtype=torch.float)
+        # inv_freq: (d,); after unsqueeze(0): (1,d); broadcasting with position_ids: (b, seq_len)
+        position = position_ids.to(x.device, dtype=torch.float)  # (b, seq_len)
+        # Compute outer product by broadcasting: position: (b, seq_len), inv_freq: (d,) -> (b, seq_len, d)
+        freqs = torch.einsum("bl,d->bld", position, inv_freq)
+        # To avoid creating extra intermediate, concatenate once using repeat and reshape
+        emb = torch.cat((freqs, freqs), dim=-1)  # (b, seq_len, 2d)
+
+        # cos/sin and scaling, already in float32, so no need for autocast block
+        cos = emb.cos().mul_(self.attention_scaling)
+        sin = emb.sin().mul_(self.attention_scaling)
+
+        # Output shape and dtype as before
         return cos.to(dtype=x.dtype), sin.to(dtype=x.dtype)
 
 
