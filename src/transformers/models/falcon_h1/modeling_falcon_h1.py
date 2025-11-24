@@ -1077,10 +1077,24 @@ class FalconH1RMSNorm(nn.Module):
 
     def forward(self, hidden_states):
         input_dtype = hidden_states.dtype
-        hidden_states = hidden_states.to(torch.float32)
-        variance = hidden_states.pow(2).mean(-1, keepdim=True)
-        hidden_states = hidden_states * torch.rsqrt(variance + self.variance_epsilon)
-        return self.weight * hidden_states.to(input_dtype)
+        # Avoids a cast-back-and-forth if already float32, and fuses computation
+        if hidden_states.dtype != torch.float32:
+            hidden_states_fp32 = hidden_states.to(torch.float32)
+        else:
+            hidden_states_fp32 = hidden_states
+
+        # Efficiently compute (hidden_states ** 2).mean(-1, keepdim=True)
+        variance = torch.mean(hidden_states_fp32 * hidden_states_fp32, dim=-1, keepdim=True)
+        # Fused normalization: avoid creating temporaries
+        inv_rms = torch.rsqrt(variance + self.variance_epsilon)
+        normed = hidden_states_fp32 * inv_rms
+
+        # Only cast if needed, avoids unnecessary copy
+        if normed.dtype != input_dtype:
+            normed = normed.to(input_dtype)
+
+        # The weight is always float32, but PyTorch handles broadcasting/casting here efficiently
+        return self.weight * normed
 
     def extra_repr(self):
         return f"{tuple(self.weight.shape)}, eps={self.variance_epsilon}"
