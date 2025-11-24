@@ -18,6 +18,17 @@ import math
 from collections.abc import Iterable
 from typing import TYPE_CHECKING, Optional, Union
 
+from transformers.image_processing_utils import BaseImageProcessor, get_size_dict
+from transformers.image_utils import (
+    IMAGENET_STANDARD_MEAN,
+    IMAGENET_STANDARD_STD,
+    ChannelDimension,
+    ImageInput,
+    PILImageResampling,
+    infer_channel_dimension_format,
+    to_numpy_array,
+)
+
 from ...utils.import_utils import requires
 
 
@@ -423,12 +434,14 @@ class DPTImageProcessor(BaseImageProcessor):
         # All transformations expect numpy arrays.
         segmentation_map = to_numpy_array(segmentation_map)
         # Add an axis to the segmentation maps for transformations.
+        orig_shape = segmentation_map.shape
+        # Add an axis to the segmentation maps for transformations.
+        added_dimension = False
         if segmentation_map.ndim == 2:
             segmentation_map = segmentation_map[None, ...]
             added_dimension = True
             input_data_format = ChannelDimension.FIRST
         else:
-            added_dimension = False
             if input_data_format is None:
                 input_data_format = infer_channel_dimension_format(segmentation_map, num_channels=1)
         segmentation_map = self._preprocess(
@@ -446,7 +459,9 @@ class DPTImageProcessor(BaseImageProcessor):
         # Remove extra axis if added
         if added_dimension:
             segmentation_map = np.squeeze(segmentation_map, axis=0)
-        segmentation_map = segmentation_map.astype(np.int64)
+        # Only call astype if necessary
+        if segmentation_map.dtype != np.int64:
+            segmentation_map = segmentation_map.astype(np.int64, copy=False)
         return segmentation_map
 
     # Copied from transformers.models.beit.image_processing_beit.BeitImageProcessor.__call__
