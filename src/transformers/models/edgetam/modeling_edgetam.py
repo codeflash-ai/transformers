@@ -70,12 +70,27 @@ class EdgeTamLayerNorm(nn.LayerNorm):
             features: Tensor of shape (batch_size, channels, height, width) OR (batch_size, height, width, channels)
         """
         if self.data_format == "channels_first":
-            features = features.permute(0, 2, 3, 1)
-            features = super().forward(features)
-            features = features.permute(0, 3, 1, 2)
+            # Fast path for 4D tensors: apply LayerNorm with explicit dims to avoid permutation
+            if features.dim() == 4:
+                # nn.LayerNorm expects last dim == normalized_shape for standard call
+                # Features shape: (N, C, H, W), normalized_shape: C
+                # LayerNorm over channel dim (1)
+                # We fuse (H, W) as locations and run LayerNorm over C for each location
+                N, C, H, W = features.shape
+                # Reshape to (N * H * W, C)
+                features_reshaped = features.permute(0, 2, 3, 1).reshape(-1, C)
+                features_norm = super().forward(features_reshaped)
+                # Reshape back to (N, H, W, C)
+                features_norm = features_norm.view(N, H, W, C)
+                # Permute back to (N, C, H, W)
+                return features_norm.permute(0, 3, 1, 2)
+            else:
+                features = features.permute(0, 2, 3, 1)
+                features = super().forward(features)
+                features = features.permute(0, 3, 1, 2)
+                return features
         else:
-            features = super().forward(features)
-        return features
+            return super().forward(features)
 
 
 @dataclass
