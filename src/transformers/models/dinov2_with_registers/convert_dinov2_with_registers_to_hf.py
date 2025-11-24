@@ -74,47 +74,68 @@ def get_dinov2_with_registers_config(model_name, image_classifier=False):
 
 
 def create_rename_keys(config):
-    rename_keys = []
-    # fmt: off
+    # Preallocate list size for efficiency
+    base_keys = [
+        ("cls_token", "embeddings.cls_token"),
+        ("mask_token", "embeddings.mask_token"),
+        ("pos_embed", "embeddings.position_embeddings"),
+        ("register_tokens", "embeddings.register_tokens"),
+        ("patch_embed.proj.weight", "embeddings.patch_embeddings.projection.weight"),
+        ("patch_embed.proj.bias", "embeddings.patch_embeddings.projection.bias"),
+    ]
+    final_norm_keys = [
+        ("norm.weight", "layernorm.weight"),
+        ("norm.bias", "layernorm.bias"),
+    ]
 
-    # patch embedding layer
-    rename_keys.append(("cls_token", "embeddings.cls_token"))
-    rename_keys.append(("mask_token", "embeddings.mask_token"))
-    rename_keys.append(("pos_embed", "embeddings.position_embeddings"))
-    rename_keys.append(("register_tokens", "embeddings.register_tokens"))
-    rename_keys.append(("patch_embed.proj.weight", "embeddings.patch_embeddings.projection.weight"))
-    rename_keys.append(("patch_embed.proj.bias", "embeddings.patch_embeddings.projection.bias"))
+    # Calculate per-layer key count for allocation
+    if config.use_swiglu_ffn:
+        per_layer_count = 16
+    else:
+        per_layer_count = 16
 
-    for i in range(config.num_hidden_layers):
-        # layernorms
-        rename_keys.append((f"blocks.{i}.norm1.weight", f"encoder.layer.{i}.norm1.weight"))
-        rename_keys.append((f"blocks.{i}.norm1.bias", f"encoder.layer.{i}.norm1.bias"))
-        rename_keys.append((f"blocks.{i}.norm2.weight", f"encoder.layer.{i}.norm2.weight"))
-        rename_keys.append((f"blocks.{i}.norm2.bias", f"encoder.layer.{i}.norm2.bias"))
-        # MLP
-        if config.use_swiglu_ffn:
-            rename_keys.append((f"blocks.{i}.mlp.w12.weight", f"encoder.layer.{i}.mlp.w12.weight"))
-            rename_keys.append((f"blocks.{i}.mlp.w12.bias", f"encoder.layer.{i}.mlp.w12.bias"))
-            rename_keys.append((f"blocks.{i}.mlp.w3.weight", f"encoder.layer.{i}.mlp.w3.weight"))
-            rename_keys.append((f"blocks.{i}.mlp.w3.bias", f"encoder.layer.{i}.mlp.w3.bias"))
-        else:
-            rename_keys.append((f"blocks.{i}.mlp.fc1.weight", f"encoder.layer.{i}.mlp.fc1.weight"))
-            rename_keys.append((f"blocks.{i}.mlp.fc1.bias", f"encoder.layer.{i}.mlp.fc1.bias"))
-            rename_keys.append((f"blocks.{i}.mlp.fc2.weight", f"encoder.layer.{i}.mlp.fc2.weight"))
-            rename_keys.append((f"blocks.{i}.mlp.fc2.bias", f"encoder.layer.{i}.mlp.fc2.bias"))
-        # layerscale
-        rename_keys.append((f"blocks.{i}.ls1.gamma", f"encoder.layer.{i}.layer_scale1.lambda1"))
-        rename_keys.append((f"blocks.{i}.ls2.gamma", f"encoder.layer.{i}.layer_scale2.lambda1"))
-        # attention projection layer
-        rename_keys.append((f"blocks.{i}.attn.proj.weight", f"encoder.layer.{i}.attention.output.dense.weight"))
-        rename_keys.append((f"blocks.{i}.attn.proj.bias", f"encoder.layer.{i}.attention.output.dense.bias"))
+    total_layers = config.num_hidden_layers
+    total_keys = len(base_keys) + total_layers * per_layer_count + len(final_norm_keys)
 
-    # final layernorm
-    rename_keys.append(("norm.weight", "layernorm.weight"))
-    rename_keys.append(("norm.bias", "layernorm.bias"))
+    # Use list comprehension for better performance
+    keys = [*base_keys]
 
-    # fmt: on
-    return rename_keys
+    # Collect per-layer keys in a single pass using list concatenation
+    if config.use_swiglu_ffn:
+        for i in range(total_layers):
+            keys.extend([
+                (f"blocks.{i}.norm1.weight", f"encoder.layer.{i}.norm1.weight"),
+                (f"blocks.{i}.norm1.bias", f"encoder.layer.{i}.norm1.bias"),
+                (f"blocks.{i}.norm2.weight", f"encoder.layer.{i}.norm2.weight"),
+                (f"blocks.{i}.norm2.bias", f"encoder.layer.{i}.norm2.bias"),
+                (f"blocks.{i}.mlp.w12.weight", f"encoder.layer.{i}.mlp.w12.weight"),
+                (f"blocks.{i}.mlp.w12.bias", f"encoder.layer.{i}.mlp.w12.bias"),
+                (f"blocks.{i}.mlp.w3.weight", f"encoder.layer.{i}.mlp.w3.weight"),
+                (f"blocks.{i}.mlp.w3.bias", f"encoder.layer.{i}.mlp.w3.bias"),
+                (f"blocks.{i}.ls1.gamma", f"encoder.layer.{i}.layer_scale1.lambda1"),
+                (f"blocks.{i}.ls2.gamma", f"encoder.layer.{i}.layer_scale2.lambda1"),
+                (f"blocks.{i}.attn.proj.weight", f"encoder.layer.{i}.attention.output.dense.weight"),
+                (f"blocks.{i}.attn.proj.bias", f"encoder.layer.{i}.attention.output.dense.bias"),
+            ])
+    else:
+        for i in range(total_layers):
+            keys.extend([
+                (f"blocks.{i}.norm1.weight", f"encoder.layer.{i}.norm1.weight"),
+                (f"blocks.{i}.norm1.bias", f"encoder.layer.{i}.norm1.bias"),
+                (f"blocks.{i}.norm2.weight", f"encoder.layer.{i}.norm2.weight"),
+                (f"blocks.{i}.norm2.bias", f"encoder.layer.{i}.norm2.bias"),
+                (f"blocks.{i}.mlp.fc1.weight", f"encoder.layer.{i}.mlp.fc1.weight"),
+                (f"blocks.{i}.mlp.fc1.bias", f"encoder.layer.{i}.mlp.fc1.bias"),
+                (f"blocks.{i}.mlp.fc2.weight", f"encoder.layer.{i}.mlp.fc2.weight"),
+                (f"blocks.{i}.mlp.fc2.bias", f"encoder.layer.{i}.mlp.fc2.bias"),
+                (f"blocks.{i}.ls1.gamma", f"encoder.layer.{i}.layer_scale1.lambda1"),
+                (f"blocks.{i}.ls2.gamma", f"encoder.layer.{i}.layer_scale2.lambda1"),
+                (f"blocks.{i}.attn.proj.weight", f"encoder.layer.{i}.attention.output.dense.weight"),
+                (f"blocks.{i}.attn.proj.bias", f"encoder.layer.{i}.attention.output.dense.bias"),
+            ])
+
+    keys.extend(final_norm_keys)
+    return keys
 
 
 def rename_key(dct, old, new):
