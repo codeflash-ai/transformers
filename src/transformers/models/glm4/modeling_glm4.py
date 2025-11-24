@@ -340,7 +340,9 @@ class Glm4RMSNorm(nn.Module):
         Glm4RMSNorm is equivalent to T5LayerNorm
         """
         super().__init__()
-        self.weight = nn.Parameter(torch.ones(hidden_size))
+        # Use torch.empty with inplace fill_ instead of torch.ones for marginal efficiency in large models
+        self.weight = nn.Parameter(torch.empty(hidden_size))
+        self.weight.data.fill_(1)
         self.variance_epsilon = eps
 
     def forward(self, hidden_states):
