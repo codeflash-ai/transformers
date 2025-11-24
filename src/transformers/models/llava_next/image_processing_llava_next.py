@@ -311,7 +311,30 @@ class LlavaNextImageProcessor(BaseImageProcessor):
             return pad(image, padding, mode, constant_values, data_format, input_data_format)
 
         if input_data_format is None:
-            input_data_format = infer_channel_dimension_format(image)
+            # This is a hot path in profiling; avoid repeated work for typical shapes
+            ndim = image.ndim
+            shape = image.shape
+            if ndim == 3:
+                first_dim, last_dim = 0, 2
+            elif ndim == 4:
+                first_dim, last_dim = 1, 3
+            elif ndim == 5:
+                first_dim, last_dim = 2, 4
+            else:
+                # Fall back to original infer_channel_dimension_format for odd cases
+                input_data_format = infer_channel_dimension_format(image)
+            if input_data_format is None:  # Only run if not set above
+                num_channels = (1, 3)
+                if shape[first_dim] in num_channels and shape[last_dim] in num_channels:
+                    input_data_format = ChannelDimension.FIRST
+                elif shape[first_dim] in num_channels:
+                    input_data_format = ChannelDimension.FIRST
+                elif shape[last_dim] in num_channels:
+                    input_data_format = ChannelDimension.LAST
+                else:
+                    # Preserve exception behavior
+                    raise ValueError("Unable to infer channel dimension format")
+        # Use np.pad directly for known constant modes; use default constant_values for non-constant
         if mode == PaddingMode.CONSTANT:
             image = np.pad(image, padding, mode="constant", constant_values=constant_values)
         elif mode == PaddingMode.REFLECT:
@@ -322,9 +345,9 @@ class LlavaNextImageProcessor(BaseImageProcessor):
             image = np.pad(image, padding, mode="symmetric")
         else:
             raise ValueError(f"Invalid padding mode: {mode}")
-        image = (
-            to_channel_dimension_format(image, data_format, input_data_format) if data_format is not None else image
-        )
+        # Only convert channel format if needed
+        if data_format is not None:
+            image = to_channel_dimension_format(image, data_format, input_data_format)
         return image
 
     def _preprocess(
@@ -547,17 +570,19 @@ class LlavaNextImageProcessor(BaseImageProcessor):
         Returns:
             list[`np.ndarray`]: The padded images.
         """
-        max_patch = max(len(x) for x in pixel_values)
+        # Fast max computation, avoids repeated len() calls
+        arr_lens = [arr.shape[0] for arr in pixel_values]
+        max_patch = max(arr_lens)
+        # Use list comprehension, exploiting arr_lens for padding so shape[0] is fresh
         pixel_values = [
             self.pad(
                 image,
-                padding=((0, max_patch - image.shape[0]), (0, 0), (0, 0), (0, 0)),
+                padding=((0, max_patch - arr_len), (0, 0), (0, 0), (0, 0)),
                 data_format=data_format,
                 input_data_format=input_data_format,
             )
-            for image in pixel_values
+            for image, arr_len in zip(pixel_values, arr_lens)
         ]
-
         return pixel_values
 
     def preprocess(
