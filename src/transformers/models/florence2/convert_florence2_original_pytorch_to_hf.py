@@ -295,28 +295,23 @@ def multi_modal_projector():
     """
     Function helps in renaming final classification layer
     """
-    projector = []
-    projector.append(("image_projection", "model.multi_modal_projector.image_projection.weight"))
-    projector.append(("image_proj_norm.weight", "model.multi_modal_projector.image_proj_norm.weight"))
-    projector.append(("image_proj_norm.bias", "model.multi_modal_projector.image_proj_norm.bias"))
-    projector.append(
+    projector = [
+        ("image_projection", "model.multi_modal_projector.image_projection.weight"),
+        ("image_proj_norm.weight", "model.multi_modal_projector.image_proj_norm.weight"),
+        ("image_proj_norm.bias", "model.multi_modal_projector.image_proj_norm.bias"),
         (
             "image_pos_embed.row_embeddings.weight",
             "model.multi_modal_projector.image_position_embed.row_embeddings.weight",
-        )
-    )
-    projector.append(
+        ),
         (
             "image_pos_embed.column_embeddings.weight",
             "model.multi_modal_projector.image_position_embed.column_embeddings.weight",
-        )
-    )
-    projector.append(
+        ),
         (
             "visual_temporal_embed.pos_idx_to_embed",
             "model.multi_modal_projector.visual_temporal_embed.pos_idx_to_embed",
-        )
-    )
+        ),
+    ]
     return projector
 
 
