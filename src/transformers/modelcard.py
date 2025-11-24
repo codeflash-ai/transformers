@@ -342,11 +342,14 @@ def is_hf_dataset(dataset):
 
 def _get_mapping_values(mapping):
     result = []
+    append = result.append
+    extend = result.extend  # .extend is faster than += for lists
+    tuple_types = (tuple, list)
     for v in mapping.values():
-        if isinstance(v, (tuple, list)):
-            result += list(v)
+        if isinstance(v, tuple_types):
+            extend(v)
         else:
-            result.append(v)
+            append(v)
     return result
 
 
