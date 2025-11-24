@@ -586,9 +586,14 @@ def window_function(
     elif name in ["hamming", "hamming_window"]:
         window = np.hamming(length)
     elif name in ["hann", "hann_window"]:
-        window = np.hanning(length)
+        # Efficient Hann window generation
+        # np.hanning is slow. Use direct formula
+        n = np.arange(length)
+        window = np.sin(np.pi * n / (length - 1)) ** 2
     elif name == "povey":
-        window = np.power(np.hanning(length), 0.85)
+        # Povey window is Hann^0.85
+        n = np.arange(length)
+        window = np.sin(np.pi * n / (length - 1)) ** (2 * 0.85)
     else:
         raise ValueError(f"Unknown window function '{name}'")
 
@@ -765,32 +770,41 @@ def spectrogram(
 
     # split waveform into frames of frame_length size
     num_frames = int(1 + np.floor((waveform.size - frame_length) / hop_length))
+    if num_frames < 1:
+        return np.empty((0, (fft_length // 2) + 1 if onesided else fft_length), dtype=np.complex64)
 
-    num_frequency_bins = (fft_length // 2) + 1 if onesided else fft_length
-    spectrogram = np.empty((num_frames, num_frequency_bins), dtype=np.complex64)
+    stride = waveform.strides[0]
+    frames = np.lib.stride_tricks.as_strided(
+        waveform, shape=(num_frames, frame_length), strides=(hop_length * stride, stride)
+    ).copy()  # copy: ensure non-overlapping memory for later ops
+
+    # Remove DC offset (vectorized)
+    if remove_dc_offset:
+        frames = frames - frames.mean(axis=1, keepdims=True)
+
+    # Dither (vectorized)
+    if dither != 0.0:
+        frames += dither * np.random.randn(*frames.shape)
+
+    # Preemphasis (vectorized)
+    if preemphasis is not None:
+        frames[:, 1:] -= preemphasis * frames[:, :-1]
+        frames[:, 0] *= 1 - preemphasis
+
+    # Windowing (vectorized)
+    frames *= window
+
+    # FFT (batch) - use rfft/fft to all frames at once
 
     # rfft is faster than fft
     fft_func = np.fft.rfft if onesided else np.fft.fft
-    buffer = np.zeros(fft_length)
+    if onesided:
+        spectrogram = fft_func(frames, n=fft_length, axis=1)
+    else:
+        spectrogram = fft_func(frames, n=fft_length, axis=1)
+    spectrogram = spectrogram.astype(np.complex64)
 
-    timestep = 0
-    for frame_idx in range(num_frames):
-        buffer[:frame_length] = waveform[timestep : timestep + frame_length]
-
-        if dither != 0.0:
-            buffer[:frame_length] += dither * np.random.randn(frame_length)
-
-        if remove_dc_offset:
-            buffer[:frame_length] = buffer[:frame_length] - buffer[:frame_length].mean()
-
-        if preemphasis is not None:
-            buffer[1:frame_length] -= preemphasis * buffer[: frame_length - 1]
-            buffer[0] *= 1 - preemphasis
-
-        buffer[:frame_length] *= window
-
-        spectrogram[frame_idx] = fft_func(buffer)
-        timestep += hop_length
+    # note: ** is much faster than np.power
 
     # note: ** is much faster than np.power
     if power is not None:
