@@ -157,8 +157,10 @@ def find_next_punctuation(text: str, start_idx=0):
             Index where to start
     """
 
+    # Optimize: use a set for faster membership testing (O(1) vs O(N) for list)
+    punctuations = {".", "?", "!", "\n"}
     for i in range(start_idx, len(text)):
-        if text[i] in [".", "?", "!", "\n"]:
+        if text[i] in punctuations:
             return i
 
     return None
