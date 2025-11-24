@@ -311,10 +311,16 @@ class Glm4RotaryEmbedding(nn.Module):
 
         attention_factor = 1.0  # Unused in this type of RoPE
 
-        # Compute the inverse frequencies
-        inv_freq = 1.0 / (
-            base ** (torch.arange(0, dim, 2, dtype=torch.int64).to(device=device, dtype=torch.float) / dim)
-        )
+        # OPTIMIZATION: Use torch.float32 from the start and avoid .to() on arange result
+        # Pre-compute division range as float32 and reuse base when possible
+        idxs = torch.arange(0, dim, 2, dtype=torch.float32, device=device)
+        arg = idxs / float(dim)
+        base = float(base)  # ensure float type to enable efficient power calculation
+
+        # OPTIMIZATION: Use torch.pow instead of ** for batch computation
+        pow_result = torch.pow(base, arg)
+        inv_freq = torch.reciprocal(pow_result)
+
         return inv_freq, attention_factor
 
     @torch.no_grad()
