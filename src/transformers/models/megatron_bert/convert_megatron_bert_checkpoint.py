@@ -76,15 +76,19 @@ def fix_query_key_value_ordering(param, checkpoint_version, num_splits, num_head
     if checkpoint_version == 1.0:
         # version 1.0 stores [num_heads * hidden_size * num_splits, :]
         saved_shape = (num_heads, hidden_size, num_splits) + input_shape[1:]
-        param = param.view(*saved_shape)
+        # .reshape is typically more efficient than .view for non-contiguous tensors
+        param = param.reshape(*saved_shape)
         param = param.transpose(0, 2)
         param = param.transpose(1, 2).contiguous()
+        param = param.reshape(*input_shape)
     elif checkpoint_version >= 2.0:
         # other versions store [num_heads * num_splits * hidden_size, :]
         saved_shape = (num_heads, num_splits, hidden_size) + input_shape[1:]
-        param = param.view(*saved_shape)
-        param = param.transpose(0, 1).contiguous()
-    param = param.view(*input_shape)
+        param = param.reshape(*saved_shape)
+        # Instead of .view then .contiguous, use .transpose then .reshape to avoid potentially unnecessary contiguous copy
+        param = param.transpose(0, 1)
+        param = param.reshape(*input_shape)
+    # For versions <1.0 or otherwise, avoids unnecessary reshape.
     return param
 
 
@@ -115,11 +119,7 @@ def convert_megatron_checkpoint(args, input_state_dict, config):
     heads = config.num_attention_heads
     # The hidden_size per head.
     hidden_size_per_head = config.hidden_size // heads
-    # Megatron-LM checkpoint version
-    if "checkpoint_version" in input_state_dict:
-        checkpoint_version = input_state_dict["checkpoint_version"]
-    else:
-        checkpoint_version = 0.0
+    checkpoint_version = input_state_dict.get("checkpoint_version", 0.0)
 
     # The model.
     model = input_state_dict["model"]
@@ -130,8 +130,9 @@ def convert_megatron_checkpoint(args, input_state_dict, config):
 
     # The word embeddings.
     word_embeddings = embeddings["word_embeddings"]["weight"]
-    # Truncate the embedding table to vocab_size rows.
-    word_embeddings = word_embeddings[: config.vocab_size, :]
+    # Optimization: If vocab_size == word_embeddings.size(0), skip slicing
+    if word_embeddings.size(0) > config.vocab_size:
+        word_embeddings = word_embeddings[: config.vocab_size, :]
     # Store the word embeddings.
     output_state_dict["bert.embeddings.word_embeddings.weight"] = word_embeddings
 
@@ -146,8 +147,8 @@ def convert_megatron_checkpoint(args, input_state_dict, config):
     # Store the position embeddings.
     output_state_dict["bert.embeddings.token_type_embeddings.weight"] = tokentype_embeddings
 
-    # The transformer.
-    transformer = lm["transformer"] if "transformer" in lm else lm["encoder"]
+    # Avoid re.compile in loop -- compile regex just once
+    transformer = lm.get("transformer", lm.get("encoder"))
 
     # The regex to extract layer names.
     layer_re = re.compile(r"layers\.(\d+)\.([a-z0-9_.]+)\.([a-z]+)")
@@ -185,7 +186,7 @@ def convert_megatron_checkpoint(args, input_state_dict, config):
         # For layernorm(s), simply store the layer norm.
         if op_name.endswith("layernorm"):
             ln_name = "attention.ln" if op_name.startswith("input") else "ln"
-            output_state_dict[layer_name + "." + ln_name + "." + weight_or_bias] = val
+            output_state_dict[f"{layer_name}.{ln_name}.{weight_or_bias}"] = val
 
         # Transpose the QKV matrix.
         elif (
@@ -230,7 +231,7 @@ def convert_megatron_checkpoint(args, input_state_dict, config):
         # Copy weights and biases as is.
         elif weight_or_bias in ["weight", "bias"]:
             out_name = megatron_to_transformers[op_name]
-            output_state_dict[layer_name + out_name + weight_or_bias] = val
+            output_state_dict[f"{layer_name}{out_name}{weight_or_bias}"] = val
 
     # The final layernorm.
     output_state_dict["bert.encoder.ln.weight"] = transformer["final_layernorm.weight"]
