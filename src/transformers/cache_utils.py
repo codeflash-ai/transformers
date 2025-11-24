@@ -770,8 +770,9 @@ class Cache:
         """
         # In this case, the `layers` were not provided, and we must append as much as `layer_idx`
         if self.layer_class_to_replicate is not None:
-            while len(self.layers) <= layer_idx:
-                self.layers.append(self.layer_class_to_replicate())
+            missing = layer_idx + 1 - len(self.layers)
+            if missing > 0:
+                self.layers.extend([self.layer_class_to_replicate() for _ in range(missing)])
 
         if self.offloading:
             # Wait for the stream to finish if needed, and start prefetching the next layer
