@@ -133,19 +133,40 @@ def eager_attention_forward(
     dropout: float = 0.0,
     **kwargs: Unpack[TransformersKwargs],
 ):
-    key_states = repeat_kv(key, module.num_key_value_groups)
-    value_states = repeat_kv(value, module.num_key_value_groups)
+    # Avoid unnecessary function lookups by localizing
+    F = nn.functional
 
-    attn_weights = torch.matmul(query, key_states.transpose(2, 3)) * scaling
+    num_key_value_groups = module.num_key_value_groups
+
+    # Use local vars for efficiency and readability
+    key_states = repeat_kv(key, num_key_value_groups)
+    value_states = repeat_kv(value, num_key_value_groups)
+
+    # Avoid extra attribute lookup
+    q, k = query, key_states
+    attn_weights = torch.matmul(q, k.transpose(2, 3))
+    if scaling != 1.0:
+        # Only multiply by scaling if required
+        attn_weights = attn_weights * scaling
+
     if attention_mask is not None:
-        causal_mask = attention_mask[:, :, :, : key_states.shape[-2]]
-        attn_weights = attn_weights + causal_mask
+        # Avoid attribute access in loop, also cut by shape directly
+        attn_weights = attn_weights + attention_mask[:, :, :, : k.shape[-2]]
 
-    attn_weights = nn.functional.softmax(attn_weights, dim=-1, dtype=torch.float32).to(query.dtype)
-    attn_weights = nn.functional.dropout(attn_weights, p=dropout, training=module.training)
+    # Use direct dtype (torch.float32) for softmax, already done in original code
+    attn_weights = F.softmax(attn_weights, dim=-1, dtype=torch.float32)
+    # Avoid an unnecessary .to if already correct dtype
+    if attn_weights.dtype != q.dtype:
+        attn_weights = attn_weights.to(q.dtype)
+
+    # Apply dropout only if needed (skip calculation if dropout==0.0 or not training)
+    if dropout > 0.0 and module.training:
+        attn_weights = F.dropout(attn_weights, p=dropout, training=True)
+    # else skip dropout call
+
+    # Main attention output: localized variable for perf
     attn_output = torch.matmul(attn_weights, value_states)
     attn_output = attn_output.transpose(1, 2).contiguous()
-
     return attn_output, attn_weights
 
 
