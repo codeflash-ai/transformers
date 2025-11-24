@@ -176,16 +176,43 @@ class WhisperFeatureExtractor(SequenceFeatureExtractor):
         """
         if attention_mask is not None:
             attention_mask = np.array(attention_mask, np.int32)
-            normed_input_values = []
 
-            for vector, length in zip(input_values, attention_mask.sum(-1)):
-                normed_slice = (vector - vector[:length].mean()) / np.sqrt(vector[:length].var() + 1e-7)
-                if length < normed_slice.shape[0]:
-                    normed_slice[length:] = padding_value
+            try:
+                input_arr = np.stack(input_values, axis=0)
+                lengths = attention_mask.sum(-1)
 
-                normed_input_values.append(normed_slice)
+                means = np.zeros(len(input_values), dtype=input_arr.dtype)
+                variances = np.zeros(len(input_values), dtype=input_arr.dtype)
+
+                for i in range(len(input_values)):
+                    length = lengths[i]
+                    if length > 0:
+                        vec_slice = input_arr[i, :length]
+                        means[i] = vec_slice.mean()
+                        variances[i] = vec_slice.var()
+
+                normed_arr = (input_arr - means[:, None]) / np.sqrt(variances[:, None] + 1e-7)
+
+                for i, length in enumerate(lengths):
+                    if length < input_arr.shape[1]:
+                        normed_arr[i, length:] = padding_value
+
+                return [normed_arr[i] for i in range(len(normed_arr))]
+            except Exception:
+                normed_input_values = []
+                for vector, length in zip(input_values, attention_mask.sum(-1)):
+                    normed_slice = (vector - vector[:length].mean()) / np.sqrt(vector[:length].var() + 1e-7)
+                    if length < normed_slice.shape[0]:
+                        normed_slice[length:] = padding_value
+                    normed_input_values.append(normed_slice)
         else:
-            normed_input_values = [(x - x.mean()) / np.sqrt(x.var() + 1e-7) for x in input_values]
+            try:
+                input_arr = np.stack(input_values, axis=0)
+                means = input_arr.mean(axis=1, keepdims=True)
+                normed_arr = (input_arr - means) / np.sqrt(input_arr.var(axis=1, keepdims=True) + 1e-7)
+                return [normed_arr[i] for i in range(normed_arr.shape[0])]
+            except Exception:
+                normed_input_values = [(x - x.mean()) / np.sqrt(x.var() + 1e-7) for x in input_values]
 
         return normed_input_values
 
