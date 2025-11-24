@@ -45,7 +45,11 @@ def make_divisible(value: int, divisor: int = 8, min_value: Optional[int] = None
     """
     if min_value is None:
         min_value = divisor
-    new_value = max(min_value, int(value + divisor / 2) // divisor * divisor)
+
+    # Compute the new value with integer arithmetic for efficiency
+    half_divisor = divisor // 2
+    new_value = max(min_value, ((value + half_divisor) // divisor) * divisor)
+    # Make sure that round down does not go down by more than 10%.
     # Make sure that round down does not go down by more than 10%.
     if new_value < 0.9 * value:
         new_value += divisor
