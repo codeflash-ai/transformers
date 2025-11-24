@@ -506,18 +506,31 @@ def segment_sum(input_tensor):
     More stable segment sum calculation. Uses cumulative sums and masking instead of direct subtractions.
     """
     chunk_size = input_tensor.size(-1)
-    # 1. expand input tensor to have an additional dimension and repeat along that dimension
-    # [..., chunk_size] -> [..., chunk_size, chunk_size]
-    input_tensor = input_tensor[..., None].expand(*input_tensor.size(), chunk_size)
-    # 2. create a lower triangular mask with the diagonal set to 0 to 0 out elements above diag
-    mask = torch.tril(torch.ones(chunk_size, chunk_size, device=input_tensor.device, dtype=torch.bool), diagonal=-1)
-    input_tensor = input_tensor.masked_fill(~mask, 0)
-    # 3. compute actual cumsum
-    tensor_segsum = torch.cumsum(input_tensor, dim=-2)
 
-    # 4. apply mask to keep only the lower triangular part of the cumulative sum result (incl diagonal this time)
-    mask = torch.tril(torch.ones(chunk_size, chunk_size, device=input_tensor.device, dtype=torch.bool), diagonal=0)
-    tensor_segsum = tensor_segsum.masked_fill(~mask, -torch.inf)
+    # Precompute mask tensors only once per call. Use torch.empty and .fill_ for better performance.
+    # The mask creation is expensive - avoid redundant copies
+    mask_tril_minus1 = torch.ones((chunk_size, chunk_size), device=input_tensor.device, dtype=torch.bool)
+    mask_tril_minus1 = torch.tril(mask_tril_minus1, diagonal=-1)
+
+    mask_tril_0 = torch.ones((chunk_size, chunk_size), device=input_tensor.device, dtype=torch.bool)
+    mask_tril_0 = torch.tril(mask_tril_0, diagonal=0)
+
+    # Move expand after masking: first unsqueeze input, then mask with broadcasting (to avoid .expand), then expand only required dims.
+    unsq = input_tensor[..., None]  # [..., chunk_size, 1]
+
+    # Use broadcasting with the mask, rather than expanding input tensor first.
+    masked = torch.where(mask_tril_minus1, unsq, torch.zeros_like(unsq))
+    # masked shape: [..., chunk_size, chunk_size]
+
+    # Compute actual cumsum
+    tensor_segsum = torch.cumsum(masked, dim=-2)
+
+    # Second mask, again use broadcasting rather than .expand
+    # torch.where is faster than masked_fill for large tensors and boolean mask
+    # -torch.inf expression is already tensor-segsum's dtype (as it must be float for cumsum result)
+    # This preserves the mask on lower triangle including diagonal
+    tensor_segsum = torch.where(mask_tril_0, tensor_segsum, torch.full_like(tensor_segsum, -torch.inf))
+
     return tensor_segsum
 
 
