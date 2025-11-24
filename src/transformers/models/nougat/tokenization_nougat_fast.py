@@ -36,6 +36,10 @@ if is_levenshtein_available():
 if is_nltk_available():
     import nltk
 
+_list_bullet_re = re.compile(r". ([-*]) ")
+
+_nesting_num_re = re.compile(r"^[\dixv]+((?:\.[\dixv])?)+$", flags=re.IGNORECASE | re.MULTILINE)
+
 
 logger = logging.get_logger(__name__)
 
@@ -115,33 +119,48 @@ def normalize_list_like_lines(generation):
 
     lines = generation.split("\n")
     output_lines = []
+    lines_len = len(lines)
+
+    # Use local assignment for fast lookup
+    list_bullet_re = _list_bullet_re
+    nesting_num_re = _nesting_num_re
+
     for line_no, line in enumerate(lines):
-        match = re.search(r". ([-*]) ", line)
+        match = list_bullet_re.search(line)
         if not match or line[0] not in ("-", "*"):
             output_lines.append(line)
             continue  # Doesn't fit the pattern we want, no changes
         delim = match.group(1) + " "
         splits = line.split(delim)[1:]
-        replacement = ""
+        if not splits:
+            output_lines.append(line)
+            continue
+
+        replacement_lines = []
         delim1 = line[0] + " "
 
+        tab = "\t"
+
         for i, item in enumerate(splits):
-            level = 0
-            potential_numeral, _, rest = item.strip().partition(" ")
+            item_stripped = item.strip()
+            potential_numeral, sep, rest = item_stripped.partition(" ")
             if not rest:
                 continue
             # Infer current nesting level based on detected numbering
-            if re.match(r"^[\dixv]+((?:\.[\dixv])?)+$", potential_numeral, flags=re.IGNORECASE | re.MULTILINE):
+            if nesting_num_re.match(potential_numeral):
                 level = potential_numeral.count(".")
+            else:
+                level = 0
 
-            replacement += (
-                ("\n" if i > 0 else "") + ("\t" * level) + (delim if i > 0 or line_no == 0 else delim1) + item.strip()
-            )
+            prefix = delim if i > 0 or line_no == 0 else delim1
+            # Avoid string concat in loop, use list and join at end
+            replacement_lines.append(("\n" if i > 0 else "") + (tab * level) + prefix + item_stripped)
 
-        if line_no == len(lines) - 1:  # If this is the last line in the generation
-            replacement += "\n"  # Add an empty line to the end of the generation
+        # If this is the last line in the generation
+        if line_no == lines_len - 1:
+            replacement_lines.append("\n")
 
-        output_lines.append(replacement)
+        output_lines.append("".join(replacement_lines))
 
     return "\n".join(output_lines)
 
