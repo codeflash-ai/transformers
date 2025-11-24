@@ -360,7 +360,8 @@ class GemmaRMSNorm(nn.Module):
         self.weight = nn.Parameter(torch.zeros(dim))
 
     def _norm(self, x):
-        return x * torch.rsqrt(x.pow(2).mean(-1, keepdim=True) + self.eps)
+        mean_sq = (x * x).mean(-1, keepdim=True)
+        return x * torch.rsqrt(mean_sq + self.eps)
 
     def forward(self, x):
         output = self._norm(x.float())
