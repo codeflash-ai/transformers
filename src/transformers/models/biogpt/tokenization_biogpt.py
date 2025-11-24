@@ -119,7 +119,9 @@ class BioGptTokenizer(PreTrainedTokenizer):
             self.encoder = json.load(vocab_handle)
         self.decoder = {v: k for k, v in self.encoder.items()}
         with open(merges_file, encoding="utf-8") as merges_handle:
-            merges = merges_handle.read().split("\n")[:-1]
+            merges = merges_handle.read().splitlines()
+        if merges and merges[-1] == "":
+            merges = merges[:-1]
         merges = [tuple(merge.split()[:2]) for merge in merges]
         self.bpe_ranks = dict(zip(merges, range(len(merges))))
         self.cache = {}
@@ -142,12 +144,11 @@ class BioGptTokenizer(PreTrainedTokenizer):
         return dict(self.encoder, **self.added_tokens_encoder)
 
     def moses_tokenize(self, text, lang):
-        if lang not in self.cache_moses_tokenizer:
-            moses_tokenizer = self.sm.MosesTokenizer(lang=lang)
-            self.cache_moses_tokenizer[lang] = moses_tokenizer
-        return self.cache_moses_tokenizer[lang].tokenize(
-            text, aggressive_dash_splits=True, return_str=False, escape=True
-        )
+        tokenizer = self.cache_moses_tokenizer.get(lang)
+        if tokenizer is None:
+            tokenizer = self.sm.MosesTokenizer(lang=lang)
+            self.cache_moses_tokenizer[lang] = tokenizer
+        return tokenizer.tokenize(text, aggressive_dash_splits=True, return_str=False, escape=True)
 
     def moses_detokenize(self, tokens, lang):
         if lang not in self.cache_moses_detokenizer:
@@ -156,60 +157,78 @@ class BioGptTokenizer(PreTrainedTokenizer):
         return self.cache_moses_detokenizer[lang].detokenize(tokens)
 
     def bpe(self, token):
+        # Fast path for already cached tokens
+        cached = self.cache.get(token, None)
+        if cached is not None:
+            return cached
+
         word = tuple(token[:-1]) + (token[-1] + "</w>",)
-        if token in self.cache:
-            return self.cache[token]
         pairs = get_pairs(word)
 
         if not pairs:
-            return token + "</w>"
+            out_word = token + "</w>"
+            self.cache[token] = out_word
+            return out_word
 
-        while True:
-            bigram = min(pairs, key=lambda pair: self.bpe_ranks.get(pair, float("inf")))
-            if bigram not in self.bpe_ranks:
+        bpe_ranks = self.bpe_ranks
+        cache = self.cache
+
+        while pairs:
+            # Find best possible bigram (lowest rank)
+            min_rank = float("inf")
+            min_bigram = None
+            for pair in pairs:
+                rank = bpe_ranks.get(pair)
+                if rank is not None and rank < min_rank:
+                    min_rank = rank
+                    min_bigram = pair
+            if min_bigram is None:
                 break
-            first, second = bigram
+            first, second = min_bigram
             new_word = []
             i = 0
-            while i < len(word):
+            n = len(word)
+            while i < n:
+                # Replace all occurrences of the bigram
                 try:
                     j = word.index(first, i)
                 except ValueError:
                     new_word.extend(word[i:])
                     break
-                else:
-                    new_word.extend(word[i:j])
-                    i = j
-
-                if word[i] == first and i < len(word) - 1 and word[i + 1] == second:
+                new_word.extend(word[i:j])
+                i = j
+                # If next is the 'second', merge
+                if i < (n - 1) and word[i] == first and word[i + 1] == second:
                     new_word.append(first + second)
                     i += 2
                 else:
                     new_word.append(word[i])
                     i += 1
-            new_word = tuple(new_word)
-            word = new_word
+            word = tuple(new_word)
             if len(word) == 1:
                 break
-            else:
-                pairs = get_pairs(word)
-        word = " ".join(word)
-        if word == "\n  </w>":
-            word = "\n</w>"
-        self.cache[token] = word
-        return word
+            pairs = get_pairs(word)
+        out_word = " ".join(word)
+        # Special case normalization as in original
+        if out_word == "\n  </w>":
+            out_word = "\n</w>"
+        cache[token] = out_word
+        return out_word
 
     def _tokenize(self, text, bypass_tokenizer=False):
         """Returns a tokenized string."""
         if bypass_tokenizer:
-            text = text.split()
+            tokens = text.split()
         else:
-            text = self.moses_tokenize(text, self.lang)
+            tokens = self.moses_tokenize(text, self.lang)
 
         split_tokens = []
-        for token in text:
+        extend = split_tokens.extend  # Method lookup optimization
+        bpe = self.bpe  # Method lookup optimization
+
+        for token in tokens:
             if token:
-                split_tokens.extend(list(self.bpe(token).split(" ")))
+                extend(bpe(token).split(" "))
 
         return split_tokens
 
