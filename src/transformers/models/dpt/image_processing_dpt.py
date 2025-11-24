@@ -18,6 +18,8 @@ import math
 from collections.abc import Iterable
 from typing import TYPE_CHECKING, Optional, Union
 
+from transformers.image_utils import ChannelDimension, get_image_size
+
 from ...utils.import_utils import requires
 
 
@@ -91,17 +93,6 @@ def get_resize_output_image_size(
     multiple: int,
     input_data_format: Optional[Union[str, ChannelDimension]] = None,
 ) -> tuple[int, int]:
-    def constrain_to_multiple_of(val, multiple, min_val=0, max_val=None):
-        x = round(val / multiple) * multiple
-
-        if max_val is not None and x > max_val:
-            x = math.floor(val / multiple) * multiple
-
-        if x < min_val:
-            x = math.ceil(val / multiple) * multiple
-
-        return x
-
     output_size = (output_size, output_size) if isinstance(output_size, int) else output_size
 
     input_height, input_width = get_image_size(input_image, input_data_format)
@@ -120,10 +111,22 @@ def get_resize_output_image_size(
             # fit height
             scale_width = scale_height
 
-    new_height = constrain_to_multiple_of(scale_height * input_height, multiple=multiple)
-    new_width = constrain_to_multiple_of(scale_width * input_width, multiple=multiple)
+    new_height = _constrain_to_multiple_of(scale_height * input_height, multiple=multiple)
+    new_width = _constrain_to_multiple_of(scale_width * input_width, multiple=multiple)
 
     return (new_height, new_width)
+
+
+def _constrain_to_multiple_of(val, multiple, min_val=0, max_val=None):
+    x = round(val / multiple) * multiple
+
+    if max_val is not None and x > max_val:
+        x = math.floor(val / multiple) * multiple
+
+    if x < min_val:
+        x = math.ceil(val / multiple) * multiple
+
+    return x
 
 
 @requires(backends=("vision",))
