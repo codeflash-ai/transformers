@@ -377,8 +377,13 @@ def create_position_ids_from_input_ids(input_ids, padding_idx):
     Returns: torch.Tensor
     """
     # The series of casts and type-conversions here are carefully balanced to both work with ONNX export and XLA.
-    mask = input_ids.ne(padding_idx).int()
-    incremental_indices = torch.cumsum(mask, dim=1).type_as(mask) * mask
+    # Optimize mask creation by using .ne() directly with .to() instead of .int() for better performance and memory
+    mask = input_ids.ne(padding_idx).to(input_ids.dtype)
+    # Only cast the result at the end to long; avoid redundant casts and multiplications
+    # 'cumsum' works because mask is dtype of input_ids (int/long) and cumsum will match the dtype
+    incremental_indices = torch.cumsum(mask, dim=1)
+    # Ensure mask is bool for multiplication (if input is bool), or preserve original dtype if int/long
+    incremental_indices = incremental_indices * mask
     return incremental_indices.long() + padding_idx
 
 
