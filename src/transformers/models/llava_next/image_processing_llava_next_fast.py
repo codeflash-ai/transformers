@@ -104,11 +104,21 @@ class LlavaNextImageProcessorFast(BaseImageProcessorFast):
         return resized_image
 
     def _get_padding_size(self, original_resolution: tuple, target_resolution: tuple):
-        original_height, original_width = original_resolution
-        target_height, target_width = target_resolution
-        paste_x, r_x = divmod(target_width - original_width, 2)
-        paste_y, r_y = divmod(target_height - original_height, 2)
-        return [paste_x, paste_y, paste_x + r_x, paste_y + r_y]
+        # Optimize tuple extraction (local tuple unpack is slightly faster than repeated indexing)
+        # and arithmetic by reusing values.
+        oh, ow = original_resolution
+        th, tw = target_resolution
+
+        dx = tw - ow
+        dy = th - oh
+
+        # Avoid divmod function call overhead by using integer division and modulo
+        px = dx // 2
+        rx = dx % 2
+        py = dy // 2
+        ry = dy % 2
+
+        return [px, py, px + rx, py + ry]
 
     def _pad_for_patching(
         self, image: "torch.Tensor", target_resolution: tuple, input_data_format: ChannelDimension
