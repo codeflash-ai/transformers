@@ -86,9 +86,9 @@ def safe_load(path: str) -> dict[str, torch.Tensor]:
 
 def _rewrite_weight_norm(key: str) -> str:
     if key.endswith("weight_g"):
-        return key[: -len("weight_g")] + "parametrizations.weight.original0"
+        return f"{key[:-8]}parametrizations.weight.original0"
     if key.endswith("weight_v"):
-        return key[: -len("weight_v")] + "parametrizations.weight.original1"
+        return f"{key[:-8]}parametrizations.weight.original1"
     return key
 
 
