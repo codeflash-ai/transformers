@@ -321,11 +321,11 @@ def multi_modal_projector():
 
 
 def language_model(state_dict):
-    language_state_dict_keys = []
-    for key in state_dict.keys():
-        if key.startswith("language_model.model") and "lm_head" not in key:
-            new_key = key.replace("language_model.model.", "model.language_model.")
-            language_state_dict_keys.append((key, new_key))
+    language_state_dict_keys = [
+        (key, key.replace("language_model.model.", "model.language_model."))
+        for key in state_dict
+        if key.startswith("language_model.model") and "lm_head" not in key
+    ]
     language_state_dict_keys.append(("language_model.lm_head.weight", "lm_head.weight"))
     return language_state_dict_keys
 
