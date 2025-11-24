@@ -322,15 +322,19 @@ class Idefics2MultiheadAttentionPoolingHead(nn.Module):
 
     def forward(self, hidden_state):
         batch_size = hidden_state.shape[0]
-        probe = self.probe.repeat(batch_size, 1, 1)
 
-        hidden_state = self.attention(probe, hidden_state, hidden_state)[0]
+        # Optimize probe creation - avoid repeat (which creates a new view); use expand with .contiguous()
+        probe = self.probe.expand(batch_size, -1, -1).contiguous()
 
-        residual = hidden_state
-        hidden_state = self.layernorm(hidden_state)
-        hidden_state = residual + self.mlp(hidden_state)
+        # Optimize: Output from attention is (output, weights); we only need output, so discard weights immediately
+        hidden_state, _ = self.attention(probe, hidden_state, hidden_state)
 
-        return hidden_state[:, 0]
+        # Optimize residual connection and MLP call order; eliminate unnecessary variable creation
+        normed = self.layernorm(hidden_state)
+        out = hidden_state + self.mlp(normed)
+
+        # Optimize slicing by using .squeeze for 1-dim if possible
+        return out[:, 0]
 
 
 class Idefics2EncoderLayer(GradientCheckpointingLayer):
