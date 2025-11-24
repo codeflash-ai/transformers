@@ -546,16 +546,30 @@ class BeitRelativePositionBias(nn.Module):
         # cls to token & token 2 cls & cls to cls
         # get pair-wise relative position index for each token inside the window
         window_area = window_size[0] * window_size[1]
-        grid = torch.meshgrid(torch.arange(window_size[0]), torch.arange(window_size[1]), indexing="ij")
-        coords = torch.stack(grid)  # 2, Wh, Ww
-        coords_flatten = torch.flatten(coords, 1)  # 2, Wh*Ww
-        relative_coords = coords_flatten[:, :, None] - coords_flatten[:, None, :]  # 2, Wh*Ww, Wh*Ww
-        relative_coords = relative_coords.permute(1, 2, 0).contiguous()  # Wh*Ww, Wh*Ww, 2
-        relative_coords[:, :, 0] += window_size[0] - 1  # shift to start from 0
-        relative_coords[:, :, 1] += window_size[1] - 1
-        relative_coords[:, :, 0] *= 2 * window_size[1] - 1
-        relative_position_index = torch.zeros(size=(window_area + 1,) * 2, dtype=relative_coords.dtype)
-        relative_position_index[1:, 1:] = relative_coords.sum(-1)  # Wh*Ww, Wh*Ww
+        wh, ww = window_size
+
+        # Precompute the coordinate meshgrid and flatten using efficient operations
+        coords_h = torch.arange(wh)
+        coords_w = torch.arange(ww)
+        coords_flatten_0 = coords_h.repeat_interleave(ww)
+        coords_flatten_1 = coords_w.repeat(wh)
+        # Both are shape (wh*ww,)
+
+        # Compute relative coordinates efficiently via broadcasting
+        # row/col diffs for all pairs simultaneously
+        rh = coords_flatten_0[:, None] - coords_flatten_0[None, :]  # (wh*ww, wh*ww)
+        rw = coords_flatten_1[:, None] - coords_flatten_1[None, :]  # (wh*ww, wh*ww)
+
+        # Shift by window size offsets and compute single index for 2D position
+        rh += wh - 1
+        rw += ww - 1
+        rh *= 2 * ww - 1
+        relative_coords_sum = rh + rw  # (wh*ww, wh*ww)
+        # Insert zeros at the top row and column for cls tokens
+        # Allocate final tensor and fill in as appropriate
+        dtype = relative_coords_sum.dtype
+        relative_position_index = torch.zeros((window_area + 1, window_area + 1), dtype=dtype)
+        relative_position_index[1:, 1:] = relative_coords_sum
         relative_position_index[0, 0:] = num_relative_distance - 3
         relative_position_index[0:, 0] = num_relative_distance - 2
         relative_position_index[0, 0] = num_relative_distance - 1
