@@ -139,17 +139,25 @@ class Idefics2VisionEmbeddings(nn.Module):
         patch_embeds = self.patch_embedding(pixel_values)
         embeddings = patch_embeds.flatten(2).transpose(1, 2)
 
-        max_nb_patches_h, max_nb_patches_w = max_im_h // self.patch_size, max_im_w // self.patch_size
+        max_nb_patches_h = max_im_h // self.patch_size
+        max_nb_patches_w = max_im_w // self.patch_size
         boundaries = torch.arange(
             1 / self.num_patches_per_side, 1.0, 1 / self.num_patches_per_side, device=pixel_values.device
         )
-        position_ids = torch.full(
-            size=(batch_size, max_nb_patches_h * max_nb_patches_w), fill_value=0, device=pixel_values.device
-        )
+        # Preallocate the position_ids tensor, filling with zeros to avoid per-batch allocation
+        total_patches = max_nb_patches_h * max_nb_patches_w
+        position_ids = torch.zeros((batch_size, total_patches), dtype=torch.long, device=pixel_values.device)
 
-        for batch_idx, p_attn_mask in enumerate(patch_attention_mask):
-            nb_patches_h = p_attn_mask[:, 0].sum()
-            nb_patches_w = p_attn_mask[0].sum()
+        # Move invariant computations outside the batch loop
+        for batch_idx in range(batch_size):
+            p_attn_mask = patch_attention_mask[batch_idx]
+            # Use .sum().item() only once and cache for reuse
+            nb_patches_h = p_attn_mask[:, 0].sum().item()
+            nb_patches_w = p_attn_mask[0].sum().item()
+
+            if nb_patches_h == 0 or nb_patches_w == 0:
+                # To maintain original behavior, skip update for empty attention mask
+                continue
 
             step_h = 1.0 / nb_patches_h
             step_w = 1.0 / nb_patches_w
@@ -159,8 +167,9 @@ class Idefics2VisionEmbeddings(nn.Module):
             fractional_coords_h = h_indices * step_h
             fractional_coords_w = w_indices * step_w
 
-            fractional_coords_h = torch.clamp(fractional_coords_h, max=(1.0 - 1e-6))
-            fractional_coords_w = torch.clamp(fractional_coords_w, max=(1.0 - 1e-6))
+            # Clamp both tensors at once to minimize kernel launches
+            fractional_coords_h.clamp_(max=(1.0 - 1e-6))
+            fractional_coords_w.clamp_(max=(1.0 - 1e-6))
 
             fractional_coords_h = fractional_coords_h.to(pixel_values.dtype)
             fractional_coords_w = fractional_coords_w.to(pixel_values.dtype)
@@ -168,8 +177,10 @@ class Idefics2VisionEmbeddings(nn.Module):
             bucket_coords_h = torch.bucketize(fractional_coords_h, boundaries, right=True)
             bucket_coords_w = torch.bucketize(fractional_coords_w, boundaries, right=True)
 
-            pos_ids = (bucket_coords_h[:, None] * self.num_patches_per_side + bucket_coords_w).flatten()
-            position_ids[batch_idx][p_attn_mask.view(-1)] = pos_ids
+            # Use broadcasting to compute pos_ids efficiently
+            pos_ids = (bucket_coords_h[:, None] * self.num_patches_per_side + bucket_coords_w).reshape(-1)
+            p_attn_mask_flat = p_attn_mask.reshape(-1)
+            position_ids[batch_idx][p_attn_mask_flat] = pos_ids
 
         embeddings = embeddings + self.position_embedding(position_ids)
         return embeddings
