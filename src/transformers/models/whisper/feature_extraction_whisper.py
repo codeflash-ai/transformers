@@ -105,6 +105,10 @@ class WhisperFeatureExtractor(SequenceFeatureExtractor):
             mel_scale="slaney",
         )
 
+        self._window = None
+        self._window_device = None
+        self._mel_filters_torch = {}
+
     def _np_extract_fbank_features(self, waveform_batch: np.ndarray, device: str) -> np.ndarray:
         """
         Compute the log-mel spectrogram of the provided audio, gives similar results to Whisper's original torch
@@ -141,27 +145,40 @@ class WhisperFeatureExtractor(SequenceFeatureExtractor):
         yielding results similar to cpu computing with 1e-5 tolerance.
         """
         waveform = torch.from_numpy(waveform).to(device, torch.float32)
-        window = torch.hann_window(self.n_fft, device=device)
+        window = self._get_window(device)
+
+        # Dither in-place if needed
 
         # Note: it would be better to dither the chunked waveform,
         # so overlapping signal does not get the same dithering.
         # But, chunking is happening inside pytorch, so it is here.
         if self.dither != 0.0:
-            waveform += self.dither * torch.randn(waveform.shape, dtype=waveform.dtype, device=waveform.device)
+            waveform = waveform.add_(
+                self.dither * torch.randn(waveform.shape, dtype=waveform.dtype, device=waveform.device)
+            )
+
+        # Compute STFT in batched mode
 
         stft = torch.stft(waveform, self.n_fft, self.hop_length, window=window, return_complex=True)
-        magnitudes = stft[..., :-1].abs() ** 2
+        # Efficient magnitude power using .abs_() and pow_()
+        stft = stft[..., :-1]
+        # Use .abs() and square in one go for memory & perf. Can't use .abs_() as .abs() creates new tensor.
+        magnitudes = stft.abs().pow_(2)
 
-        mel_filters = torch.from_numpy(self.mel_filters).to(device, torch.float32)
-        mel_spec = mel_filters.T @ magnitudes
+        mel_filters = self._get_mel_filters_torch(device)
+        mel_spec = torch.matmul(mel_filters.T, magnitudes)
+        log_spec = torch.clamp(mel_spec, min=1e-10).log10_()
 
-        log_spec = torch.clamp(mel_spec, min=1e-10).log10()
+        # Use in-place max/min operations for performance and memory
         if waveform.dim() == 2:
-            max_val = log_spec.max(dim=2, keepdim=True)[0].max(dim=1, keepdim=True)[0]
+            max_val = log_spec.amax(dim=2, keepdim=True).amax(dim=1, keepdim=True)
             log_spec = torch.maximum(log_spec, max_val - 8.0)
         else:
-            log_spec = torch.maximum(log_spec, log_spec.max() - 8.0)
-        log_spec = (log_spec + 4.0) / 4.0
+            max_val = log_spec.max()
+            log_spec = torch.maximum(log_spec, max_val - 8.0)
+        log_spec = log_spec.add_(4.0).div_(4.0)
+
+        # Only transfer to CPU if necessary
         if device != "cpu":
             log_spec = log_spec.detach().cpu()
         return log_spec.numpy()
@@ -344,6 +361,19 @@ class WhisperFeatureExtractor(SequenceFeatureExtractor):
             padded_inputs = padded_inputs.convert_to_tensors(return_tensors)
 
         return padded_inputs
+
+    def _get_window(self, device):
+        # Cache the Hann window on a per-device basis for efficiency
+        if self._window is None or self._window_device != device:
+            self._window = torch.hann_window(self.n_fft, device=device)
+            self._window_device = device
+        return self._window
+
+    def _get_mel_filters_torch(self, device):
+        # Cache the mel_filters tensor on a per-device basis for efficiency
+        if device not in self._mel_filters_torch:
+            self._mel_filters_torch[device] = torch.from_numpy(self.mel_filters).to(device, torch.float32)
+        return self._mel_filters_torch[device]
 
 
 __all__ = ["WhisperFeatureExtractor"]
