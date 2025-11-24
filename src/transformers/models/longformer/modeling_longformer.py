@@ -441,7 +441,7 @@ class LongformerEmbeddings(nn.Module):
         position_ids = torch.arange(
             self.padding_idx + 1, sequence_length + self.padding_idx + 1, dtype=torch.long, device=inputs_embeds.device
         )
-        return position_ids.unsqueeze(0).expand(input_shape)
+        return position_ids.expand(input_shape)
 
 
 class LongformerSelfAttention(nn.Module):
