@@ -353,17 +353,22 @@ def _compute_global_attention_mask(input_ids, sep_token_id, before_sep_token=Tru
     """
     question_end_index = _get_question_end_index(input_ids, sep_token_id)
     question_end_index = question_end_index.unsqueeze(dim=1)  # size: batch_size x 1
-    # bool attention mask with True in locations of global attention
-    attention_mask = torch.arange(input_ids.shape[1], device=input_ids.device)
-    if before_sep_token is True:
-        attention_mask = (attention_mask.expand_as(input_ids) < question_end_index).to(torch.bool)
-    else:
-        # last token is separation token and should not be counted and in the middle are two separation tokens
-        attention_mask = (attention_mask.expand_as(input_ids) > (question_end_index + 1)).to(torch.bool) * (
-            attention_mask.expand_as(input_ids) < input_ids.shape[-1]
-        ).to(torch.bool)
 
-    return attention_mask
+    seq_len = input_ids.shape[1]
+    batch_size = input_ids.shape[0]
+
+    # Precompute a range and use broadcasting for efficient comparison
+    attention_mask = torch.arange(seq_len, device=input_ids.device)
+    # Expand only for the batch dimension using broadcasting strategy
+    if before_sep_token is True:
+        # Use broadcasting, avoid expand_as which materializes the tensor fully (less memory)
+        mask = attention_mask < question_end_index
+        return mask
+    else:
+        # Use vectorized broadcasting comparisons, avoid expand_as
+        # These are equivalent to: (token_idx > question_end_index + 1) & (token_idx < seq_len)
+        mask = (attention_mask > (question_end_index + 1)) & (attention_mask < seq_len)
+        return mask
 
 
 def create_position_ids_from_input_ids(input_ids, padding_idx):
