@@ -528,8 +528,12 @@ def repeat_kv(hidden_states: torch.Tensor, n_rep: int) -> torch.Tensor:
     batch, num_key_value_heads, slen, head_dim = hidden_states.shape
     if n_rep == 1:
         return hidden_states
-    hidden_states = hidden_states[:, :, None, :, :].expand(batch, num_key_value_heads, n_rep, slen, head_dim)
-    return hidden_states.reshape(batch, num_key_value_heads * n_rep, slen, head_dim)
+    # Use tensor.view with stride tricks for efficient broadcasting followed by reshape.
+    # This avoids allocation of an expanded intermediate and is faster/more memory-efficient
+    hidden_states = hidden_states.unsqueeze(2)  # (batch, num_key_value_heads, 1, seqlen, head_dim)
+    shape = (batch, num_key_value_heads * n_rep, slen, head_dim)
+    hidden_states = hidden_states.expand(batch, num_key_value_heads, n_rep, slen, head_dim)
+    return hidden_states.reshape(shape)
 
 
 # Copied from transformers.models.llama.modeling_llama.LlamaRMSNorm with Llama->Idefics2
