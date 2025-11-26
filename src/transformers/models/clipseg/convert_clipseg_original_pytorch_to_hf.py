@@ -32,9 +32,14 @@ from transformers import (
 )
 
 
+_cached_text_config = CLIPSegTextConfig()
+
+_cached_vision_config = CLIPSegVisionConfig(patch_size=16)
+
+
 def get_clipseg_config(model_name):
-    text_config = CLIPSegTextConfig()
-    vision_config = CLIPSegVisionConfig(patch_size=16)
+    text_config = _cached_text_config
+    vision_config = _cached_vision_config
 
     use_complex_transposed_convolution = "refined" in model_name
     reduce_dim = 16 if "rd16" in model_name else 64
