@@ -237,9 +237,11 @@ class BambaRotaryEmbedding(nn.Module):
         attention_factor = 1.0  # Unused in this type of RoPE
 
         # Compute the inverse frequencies
-        inv_freq = 1.0 / (
-            base ** (torch.arange(0, dim, 2, dtype=torch.int64).to(device=device, dtype=torch.float) / dim)
-        )
+        arange = torch.arange(0, dim, 2, device=device, dtype=torch.float32)
+        denom = arange / dim
+        base_tensor = torch.tensor(base, dtype=torch.float32, device=device)
+        freq = torch.pow(base_tensor, denom)
+        inv_freq = torch.reciprocal(freq)
         return inv_freq, attention_factor
 
     @torch.no_grad()
