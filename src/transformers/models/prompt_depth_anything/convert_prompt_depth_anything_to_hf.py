@@ -137,15 +137,21 @@ def convert_old_keys_to_new_keys(state_dict_keys: Optional[dict] = None):
     """
     output_dict = {}
     if state_dict_keys is not None:
+        # Precompile regex patterns for improved matching speed
+        patterns = []
+        for pattern, replacement in ORIGINAL_TO_CONVERTED_KEY_MAPPING.items():
+            compiled = re.compile(pattern)
+            patterns.append((compiled, replacement))
         for old_key in state_dict_keys:
             new_key = old_key
-            for pattern, replacement in ORIGINAL_TO_CONVERTED_KEY_MAPPING.items():
-                match = re.match(pattern, old_key)
+            for regex, replacement in patterns:
+                match = regex.match(old_key)
                 if match:
                     if callable(replacement):
                         new_key = replacement(match)
                     else:
-                        new_key = re.sub(pattern, replacement, old_key)
+                        # Use the precompiled regex for .sub to avoid recompiling from string
+                        new_key = regex.sub(replacement, old_key)
                     break
             output_dict[old_key] = new_key
     return output_dict
