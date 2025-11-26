@@ -473,16 +473,22 @@ def segment_sum(input_tensor):
     chunk_size = input_tensor.size(-1)
     # 1. expand input tensor to have an additional dimension and repeat along that dimension
     # [..., chunk_size] -> [..., chunk_size, chunk_size]
-    input_tensor = input_tensor[..., None].expand(*input_tensor.size(), chunk_size)
+    input_tensor_expanded = input_tensor[..., None].expand(*input_tensor.size(), chunk_size)
     # 2. create a lower triangular mask with the diagonal set to 0 to 0 out elements above diag
-    mask = torch.tril(torch.ones(chunk_size, chunk_size, device=input_tensor.device, dtype=torch.bool), diagonal=-1)
-    input_tensor = input_tensor.masked_fill(~mask, 0)
+    mask_lower = torch.tril(
+        torch.ones(chunk_size, chunk_size, device=input_tensor.device, dtype=torch.bool), diagonal=-1
+    )
+    input_tensor_expanded = torch.where(mask_lower, input_tensor_expanded, 0)
     # 3. compute actual cumsum
-    tensor_segsum = torch.cumsum(input_tensor, dim=-2)
-
+    tensor_segsum = torch.cumsum(input_tensor_expanded, dim=-2)
     # 4. apply mask to keep only the lower triangular part of the cumulative sum result (incl diagonal this time)
-    mask = torch.tril(torch.ones(chunk_size, chunk_size, device=input_tensor.device, dtype=torch.bool), diagonal=0)
-    tensor_segsum = tensor_segsum.masked_fill(~mask, -torch.inf)
+    mask_diag = torch.tril(
+        torch.ones(chunk_size, chunk_size, device=input_tensor.device, dtype=torch.bool), diagonal=0
+    )
+    # We use torch.where here instead of masked_fill for significant speedup on large tensors
+    tensor_segsum = torch.where(
+        mask_diag, tensor_segsum, torch.tensor(-float("inf"), dtype=tensor_segsum.dtype, device=tensor_segsum.device)
+    )
     return tensor_segsum
 
 
