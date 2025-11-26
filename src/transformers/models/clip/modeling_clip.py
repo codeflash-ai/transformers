@@ -272,11 +272,26 @@ def eager_attention_forward(
     dropout: float = 0.0,
     **kwargs: Unpack[TransformersKwargs],
 ):
-    attn_weights = torch.matmul(query, key.transpose(-1, -2)) * scaling
+    # Compute key transpose once and reuse without extra allocation
+    key_t = key.transpose(-1, -2)
+    attn_weights = torch.matmul(query, key_t)
+    if scaling != 1.0:
+        attn_weights = attn_weights.mul_(scaling)
+    else:
+        attn_weights = attn_weights
+
     if attention_mask is not None:
-        attn_weights = attn_weights + attention_mask
-    attn_weights = nn.functional.softmax(attn_weights, dim=-1, dtype=torch.float32).to(query.dtype)
-    attn_weights = nn.functional.dropout(attn_weights, p=dropout, training=module.training)
+        attn_weights = attn_weights.add_(attention_mask)
+
+    # Use fused softmax + dropout + matmul when possible for speed
+    # Always set dtype to float32 for numerical stability and then cast back to input dtype
+    # Softmax + dropout fused computation is not exposed here, but we can inline conversion to avoid extra allocations
+    attn_weights = nn.functional.softmax(attn_weights, dim=-1, dtype=torch.float32)
+    attn_weights = attn_weights.to(query.dtype)
+    if dropout > 0.0:
+        attn_weights = nn.functional.dropout(attn_weights, p=dropout, training=module.training)
+
+    # matmul (attn_weights, value) is memory-bound; try to avoid unnecessary copying
 
     attn_output = torch.matmul(attn_weights, value)
     attn_output = attn_output.transpose(1, 2).contiguous()
