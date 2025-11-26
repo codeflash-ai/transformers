@@ -1051,40 +1051,54 @@ class KyutaiSpeechToTextModel(KyutaiSpeechToTextPreTrainedModel):
                 The cache class that is being used currently to generate
         """
         if attention_mask is not None and attention_mask.dim() == 4:
-            # In this case we assume that the mask comes already in inverted form and requires no inversion or slicing.
-            causal_mask = attention_mask
-        else:
-            min_dtype = torch.finfo(dtype).min
-            causal_mask = torch.full(
-                (sequence_length, target_length), fill_value=min_dtype, dtype=dtype, device=cache_position.device
-            )
-            diagonal_attend_mask = torch.arange(target_length, device=cache_position.device) > cache_position.reshape(
-                -1, 1
-            )
-            text_config = config.get_text_config()
-            if getattr(text_config, "use_sliding_window", True) and text_config.sliding_window is not None:
-                # if we have sliding window, we should not attend to tokens beyond sliding window length, so we mask them out also
-                # the check is needed to verify is current checkpoint was trained with sliding window or not
-                is_static_sliding_cache = isinstance(past_key_values, StaticCache) and all(past_key_values.is_sliding)
-                if not is_static_sliding_cache or sequence_length > target_length:
-                    sliding_attend_mask = torch.arange(target_length, device=cache_position.device) <= (
-                        cache_position.reshape(-1, 1) - text_config.sliding_window
-                    )
-                    diagonal_attend_mask.bitwise_or_(sliding_attend_mask)
-            causal_mask *= diagonal_attend_mask
-            causal_mask = causal_mask[None, None, :, :].expand(batch_size, 1, -1, -1)
-            if attention_mask is not None:
-                causal_mask = causal_mask.clone()  # copy to contiguous memory for in-place edit
-                if attention_mask.shape[-1] > target_length:
-                    attention_mask = attention_mask[:, :target_length]
-                mask_length = attention_mask.shape[-1]
-                padding_mask = causal_mask[:, :, :, :mask_length] + attention_mask[:, None, None, :].to(
-                    causal_mask.device
-                )
-                padding_mask = padding_mask == 0
-                causal_mask[:, :, :, :mask_length] = causal_mask[:, :, :, :mask_length].masked_fill(
-                    padding_mask, min_dtype
-                )
+            return attention_mask
+
+        min_dtype = torch.finfo(dtype).min
+        device = cache_position.device
+
+        # Precompute arange only once
+        col_indices = torch.arange(target_length, device=device)
+
+        # Prepare causal mask base: shape (sequence_length, target_length)
+        cache_pos_view = cache_position.reshape(-1, 1)
+        diagonal_attend_mask = col_indices > cache_pos_view  # shape: (batch_size, target_length)
+
+        text_config = config.get_text_config()
+        # Default is True for use_sliding_window (per original logic)
+        use_sliding_window = getattr(text_config, "use_sliding_window", True)
+        if use_sliding_window and text_config.sliding_window is not None:
+            is_static_sliding_cache = isinstance(past_key_values, StaticCache) and all(past_key_values.is_sliding)
+            if not is_static_sliding_cache or sequence_length > target_length:
+                # Only recompute the window mask if needed
+                sliding_attend_mask = col_indices <= (cache_pos_view - text_config.sliding_window)
+                # Avoid allocating a new mask if unnecessary, do the OR in-place
+                diagonal_attend_mask = diagonal_attend_mask | sliding_attend_mask
+
+        # Allocate base causal mask, broadcast-multiplied with diagonal_attend_mask (float/min)
+        # diagonal_attend_mask shape: (batch_size, target_length)
+        causal_mask = torch.full((sequence_length, target_length), fill_value=min_dtype, dtype=dtype, device=device)
+        # Only batch rows that will be visible are set by input mask
+        # To avoid unneeded broadcasting, restrict computation to shape that will be expanded, combine masks first
+        causal_mask = causal_mask * diagonal_attend_mask.to(dtype=causal_mask.dtype)
+
+        causal_mask = causal_mask[None, None, :, :].expand(batch_size, 1, -1, -1)
+
+        if attention_mask is not None:
+            # Avoid extra .clone() unless in-place will happen (PyTorch requires .clone() for in-place if not unique)
+            # But since we do masked_fill, forcibly .clone() to be safe
+            causal_mask = causal_mask.clone()
+            # Efficiently restrict attention mask without reallocation
+            mask_length = attention_mask.shape[-1]
+            if mask_length > target_length:
+                attention_mask = attention_mask[:, :target_length]
+                mask_length = target_length
+
+            pad_mask = attention_mask[:, None, None, :].to(device)
+            slice_mask = causal_mask[:, :, :, :mask_length]
+            padding_mask = slice_mask + pad_mask
+            padding_mask = padding_mask == 0
+            # Do masked fill only on relevant slice
+            slice_mask.masked_fill_(padding_mask, min_dtype)
         return causal_mask
 
 
