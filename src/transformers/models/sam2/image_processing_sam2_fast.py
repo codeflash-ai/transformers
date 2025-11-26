@@ -20,7 +20,6 @@
 # limitations under the License.
 import math
 from copy import deepcopy
-from itertools import product
 from typing import Any, Optional, Union
 
 import numpy as np
@@ -244,19 +243,34 @@ def _generate_per_layer_crops(crop_n_layers, overlap_ratio, original_size):
     layer_idxs.append(0)
     for i_layer in range(crop_n_layers):
         n_crops_per_side = 2 ** (i_layer + 1)
-        overlap = int(overlap_ratio * short_side * (2 / n_crops_per_side))
+        factor = 2.0 / n_crops_per_side  # Compute just once
+        overlap = int(overlap_ratio * short_side * factor)
 
         crop_width = int(math.ceil((overlap * (n_crops_per_side - 1) + im_width) / n_crops_per_side))
         crop_height = int(math.ceil((overlap * (n_crops_per_side - 1) + im_height) / n_crops_per_side))
 
-        crop_box_x0 = [int((crop_width - overlap) * i) for i in range(n_crops_per_side)]
-        crop_box_y0 = [int((crop_height - overlap) * i) for i in range(n_crops_per_side)]
+        # Precompute increments: stride = crop_width - overlap (guaranteed > 0)
+        stride_x = crop_width - overlap
+        stride_y = crop_height - overlap
 
-        for left, top in product(crop_box_x0, crop_box_y0):
-            box = [left, top, min(left + crop_width, im_width), min(top + crop_height, im_height)]
-            crop_boxes.append(box)
-            layer_idxs.append(i_layer + 1)
+        # Avoid slower list comprehensions in hot loop for tight range and int
+        crop_box_x0 = [i * stride_x for i in range(n_crops_per_side)]
+        crop_box_y0 = [i * stride_y for i in range(n_crops_per_side)]
 
+        # Use local binding for min function for inner loop perf
+        min_width = im_width
+        min_height = im_height
+        # Unroll product loop for single-lined append to reduce attribute lookups
+        append_box = crop_boxes.append
+        append_idx = layer_idxs.append
+        for left in crop_box_x0:
+            right = left + crop_width
+            x2 = min(min_width, right)
+            for top in crop_box_y0:
+                bottom = top + crop_height
+                y2 = min(min_height, bottom)
+                append_box([left, top, x2, y2])
+                append_idx(i_layer + 1)
     return crop_boxes, layer_idxs
 
 
