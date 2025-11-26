@@ -40,18 +40,24 @@ from ...utils.generic import check_model_inputs
 from .configuration_clip import CLIPConfig, CLIPTextConfig, CLIPVisionConfig
 
 
+_target_cache = {}
+
+
 logger = logging.get_logger(__name__)
 
 
 # contrastive loss function, adapted from
 # https://sachinruk.github.io/blog/2021-03-07-clip.html
 def contrastive_loss(logits: torch.Tensor) -> torch.Tensor:
-    return nn.functional.cross_entropy(logits, torch.arange(len(logits), device=logits.device))
+    targets = _get_targets(logits.shape[0], logits.device)
+    return nn.functional.cross_entropy(logits, targets)
 
 
 def clip_loss(similarity: torch.Tensor) -> torch.Tensor:
+    # Avoid a possible (minor) recomputation in similarity.t()
+    sim_t = similarity.t()
     caption_loss = contrastive_loss(similarity)
-    image_loss = contrastive_loss(similarity.t())
+    image_loss = contrastive_loss(sim_t)
     return (caption_loss + image_loss) / 2.0
 
 
@@ -281,6 +287,13 @@ def eager_attention_forward(
     attn_output = torch.matmul(attn_weights, value)
     attn_output = attn_output.transpose(1, 2).contiguous()
     return attn_output, attn_weights
+
+
+def _get_targets(n: int, device: torch.device) -> torch.Tensor:
+    key = (n, device)
+    if key not in _target_cache:
+        _target_cache[key] = torch.arange(n, device=device)
+    return _target_cache[key]
 
 
 class CLIPAttention(nn.Module):
