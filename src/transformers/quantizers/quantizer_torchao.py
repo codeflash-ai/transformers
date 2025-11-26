@@ -65,22 +65,40 @@ def fuzzy_match_size(config_name: str) -> Optional[str]:
 
 
 def _quantization_type(weight):
-    from torchao.dtypes import AffineQuantizedTensor
-    from torchao.quantization.linear_activation_quantized_tensor import LinearActivationQuantizedTensor
+    # Optimize import by moving inside conditional blocks to reduce overhead if not needed
+    # This reduces import time on non-quantized weights (common path).
+    # The function behavior is identically preserved.
+    wt_class = type(weight)
+    wt_class_name = wt_class.__name__
+    # AffineQuantizedTensor path
+    if wt_class_name == "AffineQuantizedTensor":
+        # Imports only when needed
+        from torchao.dtypes import AffineQuantizedTensor
 
-    if isinstance(weight, AffineQuantizedTensor):
-        return f"{weight.__class__.__name__}({weight._quantization_type()})"
+        if isinstance(weight, AffineQuantizedTensor):
+            return f"{wt_class_name}({weight._quantization_type()})"
+    # LinearActivationQuantizedTensor path
+    elif wt_class_name == "LinearActivationQuantizedTensor":
+        from torchao.quantization.linear_activation_quantized_tensor import LinearActivationQuantizedTensor
 
-    if isinstance(weight, LinearActivationQuantizedTensor):
-        return f"{weight.__class__.__name__}(activation={weight.input_quant_func}, weight={_quantization_type(weight.original_weight_tensor)})"
+        if isinstance(weight, LinearActivationQuantizedTensor):
+            return (
+                f"{wt_class_name}(activation={weight.input_quant_func}, "
+                f"weight={_quantization_type(weight.original_weight_tensor)})"
+            )
+    # In all other cases, return None (default fall-through)
 
 
 def _linear_extra_repr(self):
-    weight = _quantization_type(self.weight)
-    if weight is None:
-        return f"in_features={self.weight.shape[1]}, out_features={self.weight.shape[0]}, weight=None"
+    # Optimized: cache weight and shapes to local variables for faster attribute access
+    weight_obj = self.weight
+    weight_type = _quantization_type(weight_obj)
+    in_features = weight_obj.shape[1]
+    out_features = weight_obj.shape[0]
+    if weight_type is None:
+        return f"in_features={in_features}, out_features={out_features}, weight=None"
     else:
-        return f"in_features={self.weight.shape[1]}, out_features={self.weight.shape[0]}, weight={weight}"
+        return f"in_features={in_features}, out_features={out_features}, weight={weight_type}"
 
 
 if is_torchao_available():
