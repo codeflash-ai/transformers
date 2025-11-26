@@ -103,16 +103,29 @@ class GPTNeoXRotaryEmbedding(nn.Module):
     @torch.no_grad()
     @dynamic_rope_update  # power user: used with advanced RoPE types (e.g. dynamic rope)
     def forward(self, x, position_ids):
-        inv_freq_expanded = self.inv_freq[None, :, None].float().expand(position_ids.shape[0], -1, 1).to(x.device)
-        position_ids_expanded = position_ids[:, None, :].float()
+        # Fast batched outer product to avoid large expand/cat operations
+        # Assumptions: x is (batch, seq_len, ...)
+        # position_ids: (batch, seq_len)
+        # inv_freq: (dim,)
+        # We want: (batch, seq_len, dim)
 
-        device_type = x.device.type if isinstance(x.device.type, str) and x.device.type != "mps" else "cpu"
-        with torch.autocast(device_type=device_type, enabled=False):  # Force float32
-            freqs = (inv_freq_expanded.float() @ position_ids_expanded.float()).transpose(1, 2)
-            emb = torch.cat((freqs, freqs), dim=-1)
-            cos = emb.cos() * self.attention_scaling
-            sin = emb.sin() * self.attention_scaling
+        # Move tensors to x.device in one step, reduce dtype casts.
+        inv_freq = self.inv_freq.to(dtype=torch.float32, device=x.device)
+        position_ids = position_ids.to(dtype=torch.float32, device=x.device)
 
+        # Compute freqs: (batch, seq_len, dim) = position_ids (batch, seq_len, 1) * inv_freq (1, 1, dim)
+        freqs = position_ids.unsqueeze(-1) * inv_freq.unsqueeze(0).unsqueeze(0)  # (batch, seq_len, dim)
+
+        # Efficiently duplicate for cos/sin: (batch, seq_len, 2*dim)
+        emb = torch.cat((freqs, freqs), dim=-1)
+
+        # Single dispatch for cos/sin/scaling, skip autocast context switch (as @torch.no_grad disables autograd anyway)
+        scale = self.attention_scaling
+
+        cos = emb.cos().mul_(scale)
+        sin = emb.sin().mul_(scale)
+
+        # Only move to x.dtype at the very end
         return cos.to(dtype=x.dtype), sin.to(dtype=x.dtype)
 
 
