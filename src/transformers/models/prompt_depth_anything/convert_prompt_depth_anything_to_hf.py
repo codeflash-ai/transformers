@@ -83,10 +83,10 @@ def transform_qkv_weights(key, value, config):
     if not key.startswith("qkv_transform"):
         return value
 
-    layer_idx = int(key.split("_")[-1])
+    layer_idx = int(key.rsplit("_", 1)[-1])
     hidden_size = config.backbone_config.hidden_size
 
-    suffix = "bias" if "bias" in key else "weight"
+    suffix = "bias" if key.endswith("bias") else "weight"
     return {
         f"backbone.encoder.layer.{layer_idx}.attention.attention.query.{suffix}": value[:hidden_size],
         f"backbone.encoder.layer.{layer_idx}.attention.attention.key.{suffix}": value[hidden_size : hidden_size * 2],
