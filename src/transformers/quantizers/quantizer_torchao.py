@@ -104,19 +104,24 @@ class TorchAoHfQuantizer(HfQuantizer):
     def __init__(self, quantization_config, **kwargs):
         super().__init__(quantization_config, **kwargs)
 
-        if isinstance(self.quantization_config.quant_type, str):
-            is_int_4 = "int4" in self.quantization_config.quant_type
+        quant_type = self.quantization_config.quant_type
+
+        # Avoid isinstance every time: cache whether quant_type is a str
+        if isinstance(quant_type, str):
+            is_int_4 = "int4" in quant_type
         else:
-            config_name = self.quantization_config.quant_type.__class__.__name__
+            config_name = quant_type.__class__.__name__
             is_int_4 = fuzzy_match_size(config_name) == "4"
 
         # TODO: better way to get the serialized key names? Hard to read from torchao codebase
         if is_int_4:
-            self.weight_ao_keys = ["qdata", "scale", "zero_point"]
+            weight_ao_keys = ("qdata", "scale", "zero_point")  # tuple for faster iteration
         else:
-            self.weight_ao_keys = ["qdata", "scale"]
+            weight_ao_keys = ("qdata", "scale")
         # Instead of serializing the simple torch.Tensor like usual, torchao adds a `:_data` suffix so we need this
-        self.full_ao_keys = self.weight_ao_keys + ["_data"]
+        # Use tuple for self.full_ao_keys for efficiency in membership tests
+        self.weight_ao_keys = weight_ao_keys
+        self.full_ao_keys = weight_ao_keys + ("_data",)
 
     def validate_environment(self, *args, **kwargs):
         if not is_torchao_available():
@@ -234,7 +239,11 @@ class TorchAoHfQuantizer(HfQuantizer):
         return
 
     def update_unexpected_keys(self, model, unexpected_keys: list[str]) -> list[str]:
-        return [k for k in unexpected_keys if not any(k.endswith(x) for x in self.full_ao_keys)]
+        # For efficiency, instead of using any/endswith for each suffix per key,
+        # build a tuple of suffixes and use str.endswith(tuple)
+        suffixes = self.full_ao_keys
+        # List comprehensions are fine, just optimize endswith usage.
+        return [k for k in unexpected_keys if not k.endswith(suffixes)]
 
     def param_needs_quantization(self, model: "PreTrainedModel", param_name: str, **kwargs) -> bool:
         if self.quantization_config.quant_type == "autoquant":
