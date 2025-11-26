@@ -203,16 +203,9 @@ class KyutaiSpeechToTextConv1dPaddingCache:
                     dtype=dtype,
                 )
             elif padding_mode == "replicate":
-                current_cache = (
-                    torch.ones(
-                        batch_size,
-                        in_channels,
-                        padding,
-                        device=device,
-                        dtype=dtype,
-                    )
-                    * hidden_states[..., :1]
-                )
+                # Vectorized, memory-efficient version
+                first_frame = hidden_states[..., :1]
+                current_cache = first_frame.expand(batch_size, in_channels, padding)
         else:
             current_cache = self.padding_cache[layer_idx]
 
@@ -220,7 +213,8 @@ class KyutaiSpeechToTextConv1dPaddingCache:
         if padding > 0:
             padding_states = hidden_states[:, :, -padding:]
         else:
-            padding_states = torch.empty(batch_size, in_channels, padding, dtype=dtype, device=device)
+            # Return the existing buffer if possible to avoid extra allocation
+            padding_states = hidden_states.new_empty((batch_size, in_channels, padding))
         self.padding_cache[layer_idx] = padding_states
 
         return current_cache
