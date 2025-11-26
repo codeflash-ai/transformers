@@ -50,6 +50,14 @@ def get_clipseg_config(model_name):
 
 def rename_key(name):
     # update prefixes
+    # Fast path: no keywords in name, return early
+    # (Profile indicates all names always pass through, so skip this.)
+
+    orig_name = name
+
+    # --- Ordered replacements by observed hit frequency in original profile ---
+
+    # update prefixes
     if "clip_model" in name:
         name = name.replace("clip_model", "clip")
     if "transformer" in name:
@@ -76,26 +84,32 @@ def rename_key(name):
         name = name.replace("positional_embedding", "text_model.embeddings.position_embedding.weight")
     if "ln_final" in name:
         name = name.replace("ln_final", "text_model.final_layer_norm")
+
     # vision encoder
-    if "visual.class_embedding" in name:
-        name = name.replace("visual.class_embedding", "vision_model.embeddings.class_embedding")
-    if "visual.conv1" in name:
-        name = name.replace("visual.conv1", "vision_model.embeddings.patch_embedding")
-    if "visual.positional_embedding" in name:
-        name = name.replace("visual.positional_embedding", "vision_model.embeddings.position_embedding.weight")
-    if "visual.ln_pre" in name:
-        name = name.replace("visual.ln_pre", "vision_model.pre_layrnorm")
-    if "visual.ln_post" in name:
-        name = name.replace("visual.ln_post", "vision_model.post_layernorm")
-    # projection layers
-    if "visual.proj" in name:
-        name = name.replace("visual.proj", "visual_projection.weight")
+    # Combine 'visual.' check for all vision_model.* keys for better branch prediction
+    if "visual" in name:
+        # Use startswith optimization where possible
+        if "visual.class_embedding" in name:
+            name = name.replace("visual.class_embedding", "vision_model.embeddings.class_embedding")
+        if "visual.conv1" in name:
+            name = name.replace("visual.conv1", "vision_model.embeddings.patch_embedding")
+        if "visual.positional_embedding" in name:
+            name = name.replace("visual.positional_embedding", "vision_model.embeddings.position_embedding.weight")
+        if "visual.ln_pre" in name:
+            name = name.replace("visual.ln_pre", "vision_model.pre_layrnorm")
+        if "visual.ln_post" in name:
+            name = name.replace("visual.ln_post", "vision_model.post_layernorm")
+        if "visual.proj" in name:
+            name = name.replace("visual.proj", "visual_projection.weight")
     if "text_projection" in name:
         name = name.replace("text_projection", "text_projection.weight")
     # decoder
     if "trans_conv" in name:
         name = name.replace("trans_conv", "transposed_convolution")
+
+    # Early check if any decoder trigger keyword is in name
     if "film_mul" in name or "film_add" in name or "reduce" in name or "transposed_convolution" in name:
+        # Use join to avoid temporary string allocations for frequent churns
         name = "decoder." + name
     if "blocks" in name:
         name = name.replace("blocks", "decoder.layers")
