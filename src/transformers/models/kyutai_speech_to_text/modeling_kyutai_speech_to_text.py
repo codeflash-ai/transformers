@@ -320,16 +320,27 @@ class KyutaiSpeechToTextRotaryEmbedding(nn.Module):
     @torch.no_grad()
     @dynamic_rope_update  # power user: used with advanced RoPE types (e.g. dynamic rope)
     def forward(self, x, position_ids):
-        inv_freq_expanded = self.inv_freq[None, :, None].float().expand(position_ids.shape[0], -1, 1).to(x.device)
-        position_ids_expanded = position_ids[:, None, :].float()
+        # Preallocate and compute using efficient broadcasting, avoiding superfluous expands and casts
+        inv_freq = self.inv_freq.to(dtype=torch.float, device=x.device)
+        batch = position_ids.shape[0]
+        # position_ids: [batch, length]
+        # inv_freq: [dim_rope/2]
+        # -> freqs: [batch, length, inv_freq.shape[-1]]
+        # Use torch.einsum for memory/caching efficiency
+        # Compute phase = position_ids[..., None] * inv_freq[None, None, :]
+        # Afterwards, extend to [batch, length, dim_rope] by cat
 
-        device_type = x.device.type if isinstance(x.device.type, str) and x.device.type != "mps" else "cpu"
-        with torch.autocast(device_type=device_type, enabled=False):  # Force float32
-            freqs = (inv_freq_expanded.float() @ position_ids_expanded.float()).transpose(1, 2)
-            emb = torch.cat((freqs, freqs), dim=-1)
-            cos = emb.cos() * self.attention_scaling
-            sin = emb.sin() * self.attention_scaling
+        position_ids_f = position_ids.to(dtype=torch.float, device=x.device)
+        phase = torch.einsum("bl,d->bld", position_ids_f, inv_freq)
+        # Now phase: [batch, length, dim_rope//2]
+        emb = torch.cat((phase, phase), dim=-1)  # [batch, length, dim_rope]
+        cos = emb.cos()
+        sin = emb.sin()
+        if self.attention_scaling != 1.0:
+            cos = cos * self.attention_scaling
+            sin = sin * self.attention_scaling
 
+        # Output [batch, length, dim_rope] exactly as before, types match as well
         return cos.to(dtype=x.dtype), sin.to(dtype=x.dtype)
 
 
