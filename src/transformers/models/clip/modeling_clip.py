@@ -133,10 +133,13 @@ class CLIPOutput(ModelOutput):
     vision_model_output: BaseModelOutputWithPooling = None
 
     def to_tuple(self) -> tuple[Any]:
-        return tuple(
-            self[k] if k not in ["text_model_output", "vision_model_output"] else getattr(self, k).to_tuple()
-            for k in self.keys()
-        )
+        output = []
+        for k in self.keys():
+            if k == "text_model_output" or k == "vision_model_output":
+                output.append(getattr(self, k).to_tuple())
+            else:
+                output.append(self[k])
+        return tuple(output)
 
 
 class CLIPVisionEmbeddings(nn.Module):
