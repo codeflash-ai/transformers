@@ -61,13 +61,21 @@ class KyutaiSpeechToTextRMSNorm(nn.Module):
         self.weight = nn.Parameter(torch.ones(dim))  # Ignore copy
 
     def _norm(self, x):
-        return x * torch.rsqrt(x.pow(2).mean(-1, keepdim=True) + self.eps)
+        return x * torch.rsqrt((x * x).mean(-1, keepdim=True) + self.eps)
 
     # Ignore copy
     def forward(self, x):
-        output = self._norm(x.float())
-        output = output * self.weight.float()
-        return output.type_as(x)
+        # Avoid repeated .float() computation and reduce temporaries
+        # Cache self.weight.float() for efficiency if needed multiple times,
+        # but only convert if input x is not already float32
+        x_float = x.float() if x.dtype != torch.float32 else x
+        weight_float = self.weight.float() if self.weight.dtype != torch.float32 else self.weight
+        output = self._norm(x_float)
+        output = output * weight_float
+        # Only typecast if needed, to avoid unnecessary work
+        if output.dtype != x.dtype:
+            output = output.type_as(x)
+        return output
 
     def extra_repr(self):
         return f"{tuple(self.weight.shape)}, eps={self.eps}"
