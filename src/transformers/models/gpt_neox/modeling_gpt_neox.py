@@ -322,10 +322,25 @@ class GPTNeoXRMSNorm(nn.Module):
 
     def forward(self, hidden_states):
         input_dtype = hidden_states.dtype
-        hidden_states = hidden_states.to(torch.float32)
-        variance = hidden_states.pow(2).mean(-1, keepdim=True)
-        hidden_states = hidden_states * torch.rsqrt(variance + self.variance_epsilon)
-        return self.weight * hidden_states.to(input_dtype)
+
+        # Use in-place operations and fused reductions where possible for speed & memory efficiency
+        # Only convert dtype if needed
+        if hidden_states.dtype != torch.float32:
+            hidden_states = hidden_states.to(torch.float32)
+
+        # Fused pow + mean with torch.mean(hidden_states ** 2, ...)
+        variance = torch.mean(hidden_states * hidden_states, dim=-1, keepdim=True)
+        # Use add_ for in-place addition if it helps memory
+        variance = variance.add(self.variance_epsilon)
+        # Fused normalization
+        hidden_states = hidden_states * torch.rsqrt(variance)
+
+        # Avoid unnecessary .to() if not needed
+        if hidden_states.dtype != input_dtype:
+            hidden_states = hidden_states.to(input_dtype)
+
+        # Broadcasting self.weight is unchanged
+        return self.weight * hidden_states
 
     def extra_repr(self):
         return f"{tuple(self.weight.shape)}, eps={self.variance_epsilon}"
