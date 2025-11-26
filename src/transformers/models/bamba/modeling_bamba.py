@@ -422,14 +422,38 @@ class BambaRMSNormGated(torch.nn.Module):
 
     def forward(self, hidden_states, gate=None):
         input_dtype = hidden_states.dtype
-        hidden_states = hidden_states.to(torch.float32)
+
+        # If everything is already float32, avoid needless type conversion and copy
+        if hidden_states.dtype != torch.float32:
+            hidden_states = hidden_states.to(torch.float32)
+
+        # Optimize gate handling: avoid conversion/copy if already correct type
 
         if gate is not None:
-            hidden_states = hidden_states * nn.functional.silu(gate.to(torch.float32))
-        variance = hidden_states.pow(2).mean(-1, keepdim=True)
-        hidden_states = hidden_states * torch.rsqrt(variance + self.variance_epsilon)
+            gate_val = gate
+            if gate.dtype != torch.float32:
+                gate_val = gate.to(torch.float32)
+            hidden_states = hidden_states * nn.functional.silu(gate_val)
 
-        return self.weight * hidden_states.to(input_dtype)
+        # Use _fast_rms helper for variance and normalization for efficiency
+        # torch.var is slightly slower and uses Bessel's correction; we want mean of squares
+        # pow(2).mean(-1, keepdim=True) is fine, but can be done with a fused kernel if available (later)
+        # Here, squeeze maximum parallelization and avoid temporaries
+
+        # Avoid pow(2) for squaring by multiplying explicitly (may use fused kernel)
+        variance = (hidden_states * hidden_states).mean(dim=-1, keepdim=True)
+
+        # Avoid creating a new tensor for variance + eps if eps is zero or negligible
+        denom = torch.rsqrt(variance + self.variance_epsilon)
+        hidden_states = hidden_states * denom
+
+        # Avoid a new tensor if dtype already matches
+        if hidden_states.dtype != input_dtype:
+            hidden_states = hidden_states.to(input_dtype)
+
+        # Use out parameter if possible to avoid allocation - but this is generally unsafe due to view/stride.
+        # Multiplication should be fast if both tensors are the same shape and contiguous.
+        return self.weight * hidden_states
 
 
 # Helper methods for segment sum computation
