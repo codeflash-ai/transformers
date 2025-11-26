@@ -95,9 +95,21 @@ class GPTNeoXRotaryEmbedding(nn.Module):
         attention_factor = 1.0  # Unused in this type of RoPE
 
         # Compute the inverse frequencies
-        inv_freq = 1.0 / (
-            base ** (torch.arange(0, dim, 2, dtype=torch.int64).to(device=device, dtype=torch.float) / dim)
-        )
+        # OPTIMIZATION: Use float32 throughout, avoid int64 then cast.
+        # Pre-create float32 arange directly on the correct device if given.
+        if device is not None:
+            arange = torch.arange(0, dim, 2, device=device, dtype=torch.float32)
+        else:
+            arange = torch.arange(0, dim, 2, dtype=torch.float32)
+        base_float = float(base)
+        dim_float = float(dim)
+        # Exponentiation is most efficient in-place, but out-of-place is fine for 1D.
+        exponents = arange / dim_float
+
+        # Use torch.pow instead of Python ** (much faster for tensors).
+        powers = torch.pow(base_float, exponents)
+        inv_freq = 1.0 / powers
+
         return inv_freq, attention_factor
 
     @torch.no_grad()
