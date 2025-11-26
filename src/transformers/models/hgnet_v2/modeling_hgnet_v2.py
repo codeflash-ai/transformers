@@ -53,8 +53,7 @@ class HGNetV2LearnableAffineBlock(nn.Module):
         self.bias = nn.Parameter(torch.tensor([bias_value]), requires_grad=True)
 
     def forward(self, hidden_state: Tensor) -> Tensor:
-        hidden_state = self.scale * hidden_state + self.bias
-        return hidden_state
+        return torch.addcmul(self.bias, hidden_state, self.scale, value=1)
 
 
 class HGNetV2ConvLayer(nn.Module):
