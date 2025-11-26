@@ -181,7 +181,18 @@ class HybridMambaAttentionDynamicCache:
         """Return the length and offset of the cache, used to generate the mask"""
         kv_offset = 0
         query_length = cache_position.shape[0]
-        kv_length = self.get_seq_length(layer_idx) + query_length
+        # Inline and hoist the transformer_layers[0] computation out of get_seq_length to only occur if needed
+        if layer_idx not in self.transformer_layers:
+            seq_layer = self.transformer_layers[0]
+        else:
+            seq_layer = layer_idx
+        # Inline logic from get_seq_length for performance
+        key_cache = self.key_cache
+        if len(key_cache) <= seq_layer or key_cache[seq_layer].shape[-1] == 0:
+            seq_len = 0
+        else:
+            seq_len = key_cache[seq_layer].shape[-2]
+        kv_length = seq_len + query_length
         return kv_length, kv_offset
 
     def get_seq_length(self, layer_idx: Optional[int] = 0) -> int:
