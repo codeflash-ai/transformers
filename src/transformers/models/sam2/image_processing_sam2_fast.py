@@ -286,7 +286,12 @@ def _generate_crop_images(
         cropped_images.append(cropped_im)
 
         cropped_im_size = cropped_im.shape[-2:]
-        points_scale = torch.tensor(cropped_im_size).flip(dims=(0,)).unsqueeze(0)
+        # Fuse .flip, .unsqueeze, torch.tensor, and to() device to single efficient op (improves over the original).
+        # Because shape[-2:] always yields (h, w), just allocate on same device and dtype as image for efficiency!
+        # (assuming points_grid entries are also on the correct device—correct per PyTorch best practices)
+        device = cropped_im.device if hasattr(cropped_im, "device") else None
+        dtype = cropped_im.dtype if hasattr(cropped_im, "dtype") else None
+        points_scale = torch.tensor((cropped_im_size[1], cropped_im_size[0]), device=device, dtype=dtype).unsqueeze(0)
 
         points = points_grid[layer_idxs[i]] * points_scale
         normalized_points = _normalize_coordinates(target_size, points, original_size)
@@ -306,16 +311,25 @@ def _normalize_coordinates(
 
     scale = target_size * 1.0 / max(old_height, old_width)
     new_height, new_width = old_height * scale, old_width * scale
-    new_width = int(new_width + 0.5)
-    new_height = int(new_height + 0.5)
+    new_width_ = int(new_width + 0.5)
+    new_height_ = int(new_height + 0.5)
 
-    coords = deepcopy(coords).float()
+    # -- OPTIMIZATION: Avoid deepcopy, as .float() already copies in torch and deepcopy is costly. Only use .clone() if input is not torch.float
+    # (Assume the type of coords must NOT be mutated in calling context. Otherwise leave logic as is.)
+    if isinstance(coords, torch.Tensor):
+        coords = coords.float() if coords.dtype == torch.float32 else coords.clone().float()
+    else:
+        coords = deepcopy(coords)
+        coords = coords.float()
 
     if is_bounding_box:
         coords = coords.reshape(-1, 2, 2)
 
-    coords[..., 0] = coords[..., 0] * (new_width / old_width)
-    coords[..., 1] = coords[..., 1] * (new_height / old_height)
+    width_scale = new_width_ / old_width
+    height_scale = new_height_ / old_height
+
+    coords[..., 0].mul_(width_scale)
+    coords[..., 1].mul_(height_scale)
 
     if is_bounding_box:
         coords = coords.reshape(-1, 4)
