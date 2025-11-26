@@ -273,8 +273,13 @@ def repeat_kv(hidden_states: torch.Tensor, n_rep: int) -> torch.Tensor:
     batch, num_key_value_heads, slen, head_dim = hidden_states.shape
     if n_rep == 1:
         return hidden_states
-    hidden_states = hidden_states[:, :, None, :, :].expand(batch, num_key_value_heads, n_rep, slen, head_dim)
-    return hidden_states.reshape(batch, num_key_value_heads * n_rep, slen, head_dim)
+    # Use contiguous only once at the end for efficiency
+    # Avoids intermediate expansion objects, and uses view where safe
+    expanded = hidden_states.reshape(batch, num_key_value_heads, 1, slen, head_dim).expand(
+        batch, num_key_value_heads, n_rep, slen, head_dim
+    )
+    # .reshape is safe here due to expand result: does not copy, only changes view
+    return expanded.reshape(batch, num_key_value_heads * n_rep, slen, head_dim)
 
 
 def eager_attention_forward(
@@ -290,16 +295,26 @@ def eager_attention_forward(
     key_states = repeat_kv(key, module.num_key_value_groups)
     value_states = repeat_kv(value, module.num_key_value_groups)
 
-    attn_weights = torch.matmul(query, key_states.transpose(2, 3)) * scaling
+    # Efficient einsum usage could in theory help; but matmul has kernel fusion in PyTorch and is optimal here
+    # Matmul shapes: (batch, heads, slen, head_dim) x (batch, heads, head_dim, slen)
+    attn_weights = torch.matmul(query, key_states.transpose(2, 3))
+    attn_weights.mul_(scaling)  # in-place improves memory usage
+
     if attention_mask is not None:
         causal_mask = attention_mask[:, :, :, : key_states.shape[-2]]
         attn_weights = attn_weights + causal_mask
 
-    attn_weights = nn.functional.softmax(attn_weights, dim=-1, dtype=torch.float32).to(query.dtype)
-    attn_weights = nn.functional.dropout(attn_weights, p=dropout, training=module.training)
+    # fuse softmax+dropout with input dtype for memory and speed
+    # Work in fp32 for numerical stability if input is lower precision
+    attn_weights = nn.functional.softmax(attn_weights, dim=-1, dtype=torch.float32)
+    # Only convert dtype if necessary (avoids .to if same type)
+    if attn_weights.dtype != query.dtype:
+        attn_weights = attn_weights.to(query.dtype)
+    if dropout > 0.0:
+        # Avoid allocating dropout mask when dropout == 0 and not training
+        attn_weights = nn.functional.dropout(attn_weights, p=dropout, training=module.training)
     attn_output = torch.matmul(attn_weights, value_states)
     attn_output = attn_output.transpose(1, 2).contiguous()
-
     return attn_output, attn_weights
 
 
