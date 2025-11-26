@@ -215,8 +215,8 @@ def _generate_crop_boxes(
     cropped_images, point_grid_per_crop = _generate_crop_images(
         crop_boxes, image, points_grid, layer_idxs, target_size, original_size
     )
-    crop_boxes = torch.tensor(crop_boxes)
-    crop_boxes = crop_boxes.float()
+    # Optimize: Stack/convert all at once and use dtype in one go.
+    crop_boxes = torch.as_tensor(crop_boxes, dtype=torch.float32)
     points_per_crop = torch.stack(point_grid_per_crop)
     points_per_crop = points_per_crop.unsqueeze(0).permute(0, 2, 1, 3)
     cropped_images = torch.stack(cropped_images)
@@ -235,7 +235,8 @@ def _generate_per_layer_crops(crop_n_layers, overlap_ratio, original_size):
         - W: width of the bounding box
         - H: height of the bounding box
     """
-    crop_boxes, layer_idxs = [], []
+    crop_boxes = []
+    layer_idxs = []
     im_height, im_width = original_size
     short_side = min(im_height, im_width)
 
@@ -249,11 +250,12 @@ def _generate_per_layer_crops(crop_n_layers, overlap_ratio, original_size):
         crop_width = int(math.ceil((overlap * (n_crops_per_side - 1) + im_width) / n_crops_per_side))
         crop_height = int(math.ceil((overlap * (n_crops_per_side - 1) + im_height) / n_crops_per_side))
 
-        crop_box_x0 = [int((crop_width - overlap) * i) for i in range(n_crops_per_side)]
-        crop_box_y0 = [int((crop_height - overlap) * i) for i in range(n_crops_per_side)]
+        # Optimize: Use list comprehensions to directly compute
+        crop_box_x0 = [(crop_width - overlap) * i for i in range(n_crops_per_side)]
+        crop_box_y0 = [(crop_height - overlap) * i for i in range(n_crops_per_side)]
 
         for left, top in product(crop_box_x0, crop_box_y0):
-            box = [left, top, min(left + crop_width, im_width), min(top + crop_height, im_height)]
+            box = [int(left), int(top), min(int(left + crop_width), im_width), min(int(top + crop_height), im_height)]
             crop_boxes.append(box)
             layer_idxs.append(i_layer + 1)
 
@@ -263,10 +265,9 @@ def _generate_per_layer_crops(crop_n_layers, overlap_ratio, original_size):
 def _build_point_grid(n_per_side: int) -> torch.Tensor:
     """Generates a 2D grid of points evenly spaced in [0,1]x[0,1]."""
     offset = 1 / (2 * n_per_side)
-    points_one_side = torch.linspace(offset, 1 - offset, n_per_side)
-    points_x = torch.tile(points_one_side[None, :], (n_per_side, 1))
-    points_y = torch.tile(points_one_side[:, None], (1, n_per_side))
-    points = torch.stack([points_x, points_y], dim=-1).reshape(-1, 2)
+    lin = torch.linspace(offset, 1 - offset, n_per_side)
+    grid_y, grid_x = torch.meshgrid(lin, lin, indexing="ij")
+    points = torch.stack([grid_x, grid_y], dim=-1).reshape(-1, 2)
     return points
 
 
@@ -279,6 +280,10 @@ def _generate_crop_images(
     """
     cropped_images = []
     total_points_per_crop = []
+    # Optimize: Reduce index lookup overhead by pre-binding local vars and methods
+    torch_tensor = torch.tensor
+    flip_dims = (0,)
+
     for i, crop_box in enumerate(crop_boxes):
         left, top, right, bottom = crop_box
         cropped_im = image[:, top:bottom, left:right]
@@ -286,7 +291,9 @@ def _generate_crop_images(
         cropped_images.append(cropped_im)
 
         cropped_im_size = cropped_im.shape[-2:]
-        points_scale = torch.tensor(cropped_im_size).flip(dims=(0,)).unsqueeze(0)
+        # Avoid constructing and flipping a tensor from a Python sequence repeatedly
+        # Use tuple so .flip can be entirely skipped; reversed order is sufficient
+        points_scale = torch_tensor((cropped_im_size[1], cropped_im_size[0])).unsqueeze(0)
 
         points = points_grid[layer_idxs[i]] * points_scale
         normalized_points = _normalize_coordinates(target_size, points, original_size)
