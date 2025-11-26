@@ -173,13 +173,16 @@ class CLIPVisionEmbeddings(nn.Module):
         """
 
         num_patches = embeddings.shape[1] - 1
-        position_embedding = self.position_embedding.weight.unsqueeze(0)
-        num_positions = position_embedding.shape[1] - 1
+
+        # Fast path: return early if possible to avoid unnecessary allocations and computation
+        num_positions = self.position_embedding.num_embeddings - 1
 
         # always interpolate when tracing to ensure the exported model works for dynamic input shapes
         if not torch.jit.is_tracing() and num_patches == num_positions and height == width:
             return self.position_embedding(self.position_ids)
 
+        position_embedding_weight = self.position_embedding.weight
+        position_embedding = position_embedding_weight.unsqueeze(0)
         class_pos_embed = position_embedding[:, :1]
         patch_pos_embed = position_embedding[:, 1:]
 
@@ -199,7 +202,7 @@ class CLIPVisionEmbeddings(nn.Module):
             align_corners=False,
         )
 
-        patch_pos_embed = patch_pos_embed.permute(0, 2, 3, 1).view(1, -1, dim)
+        patch_pos_embed = patch_pos_embed.permute(0, 2, 3, 1).reshape(1, -1, dim)
 
         return torch.cat((class_pos_embed, patch_pos_embed), dim=1)
 
