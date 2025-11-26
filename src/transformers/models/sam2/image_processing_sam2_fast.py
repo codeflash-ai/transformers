@@ -76,21 +76,53 @@ def _mask_to_rle(input_mask: "torch.Tensor"):
     change_indices = diff.nonzero()
 
     # Encode run length
+
+    # --- OPTIMIZATION BEGIN ---
+    # Instead of iterating over change_indices for each mask, pre-split per batch once for efficiency.
+    # Collect per-batch flat indices; use torch functionality for better performance.
+    if change_indices.numel() == 0:
+        # Edge case: all same value masks
+        out = []
+        for i in range(batch_size):
+            val = input_mask[i, 0].item()
+            if val == 0:
+                out.append({"size": [height, width], "counts": [height * width]})
+            else:
+                out.append({"size": [height, width], "counts": [0, height * width]})
+        return out
+
+    # Compute per-mask change indices efficiently
+    batch_mask = change_indices[:, 0]
+    change_pos = change_indices[:, 1] + 1  # +1 for rle convention
+    # Now, extract each mask's change indices in a vectorized way
+    # Faster than repeatedly masking 'change_indices' inside a Python for loop
+
+    # Find locations where batch changes
+    batch_counts = torch.bincount(batch_mask, minlength=batch_size)
+    batch_cumsum = batch_counts.cumsum(0)
+
     out = []
+    start = 0
     for i in range(batch_size):
-        cur_idxs = change_indices[change_indices[:, 0] == i, 1] + 1
-        if len(cur_idxs) == 0:
-            # No changes => either all 0 or all 1
-            # If the entire mask is 0, RLE is [height*width] or if the entire mask is 1, RLE is [0, height*width].
-            if input_mask[i, 0] == 0:
+        end = batch_cumsum[i].item()
+        cur_idxs = change_pos[start:end]
+        start = end
+
+        if cur_idxs.numel() == 0:
+            val = input_mask[i, 0].item()
+            if val == 0:
                 out.append({"size": [height, width], "counts": [height * width]})
             else:
                 out.append({"size": [height, width], "counts": [0, height * width]})
             continue
         btw_idxs = cur_idxs[1:] - cur_idxs[:-1]
         counts = [] if input_mask[i, 0] == 0 else [0]
-        counts += [cur_idxs[0].item()] + btw_idxs.tolist() + [height * width - cur_idxs[-1].item()]
+        counts += [cur_idxs[0].item()]
+        if btw_idxs.numel() > 0:
+            counts += btw_idxs.tolist()
+        counts += [height * width - cur_idxs[-1].item()]
         out.append({"size": [height, width], "counts": counts})
+
     return out
 
 
