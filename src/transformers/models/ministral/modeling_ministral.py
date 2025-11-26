@@ -322,16 +322,27 @@ class MinistralRotaryEmbedding(nn.Module):
     @torch.no_grad()
     @dynamic_rope_update  # power user: used with advanced RoPE types (e.g. dynamic rope)
     def forward(self, x, position_ids):
-        inv_freq_expanded = self.inv_freq[None, :, None].float().expand(position_ids.shape[0], -1, 1).to(x.device)
-        position_ids_expanded = position_ids[:, None, :].float()
+        # Use einsum instead of expanding tensors and matmul for faster and smaller memory usage in the RoPE frequency computation
+        batch_size = position_ids.shape[0]
+        seq_len = position_ids.shape[1]
 
-        device_type = x.device.type if isinstance(x.device.type, str) and x.device.type != "mps" else "cpu"
-        with torch.autocast(device_type=device_type, enabled=False):  # Force float32
-            freqs = (inv_freq_expanded.float() @ position_ids_expanded.float()).transpose(1, 2)
-            emb = torch.cat((freqs, freqs), dim=-1)
-            cos = emb.cos() * self.attention_scaling
-            sin = emb.sin() * self.attention_scaling
+        # position_ids: (batch, seq_len)
+        # inv_freq: (dim,)
+        # Direct einsum 'bsd,d->bsd' (like broadcasting), but for rope frequencies we want position_ids (batch,seq_len) outer-multiplied by inv_freq (dim), get (batch,seq_len,dim)
+        # We'll swap axes to match original result after transpose
 
+        # Calculate frequencies efficiently
+        # result shape: (batch_size, seq_len, inv_freq_dim)
+        freqs = torch.einsum("bs,d->bsd", position_ids.float(), self.inv_freq.float().to(x.device))
+        # Rope expects frequencies divided into head_dim/2 pairs. Stack along last axis for cos/sin.
+        emb = torch.cat((freqs, freqs), dim=-1)  # (batch_size, seq_len, 2*head_dim/2) == (batch, seq_len, head_dim)
+
+        # Cosine/sine with attention scaling (compute in float32 then cast)
+        cos = emb.cos() * self.attention_scaling
+        sin = emb.sin() * self.attention_scaling
+
+        # Final cast and transpose to original output shape: (batch, seq_len, head_dim)
+        # In original: (freqs, freqs) -> (batch, seq_len, head_dim); then cos/sin; .to(dtype=x.dtype)
         return cos.to(dtype=x.dtype), sin.to(dtype=x.dtype)
 
 
