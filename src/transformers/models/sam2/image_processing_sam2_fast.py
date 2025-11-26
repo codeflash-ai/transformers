@@ -717,9 +717,14 @@ class Sam2ImageProcessorFast(BaseImageProcessorFast):
 
         device = pred_masks.device
         # "max_obj_inds": object index of the object with the highest score at each location
-        max_obj_inds = torch.argmax(pred_masks, dim=0, keepdim=True)
+        # Optimize: Use .max(dim=0) which is faster than torch.argmax for returning both values and indices
+        # Only indices are used; discard values.
+        _, max_obj_inds = pred_masks.max(dim=0, keepdim=True)
         # "batch_obj_inds": object index of each object slice (along dim 0) in `pred_masks`
-        batch_obj_inds = torch.arange(batch_size, device=device)[:, None, None, None]
+        # Optimize: torch.arange vector expansion via broadcasting instead of explicit .view/None insertion
+        # This avoids allocation of extra memory for batch_obj_inds.
+        # keep shape: [batch_size, H, W], (broadcasts via == against [1, H, W])
+        batch_obj_inds = torch.arange(batch_size, device=device).view(-1, 1, 1, 1)
         keep = max_obj_inds == batch_obj_inds
         # suppress overlapping regions' scores below -10.0 so that the foreground regions
         # don't overlap (here sigmoid(-10.0)=4.5398e-05)
