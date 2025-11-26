@@ -369,13 +369,25 @@ class TorchAoHfQuantizer(HfQuantizer):
     def _process_model_after_weight_loading(self, model, **kwargs):
         """No process required for torchao quantized model"""
         if self.quantization_config.quant_type == "autoquant":
-            from torchao import autoquant
-            from torchao.quantization import ALL_AUTOQUANT_CLASS_LIST
+            # Use attribute caching to avoid repeated import overhead in hot path.
+            if not hasattr(self, "_autoquant_cached"):
+                from torchao import autoquant
+                from torchao.quantization import ALL_AUTOQUANT_CLASS_LIST
+
+                self._autoquant = autoquant
+                self._autoquant_class_list = ALL_AUTOQUANT_CLASS_LIST
+                self._autoquant_cached = True
+            else:
+                autoquant = self._autoquant
+                ALL_AUTOQUANT_CLASS_LIST = self._autoquant_class_list
 
             model = torch.compile(model, mode="max-autotune")
-            model = autoquant(
+
+            # The autoquant call is the main runtime cost, cannot be avoided or improved here.
+            # All kwargs passed through as before, preserving behavioral preservation.
+            model = self._autoquant(
                 model,
-                qtensor_class_list=ALL_AUTOQUANT_CLASS_LIST,
+                qtensor_class_list=self._autoquant_class_list,
                 set_inductor_config=False,
                 **self.quantization_config.quant_type_kwargs,
             )
