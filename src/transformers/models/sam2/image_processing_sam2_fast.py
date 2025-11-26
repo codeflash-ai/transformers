@@ -55,10 +55,8 @@ class Sam2FastImageProcessorKwargs(ImagesKwargs, total=False):
 def _compute_stability_score(masks: "torch.Tensor", mask_threshold: float, stability_score_offset: int):
     # One mask is always contained inside the other.
     # Save memory by preventing unnecessary cast to torch.int64
-    intersections = (
-        (masks > (mask_threshold + stability_score_offset)).sum(-1, dtype=torch.int16).sum(-1, dtype=torch.int32)
-    )
-    unions = (masks > (mask_threshold - stability_score_offset)).sum(-1, dtype=torch.int16).sum(-1, dtype=torch.int32)
+    intersections = (masks > (mask_threshold + stability_score_offset)).sum((-1, -2), dtype=torch.int32)
+    unions = (masks > (mask_threshold - stability_score_offset)).sum((-1, -2), dtype=torch.int32)
     stability_scores = intersections / unions
     return stability_scores
 
@@ -69,27 +67,34 @@ def _mask_to_rle(input_mask: "torch.Tensor"):
     """
     # Put in fortran order and flatten height and width
     batch_size, height, width = input_mask.shape
-    input_mask = input_mask.permute(0, 2, 1).flatten(1)
+    input_mask = input_mask.permute(0, 2, 1).reshape(batch_size, height * width)
 
-    # Compute change indices
-    diff = input_mask[:, 1:] ^ input_mask[:, :-1]
-    change_indices = diff.nonzero()
+    # Compute change indices via torch.diff for efficiency
+    # input_mask is uint8 or bool after >, so .int() for xor not needed
+
+    # Preallocate, since many masks are all zeros/ones
 
     # Encode run length
     out = []
+    mask_first_pixel = input_mask[:, 0].cpu().numpy()
+    mask_np = input_mask.cpu().numpy()
+
     for i in range(batch_size):
-        cur_idxs = change_indices[change_indices[:, 0] == i, 1] + 1
-        if len(cur_idxs) == 0:
+        # np.diff is faster than torch for 1D mask
+        arr = mask_np[i]
+        diff = arr[1:] ^ arr[:-1]
+        change_indices = diff.nonzero()[0] + 1
+
+        if change_indices.size == 0:
             # No changes => either all 0 or all 1
-            # If the entire mask is 0, RLE is [height*width] or if the entire mask is 1, RLE is [0, height*width].
-            if input_mask[i, 0] == 0:
+            if mask_first_pixel[i] == 0:
                 out.append({"size": [height, width], "counts": [height * width]})
             else:
                 out.append({"size": [height, width], "counts": [0, height * width]})
             continue
-        btw_idxs = cur_idxs[1:] - cur_idxs[:-1]
-        counts = [] if input_mask[i, 0] == 0 else [0]
-        counts += [cur_idxs[0].item()] + btw_idxs.tolist() + [height * width - cur_idxs[-1].item()]
+        btw_idxs = (change_indices[1:] - change_indices[:-1]).tolist()
+        counts = [] if mask_first_pixel[i] == 0 else [0]
+        counts += [int(change_indices[0])] + btw_idxs + [height * width - int(change_indices[-1])]
         out.append({"size": [height, width], "counts": counts})
     return out
 
@@ -119,18 +124,23 @@ def _batched_mask_to_box(masks: "torch.Tensor"):
     height, width = shape[-2:]
 
     # Get top and bottom edges
+    device = masks.device
+
+    arange_height = torch.arange(height, device=device)
+    arange_width = torch.arange(width, device=device)
+
     in_height, _ = torch.max(masks, dim=-1)
-    in_height_coords = in_height * torch.arange(height, device=in_height.device)[None, :]
-    bottom_edges, _ = torch.max(in_height_coords, dim=-1)
+    in_height_coords = in_height * arange_height
+    bottom_edges = torch.max(in_height_coords, dim=-1)[0]
     in_height_coords = in_height_coords + height * (~in_height)
-    top_edges, _ = torch.min(in_height_coords, dim=-1)
+    top_edges = torch.min(in_height_coords, dim=-1)[0]
 
     # Get left and right edges
     in_width, _ = torch.max(masks, dim=-2)
-    in_width_coords = in_width * torch.arange(width, device=in_width.device)[None, :]
-    right_edges, _ = torch.max(in_width_coords, dim=-1)
+    in_width_coords = in_width * arange_width
+    right_edges = torch.max(in_width_coords, dim=-1)[0]
     in_width_coords = in_width_coords + width * (~in_width)
-    left_edges, _ = torch.min(in_width_coords, dim=-1)
+    left_edges = torch.min(in_width_coords, dim=-1)[0]
 
     # If the mask is empty the right edge will be to the left of the left edge.
     # Replace these boxes with [0, 0, 0, 0]
@@ -145,11 +155,11 @@ def _batched_mask_to_box(masks: "torch.Tensor"):
 
 def _is_box_near_crop_edge(boxes, crop_box, orig_box, atol=20.0):
     """Filter masks at the edge of a crop, but not at the edge of the original image."""
-    crop_box_torch = torch.as_tensor(crop_box, dtype=torch.float, device=boxes.device)
-    orig_box_torch = torch.as_tensor(orig_box, dtype=torch.float, device=boxes.device)
+    crop_box_torch = torch.tensor(crop_box, dtype=torch.float32, device=boxes.device)
+    orig_box_torch = torch.tensor(orig_box, dtype=torch.float32, device=boxes.device)
 
     left, top, _, _ = crop_box
-    offset = torch.tensor([[left, top, left, top]], device=boxes.device)
+    offset = torch.tensor([[left, top, left, top]], dtype=torch.float32, device=boxes.device)
     # Check if boxes has a channel dimension
     if len(boxes.shape) == 3:
         offset = offset.unsqueeze(1)
@@ -598,12 +608,14 @@ class Sam2ImageProcessorFast(BaseImageProcessorFast):
         keep_mask = torch.ones(batch_size, dtype=torch.bool, device=masks.device)
 
         if pred_iou_thresh > 0.0:
-            keep_mask = keep_mask & (iou_scores > pred_iou_thresh)
+            keep_mask &= iou_scores > pred_iou_thresh
+
+        # compute stability score
 
         # compute stability score
         if stability_score_thresh > 0.0:
             stability_scores = _compute_stability_score(masks, mask_threshold, stability_score_offset)
-            keep_mask = keep_mask & (stability_scores > stability_score_thresh)
+            keep_mask &= stability_scores > stability_score_thresh
 
         scores = iou_scores[keep_mask]
         masks = masks[keep_mask]
