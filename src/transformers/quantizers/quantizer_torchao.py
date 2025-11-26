@@ -35,6 +35,8 @@ if is_torch_available():
     import torch
     import torch.nn as nn
 
+_WEIGHT_SIZE_RE = re.compile(r"(\d)weight", re.IGNORECASE)
+
 if is_torchao_available():
     import torchao
 
@@ -54,13 +56,10 @@ def fuzzy_match_size(config_name: str) -> Optional[str]:
     Extract the size digit from strings like "4weight", "8weight".
     Returns the digit as an integer if found, otherwise None.
     """
-    config_name = config_name.lower()
-
-    str_match = re.search(r"(\d)weight", config_name)
+    str_match = _WEIGHT_SIZE_RE.search(config_name)
 
     if str_match:
         return str_match.group(1)
-
     return None
 
 
