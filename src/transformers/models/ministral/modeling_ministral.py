@@ -313,10 +313,17 @@ class MinistralRotaryEmbedding(nn.Module):
 
         attention_factor = 1.0  # Unused in this type of RoPE
 
-        # Compute the inverse frequencies
-        inv_freq = 1.0 / (
-            base ** (torch.arange(0, dim, 2, dtype=torch.int64).to(device=device, dtype=torch.float) / dim)
-        )
+        # Optimize: All computations are done in float32 and avoid .to for each op
+        # Precompute float range and division in a single operation
+        range_vals = torch.arange(0, dim, 2, device=device, dtype=torch.float32)
+        # Use float32 to avoid unnecessary dtype conversions, this matches arithmetic in context.
+        # Avoid intermediate .to
+        power = range_vals / float(dim)
+        # Use torch.exp2 for more efficient exponentiation if base==2.0 (but base is usually a float like 10000),
+        # so keep torch.pow, but in bulk op.
+        exponent = torch.pow(base, power)
+        inv_freq = 1.0 / exponent
+
         return inv_freq, attention_factor
 
     @torch.no_grad()
