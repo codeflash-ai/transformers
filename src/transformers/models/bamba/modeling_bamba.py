@@ -245,15 +245,31 @@ class BambaRotaryEmbedding(nn.Module):
     @torch.no_grad()
     @dynamic_rope_update  # power user: used with advanced RoPE types (e.g. dynamic rope)
     def forward(self, x, position_ids):
-        inv_freq_expanded = self.inv_freq[None, :, None].float().expand(position_ids.shape[0], -1, 1).to(x.device)
-        position_ids_expanded = position_ids[:, None, :].float()
+        # Preallocate shapes and avoid redundant casting
+        batch_size = position_ids.shape[0]
+        inv_freq = self.inv_freq.float() if self.inv_freq.dtype != torch.float32 else self.inv_freq
+        # Instead of broadcasting and expanding many times, use torch.outer
+        # position_ids: (batch_size, seq_len)
+        # inv_freq: (dim//2)
+        # Goal: freqs (batch_size, seq_len, dim//2)
+        # Computing outer product for each batch
+        # As this is an optimization, avoid using slow expand on big batch dims
+
+        # position_ids should be 2D (batch_size, seq_len) and inv_freq (dim//2)
+        # The operation is position_ids[:, :, None] * inv_freq[None, None, :]
+        # But we want to avoid high memory usage, so let's do broadcasting smartly:
+
+        # If position_ids is (batch, seq_len), then position_ids[:, :, None] * inv_freq[None, None, :]
+        freqs = position_ids[:, :, None].float() * inv_freq[None, None, :]
+        # Concatenate for rotary dimension - like the original code
+        emb = torch.cat((freqs, freqs), dim=-1)
+        # Determine device type, with tiny logic unchanged
 
         device_type = x.device.type if isinstance(x.device.type, str) and x.device.type != "mps" else "cpu"
         with torch.autocast(device_type=device_type, enabled=False):  # Force float32
-            freqs = (inv_freq_expanded.float() @ position_ids_expanded.float()).transpose(1, 2)
-            emb = torch.cat((freqs, freqs), dim=-1)
-            cos = emb.cos() * self.attention_scaling
-            sin = emb.sin() * self.attention_scaling
+            # Remove redundant .float() calls inside autocast context
+            cos = emb.cos().mul(self.attention_scaling)
+            sin = emb.sin().mul(self.attention_scaling)
 
         return cos.to(dtype=x.dtype), sin.to(dtype=x.dtype)
 
