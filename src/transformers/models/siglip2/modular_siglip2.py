@@ -176,31 +176,50 @@ class Siglip2VisionEmbeddings(nn.Module):
         )
 
         # (height, width, embed_dim) -> (1, embed_dim, height, width) for interpolation
-        positional_embeddings = positional_embeddings.permute(2, 0, 1).unsqueeze(0)
+        positional_embeddings_t = positional_embeddings.permute(2, 0, 1).unsqueeze(0)
 
-        # Upcast to float32 on CPU because antialias is not supported for bfloat16/float16 on CPU
-        if positional_embeddings.device.type == "cpu":
-            positional_embeddings = positional_embeddings.to(torch.float32)
+        is_cpu = positional_embeddings_t.device.type == "cpu"
+        if is_cpu:
+            positional_embeddings_t = positional_embeddings_t.to(torch.float32)
 
-        for i in range(batch_size):
-            # (1, dim, height, width) -> (1, dim, target_height, target_width)
-            height, width = spatial_shapes[i]
+        # Pre-allocate a memoryview of the positional embeddings for assignment
+        # To minimize costly slicing, operate on views and contiguous assignments where possible
+        # Group together shapes with identical spatial shapes to minimize F.interpolate calls
+        # This is especially effective for large batches with repeated spatial shapes
+
+        # Find unique shapes and indices
+        spatial_shapes_np = spatial_shapes.cpu().numpy()
+        shape_tuples = [tuple(map(int, shape)) for shape in spatial_shapes_np]
+        import collections
+
+        index_map: dict[tuple[int, int], list[int]] = collections.defaultdict(list)
+        for idx, shape in enumerate(shape_tuples):
+            index_map[shape].append(idx)
+
+        for shape, indices in index_map.items():
+            height, width = shape
+            # Interpolate only once per unique shape, then batch-assign
             resized_embeddings = F.interpolate(
-                positional_embeddings,
+                positional_embeddings_t,
                 size=(height, width),
                 mode="bilinear",
                 align_corners=False,
                 antialias=True,
             )
+            # (1, dim, height, width) -> (height*width, dim)
+            resized_embeddings_f = resized_embeddings.reshape(embed_dim, height * width).transpose(0, 1)
+            # Cast to original dtype, if changed
+            if is_cpu:
+                resized_embeddings_f = resized_embeddings_f.to(source_dtype)
 
-            # (1, dim, target_height, target_width) -> (target_height * target_width, dim)
-            resized_embeddings = resized_embeddings.reshape(embed_dim, height * width).transpose(0, 1)
-
-            # Cast to original dtype
-            resized_embeddings = resized_embeddings.to(source_dtype)
-
-            resulted_positional_embeddings[i, : height * width] = resized_embeddings
-            resulted_positional_embeddings[i, height * width :] = resized_embeddings[0]
+            # Assign embeddings to all indices sharing this shape
+            for i in indices:
+                result_slice = resulted_positional_embeddings[i]
+                hw = height * width
+                result_slice[:hw] = resized_embeddings_f
+                # Fill remaining with the first patch's positional embedding
+                if hw < max_length:
+                    result_slice[hw:] = resized_embeddings_f[0]
 
         return resulted_positional_embeddings
 
