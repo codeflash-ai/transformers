@@ -15,6 +15,7 @@
 """PyTorch DINOv2 model."""
 
 import collections.abc
+import math
 from collections.abc import Callable
 from typing import Optional, Union
 
@@ -65,32 +66,47 @@ class Dinov2Embeddings(nn.Module):
         """
 
         num_patches = embeddings.shape[1] - 1
-        num_positions = self.position_embeddings.shape[1] - 1
+        position_embeddings = self.position_embeddings
+        patch_size = self.patch_size
+        num_positions = position_embeddings.shape[1] - 1
+
+        # always interpolate when tracing to ensure the exported model works for dynamic input shapes
 
         # always interpolate when tracing to ensure the exported model works for dynamic input shapes
         if not torch.jit.is_tracing() and num_patches == num_positions and height == width:
-            return self.position_embeddings
+            return position_embeddings
 
-        class_pos_embed = self.position_embeddings[:, :1]
-        patch_pos_embed = self.position_embeddings[:, 1:]
+        class_pos_embed = position_embeddings[:, :1]
+        patch_pos_embed = position_embeddings[:, 1:]
 
         dim = embeddings.shape[-1]
+        new_height = height // patch_size
+        new_width = width // patch_size
 
-        new_height = height // self.patch_size
-        new_width = width // self.patch_size
+        # Use math.isqrt for accurate integer square root, avoiding float->tensor conversion
+        sqrt_num_positions = math.isqrt(num_positions)
+        if torch.jit.is_tracing():
+            sqrt_num_positions = torch_int(sqrt_num_positions)
 
-        sqrt_num_positions = torch_int(num_positions**0.5)
-        patch_pos_embed = patch_pos_embed.reshape(1, sqrt_num_positions, sqrt_num_positions, dim)
-        patch_pos_embed = patch_pos_embed.permute(0, 3, 1, 2)
+        # Reshape and permute only as needed, minimize dtype casts
+        patch_pos_embed = patch_pos_embed.reshape(1, sqrt_num_positions, sqrt_num_positions, dim).permute(0, 3, 1, 2)
         target_dtype = patch_pos_embed.dtype
-        patch_pos_embed = nn.functional.interpolate(
-            patch_pos_embed.to(torch.float32),
+
+        # Only cast once, interpolate, only again if necessary
+        patch_pos_embed_f32 = (
+            patch_pos_embed if patch_pos_embed.dtype == torch.float32 else patch_pos_embed.to(torch.float32)
+        )
+        patch_pos_embed_f32 = nn.functional.interpolate(
+            patch_pos_embed_f32,
             size=(new_height, new_width),
             mode="bicubic",
             align_corners=False,
-        ).to(dtype=target_dtype)
+        )
+        if patch_pos_embed_f32.dtype != target_dtype:
+            patch_pos_embed_f32 = patch_pos_embed_f32.to(dtype=target_dtype)
 
-        patch_pos_embed = patch_pos_embed.permute(0, 2, 3, 1).view(1, -1, dim)
+        # Final permute & reshape
+        patch_pos_embed = patch_pos_embed_f32.permute(0, 2, 3, 1).reshape(1, -1, dim)
 
         return torch.cat((class_pos_embed, patch_pos_embed), dim=1)
 
