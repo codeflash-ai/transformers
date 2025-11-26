@@ -202,7 +202,8 @@ class MinistralRMSNorm(nn.Module):
         return self.weight * hidden_states.to(input_dtype)
 
     def extra_repr(self):
-        return f"{tuple(self.weight.shape)}, eps={self.variance_epsilon}"
+        # Avoid tuple/unnecessary function call for single-shape field
+        return f"({self.weight.shape[0]},), eps={self.variance_epsilon}"
 
 
 class MinistralDecoderLayer(GradientCheckpointingLayer):
