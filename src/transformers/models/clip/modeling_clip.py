@@ -46,7 +46,17 @@ logger = logging.get_logger(__name__)
 # contrastive loss function, adapted from
 # https://sachinruk.github.io/blog/2021-03-07-clip.html
 def contrastive_loss(logits: torch.Tensor) -> torch.Tensor:
-    return nn.functional.cross_entropy(logits, torch.arange(len(logits), device=logits.device))
+    batch_size = logits.shape[0]
+    device = logits.device
+
+    if not hasattr(contrastive_loss, "_cache"):
+        contrastive_loss._cache = {}
+
+    cache_key = (device, batch_size)
+    if cache_key not in contrastive_loss._cache:
+        contrastive_loss._cache[cache_key] = torch.arange(batch_size, device=device)
+
+    return nn.functional.cross_entropy(logits, contrastive_loss._cache[cache_key])
 
 
 def clip_loss(similarity: torch.Tensor) -> torch.Tensor:
