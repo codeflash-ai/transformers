@@ -321,12 +321,22 @@ ORIGINAL_TO_CONVERTED_KEY_MAPPING = {
 
 
 def convert_old_keys_to_new_keys(state_dict_keys: Optional[dict] = None):
-    # Use the mapping to rename keys
-    for original_key, converted_key in ORIGINAL_TO_CONVERTED_KEY_MAPPING.items():
-        for key in list(state_dict_keys.keys()):
-            new_key = re.sub(original_key, converted_key, key)
+    # Precompile regular expressions for efficiency
+    compiled_patterns = [
+        (re.compile(original_key), converted_key)
+        for original_key, converted_key in ORIGINAL_TO_CONVERTED_KEY_MAPPING.items()
+    ]
+
+    keys_to_rename = {}
+    for key in list(state_dict_keys.keys()):
+        for pattern, converted_key in compiled_patterns:
+            new_key = pattern.sub(converted_key, key)
             if new_key != key:
-                state_dict_keys[new_key] = state_dict_keys.pop(key)
+                keys_to_rename[key] = new_key
+                break
+
+    for old_key, new_key in keys_to_rename.items():
+        state_dict_keys[new_key] = state_dict_keys.pop(old_key)
 
     return state_dict_keys
 
