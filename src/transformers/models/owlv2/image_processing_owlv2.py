@@ -119,7 +119,11 @@ def box_area(boxes):
         `torch.FloatTensor`: a tensor containing the area for each box.
     """
     boxes = _upcast(boxes)
-    return (boxes[:, 2] - boxes[:, 0]) * (boxes[:, 3] - boxes[:, 1])
+    # Direct in-place difference is not done to avoid mutating the input,
+    # but we can compute width and height only once for better efficiency.
+    w = boxes[:, 2] - boxes[:, 0]
+    h = boxes[:, 3] - boxes[:, 1]
+    return w * h
 
 
 # Copied from transformers.models.owlvit.image_processing_owlvit.box_iou
@@ -127,11 +131,24 @@ def box_iou(boxes1, boxes2):
     area1 = box_area(boxes1)
     area2 = box_area(boxes2)
 
-    left_top = torch.max(boxes1[:, None, :2], boxes2[:, :2])  # [N,M,2]
-    right_bottom = torch.min(boxes1[:, None, 2:], boxes2[:, 2:])  # [N,M,2]
+    # Avoid repeated [N,1,2] and [M,2] indexing - use expand for better memory usage
+    boxes1_x1 = boxes1[:, 0][:, None]
+    boxes1_y1 = boxes1[:, 1][:, None]
+    boxes1_x2 = boxes1[:, 2][:, None]
+    boxes1_y2 = boxes1[:, 3][:, None]
+    boxes2_x1 = boxes2[:, 0]
+    boxes2_y1 = boxes2[:, 1]
+    boxes2_x2 = boxes2[:, 2]
+    boxes2_y2 = boxes2[:, 3]
 
-    width_height = (right_bottom - left_top).clamp(min=0)  # [N,M,2]
-    inter = width_height[:, :, 0] * width_height[:, :, 1]  # [N,M]
+    max_x1 = torch.max(boxes1_x1, boxes2_x1)
+    max_y1 = torch.max(boxes1_y1, boxes2_y1)
+    min_x2 = torch.min(boxes1_x2, boxes2_x2)
+    min_y2 = torch.min(boxes1_y2, boxes2_y2)
+
+    inter_w = (min_x2 - max_x1).clamp(min=0)
+    inter_h = (min_y2 - max_y1).clamp(min=0)
+    inter = inter_w * inter_h
 
     union = area1[:, None] + area2 - inter
 
