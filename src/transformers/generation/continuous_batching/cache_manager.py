@@ -86,12 +86,15 @@ class FullAttentionCacheAllocator(CacheAllocator):
         if block_table is None:
             raise ValueError(f"No block table found for request {request_id}")
         # Compute the physical indices
-        physical_indices = []
-        for i in range(past_length + query_length):
-            block_idx = i // self.block_size
-            block_offset = i % self.block_size
-            physical_index = block_table[block_idx] * self.block_size + block_offset
-            physical_indices.append(physical_index)
+
+        # Optimization: preallocate and use list comprehension for reduced Python overhead
+        total_length = past_length + query_length
+        block_size = self.block_size
+        block_table_local = block_table  # local var for faster access
+
+        physical_indices = [
+            block_table_local[i // block_size] * block_size + (i % block_size) for i in range(total_length)
+        ]
         return physical_indices
 
     def get_write_indices(self, request_id: str, past_length: int, query_length: int) -> list[int]:
