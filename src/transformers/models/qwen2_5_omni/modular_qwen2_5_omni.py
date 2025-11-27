@@ -2919,8 +2919,10 @@ class AttentiveStatisticsPooling(nn.Module):
         return mask
 
     def _compute_statistics(self, x, m, dim=2):
-        mean = (m * x).sum(dim)
-        std = torch.sqrt((m * (x - mean.unsqueeze(dim)).pow(2)).sum(dim).clamp(self.eps))
+        mean = torch.sum(m * x, dim=dim)
+        x_centered = x - mean.unsqueeze(dim)
+        var = torch.sum(m * (x_centered * x_centered), dim=dim)
+        std = torch.sqrt(var.clamp(min=self.eps))
         return mean, std
 
     def forward(self, hidden_states):
