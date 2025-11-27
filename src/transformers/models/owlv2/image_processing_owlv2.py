@@ -80,19 +80,26 @@ def _scale_boxes(boxes, target_sizes):
         `torch.Tensor` of shape `(batch_size, num_boxes, 4)`: Scaled bounding boxes.
     """
 
-    if isinstance(target_sizes, (list, tuple)):
-        image_height = torch.tensor([i[0] for i in target_sizes])
-        image_width = torch.tensor([i[1] for i in target_sizes])
-    elif isinstance(target_sizes, torch.Tensor):
-        image_height, image_width = target_sizes.unbind(1)
+    # Fast-path for tensor input (common) - avoids unbind and alloc if tensor already on correct dtype/device
+    if isinstance(target_sizes, torch.Tensor):
+        image_height = target_sizes[:, 0]
+        image_width = target_sizes[:, 1]
+    elif isinstance(target_sizes, (list, tuple)):
+        # Preallocate tensor of final dtype and device for efficiency if input boxes are tensor
+        # This saves intermediate python list and conversion cost
+        device = boxes.device
+        dtype = boxes.dtype
+        image_height = torch.tensor([i[0] for i in target_sizes], dtype=dtype, device=device)
+        image_width = torch.tensor([i[1] for i in target_sizes], dtype=dtype, device=device)
     else:
         raise TypeError("`target_sizes` must be a list, tuple or torch.Tensor")
 
     # for owlv2 image is padded to max size unlike owlvit, that's why we have to scale boxes to max size
     max_size = torch.max(image_height, image_width)
 
-    scale_factor = torch.stack([max_size, max_size, max_size, max_size], dim=1)
-    scale_factor = scale_factor.unsqueeze(1).to(boxes.device)
+    # Avoid multiple expands/repeats by using broadcasting (cheaper on memory, and potentially faster for large batches)
+    # scale_factor shape: (batch_size, 1, 4), will broadcast with boxes: (batch_size, num_boxes, 4)
+    scale_factor = max_size.view(-1, 1, 1).expand(-1, 1, 4)
     boxes = boxes * scale_factor
     return boxes
 
