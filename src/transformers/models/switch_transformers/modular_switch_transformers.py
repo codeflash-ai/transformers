@@ -106,15 +106,16 @@ def load_balancing_loss_func(router_probs: torch.Tensor, expert_indices: torch.T
     if len(expert_indices.shape) == 2:
         expert_indices = expert_indices.unsqueeze(2)
 
-    expert_mask = torch.nn.functional.one_hot(expert_indices, num_experts)
+    expert_mask = torch.zeros(
+        expert_indices.shape[0],
+        expert_indices.shape[1],
+        num_experts,
+        dtype=torch.float32,
+        device=expert_indices.device,
+    )
+    expert_mask.scatter_(-1, expert_indices, 1)
 
-    # For a given token, determine if it was routed to a given expert.
-    expert_mask = torch.max(expert_mask, axis=-2).values
-
-    # cast to float32 otherwise mean will fail
-    expert_mask = expert_mask.to(torch.float32)
     tokens_per_group_and_expert = torch.mean(expert_mask, axis=-2)
-
     router_prob_per_group_and_expert = torch.mean(router_probs, axis=-2)
     return torch.mean(tokens_per_group_and_expert * router_prob_per_group_and_expert) * (num_experts**2)
 
