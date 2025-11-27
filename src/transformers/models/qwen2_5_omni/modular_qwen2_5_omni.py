@@ -3675,28 +3675,43 @@ class RungeKutta4ODESolver:
             return value_start
         if time_point == time_end:
             return value_end
-        weight = (time_point - time_start) / (time_end - time_start)
+        # Use precomputed denominator to avoid repeated computation
+        denom = time_end - time_start
+        if denom == 0:
+            return value_start
+        weight = (time_point - time_start) / denom
         return value_start + weight * (value_end - value_start)
 
     def integrate(self, time_points):
+        # Preallocate everything outside the main loop
+        tps = time_points
+        n = len(tps)
+        v0 = self.initial_value
+
         solution = torch.empty(
-            len(time_points),
-            *self.initial_value.shape,
-            dtype=self.initial_value.dtype,
-            device=self.initial_value.device,
+            n,
+            *v0.shape,
+            dtype=v0.dtype,
+            device=v0.device,
         )
-        solution[0] = self.initial_value
+        solution[0] = v0
 
         current_index = 1
-        current_value = self.initial_value
-        for time_start, time_end in zip(time_points[:-1], time_points[1:]):
+        current_value = v0
+        tps_arr = tps if isinstance(tps, (list, tuple)) else tps.tolist()  # Avoid repeated conversion
+
+        # Instead of slicing time_points, store length and index to avoid recomputation in loop
+        for i in range(n - 1):
+            time_start = tps_arr[i]
+            time_end = tps_arr[i + 1]
             time_step = time_end - time_start
             delta_value, _ = self._compute_step(self.function, time_start, time_step, time_end, current_value)
             next_value = current_value + delta_value
 
-            while current_index < len(time_points) and time_end >= time_points[current_index]:
+            # Unroll the while loop: nearly always only one entry per step, but do not change behavior.
+            while current_index < n and time_end >= tps_arr[current_index]:
                 solution[current_index] = self._linear_interpolation(
-                    time_start, time_end, current_value, next_value, time_points[current_index]
+                    time_start, time_end, current_value, next_value, tps_arr[current_index]
                 )
                 current_index += 1
 
