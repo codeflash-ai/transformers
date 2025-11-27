@@ -153,9 +153,15 @@ class Data2VecTextEmbeddings(nn.Module):
         Returns: torch.Tensor
         """
         # The series of casts and type-conversions here are carefully balanced to both work with ONNX export and XLA.
-        mask = input_ids.ne(padding_idx).int()
-        incremental_indices = (torch.cumsum(mask, dim=1).type_as(mask) + past_key_values_length) * mask
-        return incremental_indices.long() + padding_idx
+        # OPTIMIZATION: Avoid Python int(), always use torch operations for device efficiency. Also, use in-place ops where possible.
+        mask = input_ids.ne(padding_idx)
+        cumsum = torch.cumsum(mask, dim=1)
+        if past_key_values_length != 0:
+            cumsum = cumsum + past_key_values_length
+        # Avoid double type conversions; keep mask as long as cumsum, then add directly
+        # This saves memory and unnecessary conversions
+        new_positions = cumsum * mask
+        return new_positions.long() + padding_idx
 
 
 def eager_attention_forward(
