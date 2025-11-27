@@ -3489,6 +3489,15 @@ class AMPBlock(torch.nn.Module):
     ):
         super().__init__()
 
+        get_padding = self._get_padding  # minor local var speedup
+
+        d1, d2, d3 = dilation  # unpack once
+
+        padding_1 = get_padding(kernel_size, d1)
+        padding_2 = get_padding(kernel_size, d2)
+        padding_3 = get_padding(kernel_size, d3)
+        padding_default = get_padding(kernel_size, 1)
+
         self.convs1 = nn.ModuleList(
             [
                 nn.Conv1d(
@@ -3496,24 +3505,24 @@ class AMPBlock(torch.nn.Module):
                     channels,
                     kernel_size,
                     1,
-                    dilation=dilation[0],
-                    padding=self._get_padding(kernel_size, dilation[0]),
+                    dilation=d1,
+                    padding=padding_1,
                 ),
                 nn.Conv1d(
                     channels,
                     channels,
                     kernel_size,
                     1,
-                    dilation=dilation[1],
-                    padding=self._get_padding(kernel_size, dilation[1]),
+                    dilation=d2,
+                    padding=padding_2,
                 ),
                 nn.Conv1d(
                     channels,
                     channels,
                     kernel_size,
                     1,
-                    dilation=dilation[2],
-                    padding=self._get_padding(kernel_size, dilation[2]),
+                    dilation=d3,
+                    padding=padding_3,
                 ),
             ]
         )
@@ -3526,28 +3535,15 @@ class AMPBlock(torch.nn.Module):
                     kernel_size,
                     1,
                     dilation=1,
-                    padding=self._get_padding(kernel_size, 1),
-                ),
-                nn.Conv1d(
-                    channels,
-                    channels,
-                    kernel_size,
-                    1,
-                    dilation=1,
-                    padding=self._get_padding(kernel_size, 1),
-                ),
-                nn.Conv1d(
-                    channels,
-                    channels,
-                    kernel_size,
-                    1,
-                    dilation=1,
-                    padding=self._get_padding(kernel_size, 1),
-                ),
+                    padding=padding_default,
+                )
+                for _ in range(3)
             ]
         )
 
-        self.num_layers = len(self.convs1) + len(self.convs2)  # total number of conv layers
+        self.num_layers = 6  # len(self.convs1) + len(self.convs2)
+
+        # The activations pattern is (act1, act2) for each residual block, so build in a tight loop below
 
         self.activations = nn.ModuleList(
             [TorchActivation1d(activation=SnakeBeta(channels)) for _ in range(self.num_layers)]
@@ -3557,13 +3553,13 @@ class AMPBlock(torch.nn.Module):
         return int((kernel_size * dilation - dilation) / 2)
 
     def forward(self, hidden_states):
-        acts1, acts2 = self.activations[::2], self.activations[1::2]
-        for conv1, conv2, act1, act2 in zip(self.convs1, self.convs2, acts1, acts2):
+        # Pre-pair conv1, conv2, act1, act2 for tighter loop and less slicing
+        for i in range(3):
             residual = hidden_states
-            hidden_states = act1(hidden_states)
-            hidden_states = conv1(hidden_states)
-            hidden_states = act2(hidden_states)
-            hidden_states = conv2(hidden_states)
+            hidden_states = self.activations[2 * i](hidden_states)
+            hidden_states = self.convs1[i](hidden_states)
+            hidden_states = self.activations[2 * i + 1](hidden_states)
+            hidden_states = self.convs2[i](hidden_states)
             hidden_states = residual + hidden_states
 
         return hidden_states
