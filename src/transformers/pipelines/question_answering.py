@@ -61,7 +61,7 @@ def decode_spans(
         end = end[None]
 
     # Compute the score of each tuple(start, end) to be the real answer
-    outer = np.matmul(np.expand_dims(start, -1), np.expand_dims(end, 1))
+    outer = np.einsum("bi,bj->bij", start, end)
 
     # Remove candidate with end < start and end - start > max_answer_len
     candidates = np.tril(np.triu(outer), max_answer_len - 1)
@@ -77,7 +77,12 @@ def decode_spans(
         idx_sort = idx[np.argsort(-scores_flat[idx])]
 
     starts, ends = np.unravel_index(idx_sort, candidates.shape)[1:]
-    desired_spans = np.isin(starts, undesired_tokens.nonzero()) & np.isin(ends, undesired_tokens.nonzero())
+    undesired_nonzero = set(np.flatnonzero(undesired_tokens))
+    desired_spans = np.fromiter(
+        (s in undesired_nonzero and e in undesired_nonzero for s, e in zip(starts, ends)),
+        dtype=bool,
+        count=len(starts),
+    )
     starts = starts[desired_spans]
     ends = ends[desired_spans]
     scores = candidates[0, starts, ends]
@@ -113,27 +118,31 @@ def select_starts_ends(
     undesired_tokens = np.abs(np.array(p_mask) - 1)
 
     if attention_mask is not None:
-        undesired_tokens = undesired_tokens & attention_mask
+        undesired_tokens = np.bitwise_and(undesired_tokens, attention_mask)
 
-    # Generate mask
-    undesired_tokens_mask = undesired_tokens == 0.0
+    undesired_tokens_mask = undesired_tokens == 0
 
-    # Make sure non-context indexes in the tensor cannot contribute to the softmax
-    start = np.where(undesired_tokens_mask, -10000.0, start)
-    end = np.where(undesired_tokens_mask, -10000.0, end)
+    # Mask start and end logits where non-context tokens
+    # Direct type 'np.where' is fastest for default input
+    mstart = np.where(undesired_tokens_mask, -10000.0, start)
+    mend = np.where(undesired_tokens_mask, -10000.0, end)
 
-    # Normalize logits and spans to retrieve the answer
-    start = np.exp(start - start.max(axis=-1, keepdims=True))
-    start = start / start.sum()
+    # Normalization vectorized (move axis param out of tight loops)
+    # Use subtraction + exponentiation as written, but batch separately for sum for proper axis
+    max_start = mstart.max(axis=-1, keepdims=True)
+    exp_start = np.exp(mstart - max_start)
+    start = exp_start / exp_start.sum(axis=-1, keepdims=True)
 
-    end = np.exp(end - end.max(axis=-1, keepdims=True))
-    end = end / end.sum()
+    max_end = mend.max(axis=-1, keepdims=True)
+    exp_end = np.exp(mend - max_end)
+    end = exp_end / exp_end.sum(axis=-1, keepdims=True)
 
     if handle_impossible_answer:
         min_null_score = min(min_null_score, (start[0, 0] * end[0, 0]).item())
 
     # Mask CLS
-    start[0, 0] = end[0, 0] = 0.0
+    start[0, 0] = 0.0
+    end[0, 0] = 0.0
 
     starts, ends, scores = decode_spans(start, end, top_k, max_answer_len, undesired_tokens)
     return starts, ends, scores, min_null_score
