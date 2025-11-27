@@ -269,10 +269,14 @@ def get_oneformer_resize_output_image_size(
     Returns:
         `Tuple[int, int]`: The output size.
     """
-    if isinstance(size, (tuple, list)):
-        if len(size) == 2:
-            return tuple(size)
-        elif len(size) == 1:
+    # Eliminate repeated isinstance and len checks for tuple/list
+    # Fast path for the common 'size is int' and 'len==2'
+    size_type = type(size)
+    if size_type is tuple or size_type is list:
+        n = len(size)
+        if n == 2:
+            return (size[0], size[1])
+        elif n == 1:
             # Perform same logic as if size was an int
             size = size[0]
         else:
@@ -281,11 +285,24 @@ def get_oneformer_resize_output_image_size(
     if default_to_square:
         return (size, size)
 
-    height, width = image.shape[-2], image.shape[-1]
-    short, long = (width, height) if width <= height else (height, width)
-    requested_new_short = size
+    # Avoid unnecessary tuple unpacking and logic per profile
+    shape = image.shape
+    height = shape[-2]
+    width = shape[-1]
+    if width <= height:
+        short = width
+        long = height
+        transpose = True
+    else:
+        short = height
+        long = width
+        transpose = False
 
-    new_short, new_long = requested_new_short, int(requested_new_short * long / short)
+    requested_new_short = size
+    long_scaled = int(requested_new_short * long / short)
+
+    new_short = requested_new_short
+    new_long = long_scaled
 
     if max_size is not None:
         if max_size <= requested_new_short:
@@ -294,9 +311,17 @@ def get_oneformer_resize_output_image_size(
                 f"size for the smaller edge size = {size}"
             )
         if new_long > max_size:
-            new_short, new_long = int(max_size * new_short / new_long), max_size
+            # Recalculate to ensure new_long=max_size, new_short proportional
+            # Use integer math for efficiency
+            new_short = int(max_size * new_short / new_long)
+            new_long = max_size
 
-    return (new_long, new_short) if width <= height else (new_short, new_long)
+    if transpose:
+        # If width <= height, return (new_long, new_short)
+        return (new_long, new_short)
+    else:
+        # If width > height, return (new_short, new_long)
+        return (new_short, new_long)
 
 
 @auto_docstring
