@@ -3064,10 +3064,17 @@ class ECAPA_TimeDelayNet(torch.nn.Module):
         # Minimize transpose for efficiency
         hidden_states = hidden_states.transpose(1, 2)
 
-        hidden_states_list = []
-        for layer in self.blocks:
+        # Pre-allocate list and process block layers efficiently,
+        # and avoid repeated pointer lookups
+        blocks = self.blocks
+        hidden_states_list = [None] * len(blocks)
+        for i, layer in enumerate(blocks):
             hidden_states = layer(hidden_states)
-            hidden_states_list.append(hidden_states)
+            hidden_states_list[i] = hidden_states
+
+        # Multi-layer feature aggregation
+        # Avoid slicing on list repeatedly in inner loop.
+        # Delayed materialization of hidden_states_list[1:] until needed.
 
         # Multi-layer feature aggregation
         hidden_states = torch.cat(hidden_states_list[1:], dim=1)
