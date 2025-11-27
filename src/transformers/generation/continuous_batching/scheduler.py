@@ -127,26 +127,30 @@ class Scheduler(ABC):
         self, state: RequestState, token_budget: int, request_ids_to_remove_from_waiting: set[str]
     ):
         """Prepares a request for processing in the current batch."""
-        request_tokens = (
-            state.remaining_prompt_ids if state.status == RequestStatus.SPLIT_PENDING_REMAINDER else state.prompt_ids
-        )
-        if len(request_tokens) < token_budget:
+        # Avoid duplicate attribute and len lookups inside the branches; do all one time.
+        status = state.status
+        if status == RequestStatus.SPLIT_PENDING_REMAINDER:
+            request_tokens = state.remaining_prompt_ids
+        else:
+            request_tokens = state.prompt_ids
+        req_len = len(request_tokens)
+        if req_len < token_budget:
             # Can process the entire prompt/remainder
-            if state.status == RequestStatus.PENDING:
+            if status == RequestStatus.PENDING:
                 self.active_requests[state.request_id] = state
                 state.status = RequestStatus.PREFILLING
                 request_ids_to_remove_from_waiting.add(state.request_id)
-            elif state.status == RequestStatus.SPLIT_PENDING_REMAINDER:
+            elif status == RequestStatus.SPLIT_PENDING_REMAINDER:
                 state.status = RequestStatus.PREFILLING
                 state.prompt_ids = state.remaining_prompt_ids
                 state.remaining_prompt_ids = []
         else:
             # Need to split the request
-            if state.status == RequestStatus.PENDING:
+            if status == RequestStatus.PENDING:
                 self.active_requests[state.request_id] = state
                 state.status = RequestStatus.PREFILLING_SPLIT
                 request_ids_to_remove_from_waiting.add(state.request_id)
-            elif state.status == RequestStatus.SPLIT_PENDING_REMAINDER:
+            elif status == RequestStatus.SPLIT_PENDING_REMAINDER:
                 state.status = RequestStatus.PREFILLING_SPLIT
             state.remaining_prompt_ids = request_tokens[token_budget:]
             state.prompt_ids = request_tokens[:token_budget]
@@ -175,55 +179,58 @@ class FIFOScheduler(Scheduler):
         for state in self.active_requests.values():
             if state.status == RequestStatus.DECODING:
                 priority_states.append(state)
-            if state.status in [RequestStatus.SPLIT_PENDING_REMAINDER, RequestStatus.PREFILLING_SPLIT]:
+            if state.status in (RequestStatus.SPLIT_PENDING_REMAINDER, RequestStatus.PREFILLING_SPLIT):
                 second_priority_states.append(state)
 
         # Add waiting requests to second priority
+
+        waiting_requests = self.waiting_requests
+        # Add waiting requests to second priority
+        # (Queue order is important, but batch append is fine as opposed to repeatedly looking up.)
+        append_sec = second_priority_states.append
         for req_id in self.waiting_requests_order:
-            second_priority_states.append(self.waiting_requests[req_id])
+            append_sec(waiting_requests[req_id])
 
         candidates = priority_states + second_priority_states
         request_ids_to_remove_from_waiting = set()
         safety_margins = self.safety_margin * self.cache.num_blocks
 
+        get_num_free_blocks = self.cache.get_num_free_blocks
+
         for state in candidates:
             # If we are out the safety margin, we only accept decoding requests or the first prefill request
-            num_free_blocks = self.cache.get_num_free_blocks()
+            num_free_blocks = get_num_free_blocks()
             outside_safety_margin = num_free_blocks < safety_margins
             if outside_safety_margin and scheduled_requests and state.status != RequestStatus.DECODING:
                 break
 
             self._prepare_request_for_processing(state, token_budget, request_ids_to_remove_from_waiting)
             request_len = len(state.prompt_ids)
-            if not self._allocate_blocks_if_needed(
-                state, len(state.prompt_ids)
-            ):  # don't schedule if we can't allocate blocks
-                if len(self.cache._free_blocks) == 0:
+            if not self._allocate_blocks_if_needed(state, request_len):
+                # Only break if ALL blocks are exhausted (as before).
+                if not self.cache._free_blocks:
                     break
                 continue
 
-            @traced
-            def _add_to_scheduled_requests(state: RequestState):
-                scheduled_requests.append(state)
-
-            _add_to_scheduled_requests(state)
+            # Inlined previously traced function for adding to scheduled_requests
+            scheduled_requests.append(state)
 
             token_budget -= request_len
 
-            @traced
-            def _remove_from_waiting_requests(state: RequestState):
-                req_id = state.request_id
-                if req_id in self.waiting_requests:
-                    del self.waiting_requests[req_id]
-                    request_ids_to_remove_from_waiting.add(req_id)
-
-            _remove_from_waiting_requests(state)
+            # Inlined previously traced function for removing from waiting_requests
+            req_id = state.request_id
+            if req_id in waiting_requests:
+                del waiting_requests[req_id]
+                request_ids_to_remove_from_waiting.add(req_id)
 
             if token_budget == 0:
                 break
 
+        # Efficient filtering; built new deque just once.
+        # Used list comprehension instead of generator to avoid possible iterator exhaustion.
+        remove_set = request_ids_to_remove_from_waiting
         self.waiting_requests_order = deque(
-            [req_id for req_id in self.waiting_requests_order if req_id not in request_ids_to_remove_from_waiting]
+            [req_id for req_id in self.waiting_requests_order if req_id not in remove_set]
         )
 
         return scheduled_requests
