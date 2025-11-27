@@ -80,143 +80,152 @@ def get_maskformer_config(model_name: str):
 
 
 def create_rename_keys(config):
-    rename_keys = []
-    # stem
-    # fmt: off
-    rename_keys.append(("backbone.stem.conv1.weight", "model.pixel_level_module.encoder.embedder.embedder.convolution.weight"))
-    rename_keys.append(("backbone.stem.conv1.norm.weight", "model.pixel_level_module.encoder.embedder.embedder.normalization.weight"))
-    rename_keys.append(("backbone.stem.conv1.norm.bias", "model.pixel_level_module.encoder.embedder.embedder.normalization.bias"))
-    rename_keys.append(("backbone.stem.conv1.norm.running_mean", "model.pixel_level_module.encoder.embedder.embedder.normalization.running_mean"))
-    rename_keys.append(("backbone.stem.conv1.norm.running_var", "model.pixel_level_module.encoder.embedder.embedder.normalization.running_var"))
-    # fmt: on
-    # stages
-    for stage_idx in range(len(config.backbone_config.depths)):
-        for layer_idx in range(config.backbone_config.depths[stage_idx]):
+    # Use local variable to avoid growing a list and repeatedly resizing
+    rename_keys = [
+        # stem
+        ("backbone.stem.conv1.weight", "model.pixel_level_module.encoder.embedder.embedder.convolution.weight"),
+        ("backbone.stem.conv1.norm.weight", "model.pixel_level_module.encoder.embedder.embedder.normalization.weight"),
+        ("backbone.stem.conv1.norm.bias", "model.pixel_level_module.encoder.embedder.embedder.normalization.bias"),
+        ("backbone.stem.conv1.norm.running_mean", "model.pixel_level_module.encoder.embedder.embedder.normalization.running_mean"),
+        ("backbone.stem.conv1.norm.running_var", "model.pixel_level_module.encoder.embedder.embedder.normalization.running_var"),
+    ]
+    depths = config.backbone_config.depths
+    # Precompute the 3 repeated suffixes for conv layers to avoid recomputing them in the loop
+    conv_suffixes = (
+        (".conv1.weight", ".layer.0.convolution.weight"),
+        (".conv1.norm.weight", ".layer.0.normalization.weight"),
+        (".conv1.norm.bias", ".layer.0.normalization.bias"),
+        (".conv1.norm.running_mean", ".layer.0.normalization.running_mean"),
+        (".conv1.norm.running_var", ".layer.0.normalization.running_var"),
+        (".conv2.weight", ".layer.1.convolution.weight"),
+        (".conv2.norm.weight", ".layer.1.normalization.weight"),
+        (".conv2.norm.bias", ".layer.1.normalization.bias"),
+        (".conv2.norm.running_mean", ".layer.1.normalization.running_mean"),
+        (".conv2.norm.running_var", ".layer.1.normalization.running_var"),
+        (".conv3.weight", ".layer.2.convolution.weight"),
+        (".conv3.norm.weight", ".layer.2.normalization.weight"),
+        (".conv3.norm.bias", ".layer.2.normalization.bias"),
+        (".conv3.norm.running_mean", ".layer.2.normalization.running_mean"),
+        (".conv3.norm.running_var", ".layer.2.normalization.running_var"),
+    )
+    for stage_idx, num_layers in enumerate(depths):
+        res_stage = stage_idx + 2
+        # Precompute formatted prefix for efficiency
+        stage_prefix = f"model.pixel_level_module.encoder.encoder.stages.{stage_idx}.layers"
+        for layer_idx in range(num_layers):
+            layer_prefix = f"{stage_prefix}.{layer_idx}"
             # shortcut
             if layer_idx == 0:
+                shortcut_prefix = f"backbone.res{res_stage}.{layer_idx}.shortcut"
+                shortcut_target_prefix = f"{layer_prefix}.shortcut"
                 rename_keys.append(
-                    (
-                        f"backbone.res{stage_idx + 2}.{layer_idx}.shortcut.weight",
-                        f"model.pixel_level_module.encoder.encoder.stages.{stage_idx}.layers.{layer_idx}.shortcut.convolution.weight",
-                    )
+                    (f"{shortcut_prefix}.weight", f"{shortcut_target_prefix}.convolution.weight")
                 )
                 rename_keys.append(
-                    (
-                        f"backbone.res{stage_idx + 2}.{layer_idx}.shortcut.norm.weight",
-                        f"model.pixel_level_module.encoder.encoder.stages.{stage_idx}.layers.{layer_idx}.shortcut.normalization.weight",
-                    )
+                    (f"{shortcut_prefix}.norm.weight", f"{shortcut_target_prefix}.normalization.weight")
                 )
                 rename_keys.append(
-                    (
-                        f"backbone.res{stage_idx + 2}.{layer_idx}.shortcut.norm.bias",
-                        f"model.pixel_level_module.encoder.encoder.stages.{stage_idx}.layers.{layer_idx}.shortcut.normalization.bias",
-                    )
+                    (f"{shortcut_prefix}.norm.bias", f"{shortcut_target_prefix}.normalization.bias")
                 )
                 rename_keys.append(
-                    (
-                        f"backbone.res{stage_idx + 2}.{layer_idx}.shortcut.norm.running_mean",
-                        f"model.pixel_level_module.encoder.encoder.stages.{stage_idx}.layers.{layer_idx}.shortcut.normalization.running_mean",
-                    )
+                    (f"{shortcut_prefix}.norm.running_mean", f"{shortcut_target_prefix}.normalization.running_mean")
                 )
                 rename_keys.append(
-                    (
-                        f"backbone.res{stage_idx + 2}.{layer_idx}.shortcut.norm.running_var",
-                        f"model.pixel_level_module.encoder.encoder.stages.{stage_idx}.layers.{layer_idx}.shortcut.normalization.running_var",
-                    )
+                    (f"{shortcut_prefix}.norm.running_var", f"{shortcut_target_prefix}.normalization.running_var")
                 )
-            # 3 convs
-            for i in range(3):
-                rename_keys.append(
-                    (
-                        f"backbone.res{stage_idx + 2}.{layer_idx}.conv{i + 1}.weight",
-                        f"model.pixel_level_module.encoder.encoder.stages.{stage_idx}.layers.{layer_idx}.layer.{i}.convolution.weight",
-                    )
-                )
-                rename_keys.append(
-                    (
-                        f"backbone.res{stage_idx + 2}.{layer_idx}.conv{i + 1}.norm.weight",
-                        f"model.pixel_level_module.encoder.encoder.stages.{stage_idx}.layers.{layer_idx}.layer.{i}.normalization.weight",
-                    )
-                )
-                rename_keys.append(
-                    (
-                        f"backbone.res{stage_idx + 2}.{layer_idx}.conv{i + 1}.norm.bias",
-                        f"model.pixel_level_module.encoder.encoder.stages.{stage_idx}.layers.{layer_idx}.layer.{i}.normalization.bias",
-                    )
-                )
-                rename_keys.append(
-                    (
-                        f"backbone.res{stage_idx + 2}.{layer_idx}.conv{i + 1}.norm.running_mean",
-                        f"model.pixel_level_module.encoder.encoder.stages.{stage_idx}.layers.{layer_idx}.layer.{i}.normalization.running_mean",
-                    )
-                )
-                rename_keys.append(
-                    (
-                        f"backbone.res{stage_idx + 2}.{layer_idx}.conv{i + 1}.norm.running_var",
-                        f"model.pixel_level_module.encoder.encoder.stages.{stage_idx}.layers.{layer_idx}.layer.{i}.normalization.running_var",
-                    )
-                )
+            conv_prefix = f"backbone.res{res_stage}.{layer_idx}"
+            tgt_prefix = layer_prefix
+            # Unroll inner conv/i loops for efficiency using precalculated tuples
+            for src_suffix, tgt_suffix in conv_suffixes:
+                rename_keys.append((
+                    f"{conv_prefix}{src_suffix}",
+                    f"{tgt_prefix}{tgt_suffix}",
+                ))
 
     # FPN
-    # fmt: off
-    rename_keys.append(("sem_seg_head.layer_4.weight", "model.pixel_level_module.decoder.fpn.stem.0.weight"))
-    rename_keys.append(("sem_seg_head.layer_4.norm.weight", "model.pixel_level_module.decoder.fpn.stem.1.weight"))
-    rename_keys.append(("sem_seg_head.layer_4.norm.bias", "model.pixel_level_module.decoder.fpn.stem.1.bias"))
+    rename_keys += [
+        ("sem_seg_head.layer_4.weight", "model.pixel_level_module.decoder.fpn.stem.0.weight"),
+        ("sem_seg_head.layer_4.norm.weight", "model.pixel_level_module.decoder.fpn.stem.1.weight"),
+        ("sem_seg_head.layer_4.norm.bias", "model.pixel_level_module.decoder.fpn.stem.1.bias"),
+    ]
     for source_index, target_index in zip(range(3, 0, -1), range(0, 3)):
-        rename_keys.append((f"sem_seg_head.adapter_{source_index}.weight", f"model.pixel_level_module.decoder.fpn.layers.{target_index}.proj.0.weight"))
-        rename_keys.append((f"sem_seg_head.adapter_{source_index}.norm.weight", f"model.pixel_level_module.decoder.fpn.layers.{target_index}.proj.1.weight"))
-        rename_keys.append((f"sem_seg_head.adapter_{source_index}.norm.bias", f"model.pixel_level_module.decoder.fpn.layers.{target_index}.proj.1.bias"))
-        rename_keys.append((f"sem_seg_head.layer_{source_index}.weight", f"model.pixel_level_module.decoder.fpn.layers.{target_index}.block.0.weight"))
-        rename_keys.append((f"sem_seg_head.layer_{source_index}.norm.weight", f"model.pixel_level_module.decoder.fpn.layers.{target_index}.block.1.weight"))
-        rename_keys.append((f"sem_seg_head.layer_{source_index}.norm.bias", f"model.pixel_level_module.decoder.fpn.layers.{target_index}.block.1.bias"))
+        s = f"sem_seg_head.adapter_{source_index}"
+        t = f"model.pixel_level_module.decoder.fpn.layers.{target_index}.proj"
+        rename_keys.append((f"{s}.weight", f"{t}.0.weight"))
+        rename_keys.append((f"{s}.norm.weight", f"{t}.1.weight"))
+        rename_keys.append((f"{s}.norm.bias", f"{t}.1.bias"))
+        l = f"sem_seg_head.layer_{source_index}"
+        b = f"model.pixel_level_module.decoder.fpn.layers.{target_index}.block"
+        rename_keys.append((f"{l}.weight", f"{b}.0.weight"))
+        rename_keys.append((f"{l}.norm.weight", f"{b}.1.weight"))
+        rename_keys.append((f"{l}.norm.bias", f"{b}.1.bias"))
     rename_keys.append(("sem_seg_head.mask_features.weight", "model.pixel_level_module.decoder.mask_projection.weight"))
     rename_keys.append(("sem_seg_head.mask_features.bias", "model.pixel_level_module.decoder.mask_projection.bias"))
-    # fmt: on
-
+    
     # Transformer decoder
-    # fmt: off
-    for idx in range(config.decoder_config.decoder_layers):
-        # self-attention out projection
-        rename_keys.append((f"sem_seg_head.predictor.transformer.decoder.layers.{idx}.self_attn.out_proj.weight", f"model.transformer_module.decoder.layers.{idx}.self_attn.out_proj.weight"))
-        rename_keys.append((f"sem_seg_head.predictor.transformer.decoder.layers.{idx}.self_attn.out_proj.bias", f"model.transformer_module.decoder.layers.{idx}.self_attn.out_proj.bias"))
-        # cross-attention out projection
-        rename_keys.append((f"sem_seg_head.predictor.transformer.decoder.layers.{idx}.multihead_attn.out_proj.weight", f"model.transformer_module.decoder.layers.{idx}.encoder_attn.out_proj.weight"))
-        rename_keys.append((f"sem_seg_head.predictor.transformer.decoder.layers.{idx}.multihead_attn.out_proj.bias", f"model.transformer_module.decoder.layers.{idx}.encoder_attn.out_proj.bias"))
-        # MLP 1
-        rename_keys.append((f"sem_seg_head.predictor.transformer.decoder.layers.{idx}.linear1.weight", f"model.transformer_module.decoder.layers.{idx}.fc1.weight"))
-        rename_keys.append((f"sem_seg_head.predictor.transformer.decoder.layers.{idx}.linear1.bias", f"model.transformer_module.decoder.layers.{idx}.fc1.bias"))
-        # MLP 2
-        rename_keys.append((f"sem_seg_head.predictor.transformer.decoder.layers.{idx}.linear2.weight", f"model.transformer_module.decoder.layers.{idx}.fc2.weight"))
-        rename_keys.append((f"sem_seg_head.predictor.transformer.decoder.layers.{idx}.linear2.bias", f"model.transformer_module.decoder.layers.{idx}.fc2.bias"))
-        # layernorm 1 (self-attention layernorm)
-        rename_keys.append((f"sem_seg_head.predictor.transformer.decoder.layers.{idx}.norm1.weight", f"model.transformer_module.decoder.layers.{idx}.self_attn_layer_norm.weight"))
-        rename_keys.append((f"sem_seg_head.predictor.transformer.decoder.layers.{idx}.norm1.bias", f"model.transformer_module.decoder.layers.{idx}.self_attn_layer_norm.bias"))
-        # layernorm 2 (cross-attention layernorm)
-        rename_keys.append((f"sem_seg_head.predictor.transformer.decoder.layers.{idx}.norm2.weight", f"model.transformer_module.decoder.layers.{idx}.encoder_attn_layer_norm.weight"))
-        rename_keys.append((f"sem_seg_head.predictor.transformer.decoder.layers.{idx}.norm2.bias", f"model.transformer_module.decoder.layers.{idx}.encoder_attn_layer_norm.bias"))
-        # layernorm 3 (final layernorm)
-        rename_keys.append((f"sem_seg_head.predictor.transformer.decoder.layers.{idx}.norm3.weight", f"model.transformer_module.decoder.layers.{idx}.final_layer_norm.weight"))
-        rename_keys.append((f"sem_seg_head.predictor.transformer.decoder.layers.{idx}.norm3.bias", f"model.transformer_module.decoder.layers.{idx}.final_layer_norm.bias"))
-
-    rename_keys.append(("sem_seg_head.predictor.transformer.decoder.norm.weight", "model.transformer_module.decoder.layernorm.weight"))
-    rename_keys.append(("sem_seg_head.predictor.transformer.decoder.norm.bias", "model.transformer_module.decoder.layernorm.bias"))
-    # fmt: on
-
+    decoder_layers = config.decoder_config.decoder_layers
+    decoder_prefix = "sem_seg_head.predictor.transformer.decoder.layers"
+    target_prefix = "model.transformer_module.decoder.layers"
+    for idx in range(decoder_layers):
+        rename_keys.extend([
+            (f"{decoder_prefix}.{idx}.self_attn.out_proj.weight",
+                f"{target_prefix}.{idx}.self_attn.out_proj.weight"),
+            (f"{decoder_prefix}.{idx}.self_attn.out_proj.bias",
+                f"{target_prefix}.{idx}.self_attn.out_proj.bias"),
+            (f"{decoder_prefix}.{idx}.multihead_attn.out_proj.weight",
+                f"{target_prefix}.{idx}.encoder_attn.out_proj.weight"),
+            (f"{decoder_prefix}.{idx}.multihead_attn.out_proj.bias",
+                f"{target_prefix}.{idx}.encoder_attn.out_proj.bias"),
+            (f"{decoder_prefix}.{idx}.linear1.weight",
+                f"{target_prefix}.{idx}.fc1.weight"),
+            (f"{decoder_prefix}.{idx}.linear1.bias",
+                f"{target_prefix}.{idx}.fc1.bias"),
+            (f"{decoder_prefix}.{idx}.linear2.weight",
+                f"{target_prefix}.{idx}.fc2.weight"),
+            (f"{decoder_prefix}.{idx}.linear2.bias",
+                f"{target_prefix}.{idx}.fc2.bias"),
+            (f"{decoder_prefix}.{idx}.norm1.weight",
+                f"{target_prefix}.{idx}.self_attn_layer_norm.weight"),
+            (f"{decoder_prefix}.{idx}.norm1.bias",
+                f"{target_prefix}.{idx}.self_attn_layer_norm.bias"),
+            (f"{decoder_prefix}.{idx}.norm2.weight",
+                f"{target_prefix}.{idx}.encoder_attn_layer_norm.weight"),
+            (f"{decoder_prefix}.{idx}.norm2.bias",
+                f"{target_prefix}.{idx}.encoder_attn_layer_norm.bias"),
+            (f"{decoder_prefix}.{idx}.norm3.weight",
+                f"{target_prefix}.{idx}.final_layer_norm.weight"),
+            (f"{decoder_prefix}.{idx}.norm3.bias",
+                f"{target_prefix}.{idx}.final_layer_norm.bias"),
+        ])
+    rename_keys.append(
+        ("sem_seg_head.predictor.transformer.decoder.norm.weight",
+         "model.transformer_module.decoder.layernorm.weight")
+    )
+    rename_keys.append(
+        ("sem_seg_head.predictor.transformer.decoder.norm.bias",
+         "model.transformer_module.decoder.layernorm.bias")
+    )
+    
     # heads on top
-    # fmt: off
-    rename_keys.append(("sem_seg_head.predictor.query_embed.weight", "model.transformer_module.queries_embedder.weight"))
-
-    rename_keys.append(("sem_seg_head.predictor.input_proj.weight", "model.transformer_module.input_projection.weight"))
-    rename_keys.append(("sem_seg_head.predictor.input_proj.bias", "model.transformer_module.input_projection.bias"))
-
-    rename_keys.append(("sem_seg_head.predictor.class_embed.weight", "class_predictor.weight"))
-    rename_keys.append(("sem_seg_head.predictor.class_embed.bias", "class_predictor.bias"))
+    rename_keys.append(
+        ("sem_seg_head.predictor.query_embed.weight", "model.transformer_module.queries_embedder.weight")
+    )
+    rename_keys.append(
+        ("sem_seg_head.predictor.input_proj.weight", "model.transformer_module.input_projection.weight")
+    )
+    rename_keys.append(
+        ("sem_seg_head.predictor.input_proj.bias", "model.transformer_module.input_projection.bias")
+    )
+    rename_keys.append(
+        ("sem_seg_head.predictor.class_embed.weight", "class_predictor.weight")
+    )
+    rename_keys.append(
+        ("sem_seg_head.predictor.class_embed.bias", "class_predictor.bias")
+    )
 
     for i in range(3):
         rename_keys.append((f"sem_seg_head.predictor.mask_embed.layers.{i}.weight", f"mask_embedder.{i}.0.weight"))
         rename_keys.append((f"sem_seg_head.predictor.mask_embed.layers.{i}.bias", f"mask_embedder.{i}.0.bias"))
-    # fmt: on
-
     return rename_keys
 
 
