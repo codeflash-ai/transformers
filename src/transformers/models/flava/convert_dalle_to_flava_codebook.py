@@ -28,7 +28,7 @@ def rreplace(s, old, new, occurrence):
 
 def count_parameters(state_dict):
     # encoder.embeddings are double copied in original FLAVA
-    return sum(param.float().sum() if "encoder.embeddings" not in key else 0 for key, param in state_dict.items())
+    return sum(param.float().sum() for key, param in state_dict.items() if "encoder.embeddings" not in key)
 
 
 def upgrade_state_dict(state_dict):
