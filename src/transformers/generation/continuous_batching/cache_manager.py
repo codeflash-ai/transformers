@@ -185,14 +185,24 @@ class SlidingAttentionCacheAllocator(CacheAllocator):
         start_index = past_length % self.sliding_window
         cache_length = min(query_length, self.sliding_window)
         padding_length = query_length - cache_length
-        # Compute the physical indices
-        physical_indices = []
-        for i in range(start_index, start_index + cache_length):
-            i %= self.sliding_window
-            block_idx = i // self.block_size
-            block_offset = i % self.block_size
-            physical_index = block_table[block_idx] * self.block_size + block_offset
-            physical_indices.append(physical_index)
+
+        # Precompute to avoid repeated attribute/dict lookups, localize variables for speedup
+        bs = self.block_size
+        sw = self.sliding_window
+        bt = block_table
+
+        # Compute physical indices efficiently
+        end_index = start_index + cache_length
+        if end_index <= sw:
+            # No wraparound
+            indices = range(start_index, end_index)
+        else:
+            # Wraparound is needed; stitch two ranges
+            indices = list(range(start_index, sw)) + list(range(0, end_index % sw))
+
+        # Allocate with list comprehension for speed, using local names
+        physical_indices = [bt[i // bs] * bs + (i % bs) for i in indices]
+
         if padding_length > 0:
             physical_indices = [-1] * padding_length + physical_indices
         return physical_indices
