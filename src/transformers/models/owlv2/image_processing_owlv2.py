@@ -587,13 +587,26 @@ class Owlv2ImageProcessor(BaseImageProcessor):
         # Apply non-maximum suppression (NMS)
         if nms_threshold < 1.0:
             for idx in range(target_boxes.shape[0]):
-                for i in torch.argsort(-scores[idx]):
-                    if not scores[idx][i]:
-                        continue
+                scores_idx = scores[idx]
+                boxes_idx = target_boxes[idx]
 
-                    ious = box_iou(target_boxes[idx][i, :].unsqueeze(0), target_boxes[idx])[0][0]
-                    ious[i] = -1.0  # Mask self-IoU.
-                    scores[idx][ious > nms_threshold] = 0.0
+                if scores_idx.numel() == 0:
+                    continue
+
+                order = torch.argsort(-scores_idx)
+                ious = box_iou(boxes_idx[order], boxes_idx)[0]  # shape: [num_boxes, num_boxes]
+                ious.fill_diagonal_(-1.0)
+
+                suppressed = torch.zeros_like(scores_idx, dtype=torch.bool)
+                for i, j in enumerate(order):
+                    if suppressed[j]:
+                        continue
+                    overlaps = ious[i] > nms_threshold
+                    suppressed = suppressed | overlaps
+
+                scores_idx[suppressed] = 0.0
+
+        # Convert from relative [0, 1] to absolute [0, height] coordinates
 
         # Convert from relative [0, 1] to absolute [0, height] coordinates
         if target_sizes is not None:
