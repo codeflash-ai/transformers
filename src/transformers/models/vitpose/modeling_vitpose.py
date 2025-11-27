@@ -109,12 +109,28 @@ def flip_back(output_flipped, flip_pairs, target_type="gaussian-heatmap"):
         channels = 3
         output_flipped[:, 1::3, ...] = -output_flipped[:, 1::3, ...]
     output_flipped = output_flipped.reshape(batch_size, -1, channels, height, width)
-    output_flipped_back = output_flipped.clone()
 
-    # Swap left-right parts
-    for left, right in flip_pairs.tolist():
-        output_flipped_back[:, left, ...] = output_flipped[:, right, ...]
-        output_flipped_back[:, right, ...] = output_flipped[:, left, ...]
+    # Efficient swap: prepare new index mapping for all keypoints
+    # Use torch for parallel gather via indexing (much faster than looping through Python for-loops and assignments)
+    import torch
+
+    device = output_flipped.device
+    dtype = flip_pairs.dtype
+    total_kpt = output_flipped.shape[1]  # num_keypoints
+    inv_map = torch.arange(total_kpt, device=device)
+    flip_pairs_array = flip_pairs.to(device=device)
+    # The if avoids unnecessary copy if pairs are empty
+    if flip_pairs_array.numel() > 0:
+        left_indices = flip_pairs_array[:, 0]
+        right_indices = flip_pairs_array[:, 1]
+        inv_map[left_indices] = right_indices
+        inv_map[right_indices] = left_indices
+
+    # Use advanced indexing for batch/parallel gather
+    output_flipped_back = output_flipped[:, inv_map, ...]
+    # No need to .clone(), just generating a new tensor (as output_flipped_back holds the copy)
+
+    # Reshape back to [batch_size, num_keypoints, height, width]
     output_flipped_back = output_flipped_back.reshape((batch_size, num_keypoints, height, width))
     # Flip horizontally
     output_flipped_back = output_flipped_back.flip(-1)
