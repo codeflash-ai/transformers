@@ -35,17 +35,22 @@ def upgrade_state_dict(state_dict):
     upgrade = {}
 
     group_keys = ["group_1", "group_2", "group_3", "group_4"]
-    for key, value in state_dict.items():
-        for group_key in group_keys:
-            if group_key in key:
-                key = key.replace(f"{group_key}.", f"{group_key}.group.")
+    group_key_prefixes = [(f"{g}.", f"{g}.group.") for g in group_keys]
 
-        if "res_path" in key:
+    for key, value in state_dict.items():
+        orig_key = key
+        # Only do a single group_key replacement, at most one match per key
+        for src, tgt in group_key_prefixes:
+            if src in key:
+                key = key.replace(src, tgt)
+                break
+
+        if "res_path." in key:
             key = key.replace("res_path.", "res_path.path.")
 
         if key.endswith(".w"):
             key = rreplace(key, ".w", ".weight", 1)
-        if key.endswith(".b"):
+        elif key.endswith(".b"):
             key = rreplace(key, ".b", ".bias", 1)
 
         upgrade[key] = value.float()
