@@ -135,10 +135,9 @@ class SlidingAttentionCacheAllocator(CacheAllocator):
         """Allocate blocks for a given request_id. Returns the number of blocks allocated if successful and None
         otherwise. For group of sliding window attention layers, we only allocate up to the point where we can fit an
         entire sliding window in the cache tensor."""
-        if request_id not in self._block_table:
-            self._block_table[request_id] = []
-        # Early return if we are already at the max number of blocks per request
-        already_allocated = len(self._block_table[request_id])
+        # Use setdefault for O(1) dictionary update and avoid redundant lookup
+        block_list = self._block_table.setdefault(request_id, [])
+        already_allocated = len(block_list)
         if already_allocated == self._max_blocks_per_request:
             return 0
         # Compute actual number of blocks to allocate
@@ -147,7 +146,10 @@ class SlidingAttentionCacheAllocator(CacheAllocator):
         # Classic allocation
         if len(free_blocks) < actual_n_blocks:
             return None
-        self._block_table[request_id].extend(free_blocks.popleft() for _ in range(actual_n_blocks))
+        # Extend block_list efficiently
+        # Avoid generating intermediate list by using direct popleft and list append
+        for _ in range(actual_n_blocks):
+            block_list.append(free_blocks.popleft())
         return actual_n_blocks
 
     def get_read_indices(self, request_id: str, past_length: int, query_length: int) -> list[int]:
