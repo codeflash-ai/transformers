@@ -152,17 +152,17 @@ def _segment_prompt_into_text_token_conversions(prompt: str) -> list:
     )
     # Split by the regex pattern
     prompt_split = regex_pattern.split(prompt)
+    special_tokens = {
+        TOKEN_BBOX_OPEN_STRING,
+        TOKEN_BBOX_CLOSE_STRING,
+        TOKEN_POINT_OPEN_STRING,
+        TOKEN_POINT_CLOSE_STRING,
+    }
+    special_openers = {TOKEN_BBOX_OPEN_STRING, TOKEN_POINT_OPEN_STRING}
     for i, elem in enumerate(prompt_split):
-        if len(elem) == 0 or elem in [
-            TOKEN_BBOX_OPEN_STRING,
-            TOKEN_BBOX_CLOSE_STRING,
-            TOKEN_POINT_OPEN_STRING,
-            TOKEN_POINT_CLOSE_STRING,
-        ]:
+        if len(elem) == 0 or elem in special_tokens:
             continue
-        prompt_text_list.append(
-            (elem, i > 1 and prompt_split[i - 1] in [TOKEN_BBOX_OPEN_STRING, TOKEN_POINT_OPEN_STRING])
-        )
+        prompt_text_list.append((elem, i > 1 and prompt_split[i - 1] in special_openers))
     return prompt_text_list
 
 
