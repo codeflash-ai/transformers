@@ -97,10 +97,22 @@ def full_unpacked_stream_to_tensor(
         device=full_unpacked_stream[0].device,
     )
 
-    # Place each batch entry into the batch tensor.
-    for bi in range(batch_size):
-        tokens_to_place = all_bi_tokens_to_place[bi]
-        new_padded_tensor[bi, :tokens_to_place] = full_unpacked_stream[bi][offset : tokens_to_place + offset]
+    # Fast path: If all tensors to place are of same length and offset, do a single stack/slice/copy operation
+    if all_bi_tokens_to_place and all(x == all_bi_tokens_to_place[0] for x in all_bi_tokens_to_place):
+        tokens_to_place = all_bi_tokens_to_place[0]
+        if tokens_to_place > 0:
+            # Build a stacked tensor of shape (batch_size, tokens_to_place)
+            # Using torch.stack (potentially torch.cat) is more efficient than per-row index assignment
+            stacked = torch.stack([item[offset : offset + tokens_to_place] for item in full_unpacked_stream], dim=0)
+            # Only place the relevant region in one go
+            new_padded_tensor[:, :tokens_to_place] = stacked
+        # If tokens_to_place == 0, do nothing (already filled)
+        return new_padded_tensor
+
+    # General case: handle rows with different tokens_to_place in a single loop (original behavior)
+    for bi, tokens_to_place in enumerate(all_bi_tokens_to_place):
+        if tokens_to_place > 0:
+            new_padded_tensor[bi, :tokens_to_place] = full_unpacked_stream[bi][offset : tokens_to_place + offset]
 
     return new_padded_tensor
 
