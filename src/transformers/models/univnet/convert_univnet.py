@@ -32,13 +32,16 @@ def get_kernel_predictor_key_mapping(config: UnivNetConfig, old_prefix: str = ""
 
     # Kernel predictor resnet blocks
     for i in range(config.kernel_predictor_num_blocks):
-        mapping[f"{old_prefix}.residual_convs.{i}.1.weight_g"] = f"{new_prefix}.resblocks.{i}.conv1.weight_g"
-        mapping[f"{old_prefix}.residual_convs.{i}.1.weight_v"] = f"{new_prefix}.resblocks.{i}.conv1.weight_v"
-        mapping[f"{old_prefix}.residual_convs.{i}.1.bias"] = f"{new_prefix}.resblocks.{i}.conv1.bias"
+        old_r = f"{old_prefix}.residual_convs.{i}"
+        new_r = f"{new_prefix}.resblocks.{i}"
 
-        mapping[f"{old_prefix}.residual_convs.{i}.3.weight_g"] = f"{new_prefix}.resblocks.{i}.conv2.weight_g"
-        mapping[f"{old_prefix}.residual_convs.{i}.3.weight_v"] = f"{new_prefix}.resblocks.{i}.conv2.weight_v"
-        mapping[f"{old_prefix}.residual_convs.{i}.3.bias"] = f"{new_prefix}.resblocks.{i}.conv2.bias"
+        mapping[f"{old_r}.1.weight_g"] = f"{new_r}.conv1.weight_g"
+        mapping[f"{old_r}.1.weight_v"] = f"{new_r}.conv1.weight_v"
+        mapping[f"{old_r}.1.bias"] = f"{new_r}.conv1.bias"
+
+        mapping[f"{old_r}.3.weight_g"] = f"{new_r}.conv2.weight_g"
+        mapping[f"{old_r}.3.weight_v"] = f"{new_r}.conv2.weight_v"
+        mapping[f"{old_r}.3.bias"] = f"{new_r}.conv2.bias"
 
     # Kernel output conv
     mapping[f"{old_prefix}.kernel_conv.weight_g"] = f"{new_prefix}.kernel_conv.weight_g"
@@ -73,9 +76,11 @@ def get_key_mapping(config: UnivNetConfig):
 
         # LVC Residual blocks
         for j in range(len(config.resblock_dilation_sizes[i])):
-            mapping[f"res_stack.{i}.conv_blocks.{j}.1.weight_g"] = f"resblocks.{i}.resblocks.{j}.conv.weight_g"
-            mapping[f"res_stack.{i}.conv_blocks.{j}.1.weight_v"] = f"resblocks.{i}.resblocks.{j}.conv.weight_v"
-            mapping[f"res_stack.{i}.conv_blocks.{j}.1.bias"] = f"resblocks.{i}.resblocks.{j}.conv.bias"
+            old_b = f"res_stack.{i}.conv_blocks.{j}.1"
+            new_b = f"resblocks.{i}.resblocks.{j}.conv"
+            mapping[f"{old_b}.weight_g"] = f"{new_b}.weight_g"
+            mapping[f"{old_b}.weight_v"] = f"{new_b}.weight_v"
+            mapping[f"{old_b}.bias"] = f"{new_b}.bias"
 
     # Output conv layer
     mapping["conv_post.1.weight_g"] = "conv_post.weight_g"
