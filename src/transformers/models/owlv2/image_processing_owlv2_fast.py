@@ -237,8 +237,9 @@ class Owlv2ImageProcessorFast(BaseImageProcessorFast):
         pad_bottom = size - height
         pad_right = size - width
 
-        padding = (0, 0, pad_right, pad_bottom)
-        padded_image = F.pad(images, padding, fill=constant_value)
+        padded_image = torch.nn.functional.pad(
+            images, (0, pad_right, 0, pad_bottom), mode="constant", value=constant_value
+        )
         return padded_image
 
     def pad(
