@@ -75,7 +75,10 @@ class FullAttentionCacheAllocator(CacheAllocator):
             return None
         if request_id not in self._block_table:
             self._block_table[request_id] = []
-        self._block_table[request_id].extend(free_blocks.popleft() for _ in range(n_blocks))
+        # More efficient block assignment by using list comprehension and extending just once
+        fb_popleft = free_blocks.popleft
+        new_blocks = [fb_popleft() for _ in range(n_blocks)]
+        self._block_table[request_id].extend(new_blocks)
         return n_blocks
 
     def get_read_indices(self, request_id: str, past_length: int, query_length: int) -> list[int]:
