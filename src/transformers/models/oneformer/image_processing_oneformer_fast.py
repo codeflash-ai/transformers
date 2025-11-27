@@ -59,8 +59,13 @@ def make_pixel_mask(image: "torch.Tensor", output_size: tuple[int, int]) -> "tor
     """
 
     input_height, input_width = image.shape[-2], image.shape[-1]
+    # Use full() instead of zeros + indexing for speed, and only change dtype if needed for memory efficiency
+    if input_height == output_size[0] and input_width == output_size[1]:
+        # image fully fits output, just create a mask of ones
+        return torch.ones(output_size, dtype=torch.int64)
     mask = torch.zeros(output_size, dtype=torch.int64)
-    mask[:input_height, :input_width] = 1
+    if input_height > 0 and input_width > 0:
+        mask[:input_height, :input_width].fill_(1)
     return mask
 
 
