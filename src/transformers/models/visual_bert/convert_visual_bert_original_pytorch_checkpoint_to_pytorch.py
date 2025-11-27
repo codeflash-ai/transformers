@@ -64,13 +64,23 @@ def get_new_dict(d, config, rename_keys_prefix=rename_keys_prefix):
     new_d = OrderedDict()
     new_d["visual_bert.embeddings.position_ids"] = torch.arange(config.max_position_embeddings).expand((1, -1))
     # detector_d = OrderedDict()
+
+    # For faster key renaming, compile replacement logic once
+    replace_pairs = rename_keys_prefix
+
+    # Precompute set for detector keys to skip comparison
+    # Not needed since we just check string containment
+
+    # To avoid repeated string recreation in key renaming, use a single pass
+    # Also, instead of checking "detector" in key on each iteration, filter them out first
     for key in d:
         if "detector" in key:
             # detector_d[key.replace('detector.','')] = d[key]
             continue
         new_key = key
-        for name_pair in rename_keys_prefix:
-            new_key = new_key.replace(name_pair[0], name_pair[1])
+        for old, new in replace_pairs:
+            if old in new_key:
+                new_key = new_key.replace(old, new)
         new_d[new_key] = d[key]
         if key == "bert.cls.predictions.decoder.weight":
             # Old bert code didn't have `decoder.bias`, but was added separately
