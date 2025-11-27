@@ -225,20 +225,27 @@ def convert_segmentation_map_to_binary_masks_fast(
     if ignore_index is not None:
         all_labels = all_labels[all_labels != ignore_index]
 
-    binary_masks = [(segmentation_map == i) for i in all_labels]
-
-    if binary_masks:
-        binary_masks = torch.stack(binary_masks, dim=0)
+    if all_labels.numel() > 0:
+        labels_view = all_labels.view(-1, *[1] * (segmentation_map.ndim))
+        binary_masks = segmentation_map == labels_view
     else:
         binary_masks = torch.zeros((0, *segmentation_map.shape), device=segmentation_map.device)
 
     # Convert instance ids to class ids
     if instance_id_to_semantic_id is not None:
-        labels = torch.zeros(all_labels.shape[0], device=segmentation_map.device)
-
-        for i, label in enumerate(all_labels):
-            class_id = instance_id_to_semantic_id[(label.item() + 1 if do_reduce_labels else label.item())]
-            labels[i] = class_id - 1 if do_reduce_labels else class_id
+        # Vectorize mapping where possible
+        # Compute the correct index for lookup per label
+        if do_reduce_labels:
+            # We need (label.item() + 1)
+            label_keys = (all_labels + 1).tolist()
+        else:
+            label_keys = all_labels.tolist()
+        # Map to desired output, then post-process if do_reduce_labels
+        mapped_class_ids = [instance_id_to_semantic_id[k] for k in label_keys]
+        if do_reduce_labels:
+            # class_id - 1 per logic
+            mapped_class_ids = [v - 1 for v in mapped_class_ids]
+        labels = torch.tensor(mapped_class_ids, device=segmentation_map.device, dtype=all_labels.dtype)
     else:
         labels = all_labels
 
