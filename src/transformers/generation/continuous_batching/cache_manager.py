@@ -163,15 +163,26 @@ class SlidingAttentionCacheAllocator(CacheAllocator):
         # Apply sliding window
         start_index = 0 if past_length < self.sliding_window else past_length % self.sliding_window
         cache_length = min(past_length, self.sliding_window - 1)
-        # Compute the physical indices
-        physical_indices = []
-        for i in range(start_index, start_index + cache_length):
-            i %= self.sliding_window
-            block_idx = i // self.block_size
-            block_offset = i % self.block_size
-            physical_index = block_table[block_idx] * self.block_size + block_offset
-            physical_indices.append(physical_index)
-        return physical_indices + [-1] * query_length
+        if cache_length == 0:
+            return [-1] * query_length
+
+        # Compute the physical indices using preallocation and local variables for speed
+        physical_indices = [0] * cache_length
+        block_size = self.block_size
+        sliding_window = self.sliding_window
+        block_table_local = block_table  # local lookup (slightly faster inside loop)
+
+        rng = range(start_index, start_index + cache_length)
+        for idx, i in enumerate(rng):
+            mod_i = i % sliding_window
+            block_idx = mod_i // block_size
+            block_offset = mod_i % block_size
+            physical_indices[idx] = block_table_local[block_idx] * block_size + block_offset
+
+        # Extend physical_indices with -1s for query_length, using list repetition for efficiency
+        if query_length > 0:
+            physical_indices.extend([-1] * query_length)
+        return physical_indices
 
     def get_write_indices(self, request_id: str, past_length: int, query_length: int) -> list[int]:
         """Returns the physical indices of where to write request_id's cache in the cache tensor. For a group of
