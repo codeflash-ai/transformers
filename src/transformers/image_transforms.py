@@ -940,8 +940,12 @@ def group_images_by_shape(
     """
     # If disable grouping is not explicitly provided, we favor disabling it if the images are on CPU, and enabling it otherwise.
     if disable_grouping is None:
-        device = images[0][0].device if is_nested else images[0].device
-        disable_grouping = device == "cpu"
+        # Efficient device detection without repeatedly indexing
+        if is_nested:
+            first_elem = images[0][0]
+        else:
+            first_elem = images[0]
+        disable_grouping = first_elem.device == "cpu"
 
     if disable_grouping:
         if is_nested:
@@ -954,8 +958,9 @@ def group_images_by_shape(
         images, *paired_inputs, is_nested=is_nested
     )
 
-    # Stack images with the same shape
-    grouped_images = {shape: torch.stack(images_list, dim=0) for shape, images_list in grouped_images.items()}
+    # Stack images with the same shape (preserves batching for downstream ops)
+    stack = torch.stack
+    grouped_images = {shape: stack(images_list, dim=0) for shape, images_list in grouped_images.items()}
 
     return grouped_images, *paired_grouped_values, grouped_images_index
 
@@ -984,10 +989,12 @@ def reorder_images(
             Images in the original structure.
     """
     if not is_nested:
-        return [
-            processed_images[grouped_images_index[i][0]][grouped_images_index[i][1]]
-            for i in range(len(grouped_images_index))
-        ]
+        # Preallocate result list; avoids repeated lookups, especially for big batches
+        result = [None] * len(grouped_images_index)
+        for i in grouped_images_index:
+            shape, idx = grouped_images_index[i]
+            result[i] = processed_images[shape][idx]
+        return result
 
     return _reconstruct_nested_structure(grouped_images_index, processed_images)
 

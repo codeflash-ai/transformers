@@ -238,8 +238,8 @@ class Owlv2ImageProcessorFast(BaseImageProcessorFast):
         pad_right = size - width
 
         padding = (0, 0, pad_right, pad_bottom)
-        padded_image = F.pad(images, padding, fill=constant_value)
-        return padded_image
+        # Use fill=constant_value directly and avoid repetitive parameter lookups
+        return F.pad(images, padding, fill=constant_value)
 
     def pad(
         self,
@@ -253,17 +253,13 @@ class Owlv2ImageProcessorFast(BaseImageProcessorFast):
         Owlv2 pads an image to square.
         """
         grouped_images, grouped_images_index = group_images_by_shape(images, disable_grouping=disable_grouping)
-        processed_images_grouped = {}
-        for shape, stacked_images in grouped_images.items():
-            stacked_images = self._pad_images(
-                stacked_images,
-                constant_value=constant_value,
-            )
-            processed_images_grouped[shape] = stacked_images
+        # Use dictionary comprehension for faster creation of processed_images_grouped
+        processed_images_grouped = {
+            shape: self._pad_images(stacked_images, constant_value=constant_value)
+            for shape, stacked_images in grouped_images.items()
+        }
 
-        processed_images = reorder_images(processed_images_grouped, grouped_images_index)
-
-        return processed_images
+        return reorder_images(processed_images_grouped, grouped_images_index)
 
     def resize(
         self,
