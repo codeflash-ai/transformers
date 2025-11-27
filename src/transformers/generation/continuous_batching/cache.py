@@ -21,7 +21,8 @@ import torch
 from ...configuration_utils import PreTrainedConfig
 from ...generation.configuration_utils import GenerationConfig
 from ...utils.metrics import attach_tracer, traced
-from .cache_manager import CacheAllocator, FullAttentionCacheAllocator, SlidingAttentionCacheAllocator
+from .cache_manager import (CacheAllocator, FullAttentionCacheAllocator,
+                            SlidingAttentionCacheAllocator)
 from .requests import get_device_and_memory_breakdown, logger
 
 
