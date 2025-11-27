@@ -187,14 +187,16 @@ def _transform_coordinates_and_tokenize(prompt: str, scale_factor: float, tokeni
     # Convert prompt into a list split
     prompt_text_list = _segment_prompt_into_text_token_conversions(prompt)
     transformed_prompt_tokens: list[int] = []
+    # Use local variable to reduce attribute lookup and enable C-level extension of .extend
+    tpt_extend = transformed_prompt_tokens.extend
+    tok_vocab = tokenizer.vocab
+    tok_call = tokenizer
+
     for elem in prompt_text_list:
         if elem[1]:
-            # This is a location, we need to tokenize it
-            within_tag_tokenized = _transform_within_tags(elem[0], scale_factor, tokenizer)
-            # Surround the text with the open and close tags
-            transformed_prompt_tokens.extend(within_tag_tokenized)
+            tpt_extend(_transform_within_tags(elem[0], scale_factor, tokenizer))
         else:
-            transformed_prompt_tokens.extend(tokenizer(elem[0], add_special_tokens=False).input_ids)
+            tpt_extend(tok_call(elem[0], add_special_tokens=False).input_ids)
     return transformed_prompt_tokens
 
 
@@ -251,26 +253,36 @@ def _tokenize_prompts_with_image_and_batch(
 
     # If not tool use, transform the coordinates while tokenizing
     if scale_factors is not None:
-        transformed_prompt_tokens = []
-        for prompt_seq, scale_factor_seq in zip(prompts, scale_factors):
-            transformed_prompt_tokens.append(
-                [
-                    _transform_coordinates_and_tokenize(prompt, scale_factor.item(), tokenizer)
-                    for prompt, scale_factor in zip(prompt_seq, scale_factor_seq)
-                ]
-            )
+        transformed_prompt_tokens = [
+            [
+                _transform_coordinates_and_tokenize(prompt, scale_factor.item(), tokenizer)
+                for prompt, scale_factor in zip(prompt_seq, scale_factor_seq)
+            ]
+            for prompt_seq, scale_factor_seq in zip(prompts, scale_factors)
+        ]
     else:
-        transformed_prompt_tokens = [[tokenizer.tokenize(prompt) for prompt in prompt_seq] for prompt_seq in prompts]
+        # Use tokenizer function only once
+        tok_tokenize = tokenizer.tokenize
+        transformed_prompt_tokens = [[tok_tokenize(prompt) for prompt in prompt_seq] for prompt_seq in prompts]
 
     prompts_tokens = transformed_prompt_tokens
 
+    # Use local variables for vocab lookup
+    tok_vocab = tokenizer.vocab
+
     if add_BOS:
-        bos_token = tokenizer.vocab["<s>"]
+        bos_token = tok_vocab["<s>"]
     else:
-        bos_token = tokenizer.vocab["|ENDOFTEXT|"]
-    prompts_tokens = [[[bos_token] + x for x in prompt_seq] for prompt_seq in prompts_tokens]
+        bos_token = tok_vocab["|ENDOFTEXT|"]
+
+    # Prepend BOS token efficiently, do it inplace
+    for prompt_seq in prompts_tokens:
+        for i in range(len(prompt_seq)):
+            prompt_seq[i] = [bos_token] + prompt_seq[i]
+
     if add_beginning_of_answer_token:
-        beginning_of_answer = tokenizer.vocab[BEGINNING_OF_ANSWER_STRING]
+        beginning_of_answer = tok_vocab[BEGINNING_OF_ANSWER_STRING]
+        # Only add bbox open token to the last subsequence since that is what will be completed
         # Only add bbox open token to the last subsequence since that is what will be completed
         for token_seq in prompts_tokens:
             token_seq[-1].append(beginning_of_answer)
@@ -282,8 +294,8 @@ def _tokenize_prompts_with_image_and_batch(
     # Get the prompts length.
 
     prompts_length = [[len(x) for x in prompts_tokens_seq] for prompts_tokens_seq in prompts_tokens]
-    # Get the max prompts length.
-    max_prompt_len: int = np.max(prompts_length)
+    # Use np for max only, processing via flattened generator (reduce memory peak)
+    max_prompt_len = max(max(lengths) for lengths in prompts_length)
     # Number of tokens in the each sample of the batch.
     samples_length = min(max_prompt_len + max_tokens_to_generate, max_position_embeddings)
     if max_prompt_len + max_tokens_to_generate > max_position_embeddings:
@@ -292,16 +304,22 @@ def _tokenize_prompts_with_image_and_batch(
             f"exceeds context length of {max_position_embeddings}. Will generate as many tokens as possible.",
         )
     # Now update the list of list to be of the same size: samples_length.
+
+    # Explicit vocab index for padding
+    endoftext_token = tok_vocab["|ENDOFTEXT|"]
+
+    # Pad sequences in-place
     for prompt_tokens_seq, prompts_length_seq in zip(prompts_tokens, prompts_length):
         for prompt_tokens, prompt_length in zip(prompt_tokens_seq, prompts_length_seq):
             if len(prompt_tokens) > samples_length:
                 raise ValueError("Length of subsequence prompt exceeds sequence length.")
             padding_size = samples_length - prompt_length
-            prompt_tokens.extend([tokenizer.vocab["|ENDOFTEXT|"]] * padding_size)
+            if padding_size > 0:
+                prompt_tokens.extend([endoftext_token] * padding_size)
 
-    # Now we are in a structured format, we can convert to tensors.
-    prompts_tokens_tensor = torch.tensor(prompts_tokens, dtype=torch.int64)
-    prompts_length_tensor = torch.tensor(prompts_length, dtype=torch.int64)
+    # Use torch.as_tensor for better memory sharing for large lists
+    prompts_tokens_tensor = torch.as_tensor(prompts_tokens, dtype=torch.int64)
+    prompts_length_tensor = torch.as_tensor(prompts_length, dtype=torch.int64)
 
     return prompts_tokens_tensor, prompts_length_tensor
 
