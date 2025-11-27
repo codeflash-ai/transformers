@@ -170,9 +170,7 @@ class XLMRobertaXLOutput(nn.Module):
         self.dense = nn.Linear(config.intermediate_size, config.hidden_size)
 
     def forward(self, hidden_states, input_tensor):
-        hidden_states = self.dense(hidden_states)
-        hidden_states = hidden_states + input_tensor
-        return hidden_states
+        return self.dense(hidden_states) + input_tensor
 
 
 class XLMRobertaXLLayer(BertLayer):
