@@ -21,6 +21,8 @@ from typing import Optional, Union
 
 import numpy as np
 
+from transformers.models.fuyu.image_processing_fuyu import FuyuBatchFeature
+
 from ...image_utils import ImageInput
 from ...processing_utils import (
     MultiModalData,
@@ -217,15 +219,15 @@ def _transform_within_tags(text: str, scale_factor: float, tokenizer) -> list[in
     num_ints = [float(num.strip()) for num in num_int_strs]
     # scale to transformed image size
     if len(num_ints) == 2:
-        num_ints_translated = scale_point_to_transformed_image(x=num_ints[0], y=num_ints[1], scale_factor=scale_factor)
+        x_scaled = int(round((num_ints[0] / 2) * scale_factor))
+        y_scaled = int(round((num_ints[1] / 2) * scale_factor))
+        num_ints_translated = [x_scaled, y_scaled]
     elif len(num_ints) == 4:
-        num_ints_translated = scale_bbox_to_transformed_image(
-            top=num_ints[0],
-            left=num_ints[1],
-            bottom=num_ints[2],
-            right=num_ints[3],
-            scale_factor=scale_factor,
-        )
+        top_scaled = int(round((num_ints[0] / 2) * scale_factor))
+        left_scaled = int(round((num_ints[1] / 2) * scale_factor))
+        bottom_scaled = int(round((num_ints[2] / 2) * scale_factor))
+        right_scaled = int(round((num_ints[3] / 2) * scale_factor))
+        num_ints_translated = [top_scaled, left_scaled, bottom_scaled, right_scaled]
     else:
         raise ValueError(f"Invalid number of ints: {len(num_ints)}")
     # Tokenize the text, skipping the
