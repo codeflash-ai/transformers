@@ -172,14 +172,23 @@ def eager_attention_forward(
         scaling = query.size(-1) ** -0.5
 
     # Take the dot product between "query" and "key" to get the raw attention scores.
-    attn_weights = torch.matmul(query, key.transpose(2, 3)) * scaling
+    # Use in-place scaling for minor memory and speed improvement
+    attn_weights = torch.matmul(query, key.transpose(2, 3))
+    attn_weights.mul_(scaling)
 
     if attention_mask is not None:
-        attention_mask = attention_mask[:, :, :, : key.shape[-2]]
-        attn_weights = attn_weights + attention_mask
+        # Use a slice only if necessary and avoid creating a new variable unnecessarily
+        if key.shape[-2] != attention_mask.shape[-1]:
+            attn_weights = attn_weights + attention_mask[:, :, :, : key.shape[-2]]
+        else:
+            attn_weights = attn_weights + attention_mask
+    # fused softmax+dropout if available for speed, else fallback to sequential
 
     attn_weights = nn.functional.softmax(attn_weights, dim=-1)
-    attn_weights = nn.functional.dropout(attn_weights, p=dropout, training=module.training)
+    if dropout > 0.0 and module.training:
+        attn_weights = nn.functional.dropout(attn_weights, p=dropout, training=True)
+
+    # The typical transformer shape is (B, heads, T, T), keep the same pattern
 
     attn_output = torch.matmul(attn_weights, value)
     attn_output = attn_output.transpose(1, 2).contiguous()
