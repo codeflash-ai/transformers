@@ -164,15 +164,17 @@ def _preprocess_resize_output_shape(image, output_shape):
     """
     output_shape = tuple(output_shape)
     output_ndim = len(output_shape)
+    input_ndim = image.ndim
     input_shape = image.shape
-    if output_ndim > image.ndim:
+
+    if output_ndim > input_ndim:
         # append dimensions to input_shape
-        input_shape += (1,) * (output_ndim - image.ndim)
-        image = np.reshape(image, input_shape)
-    elif output_ndim == image.ndim - 1:
+        # Use np.reshape only if necessary
+        image = image.reshape(input_shape + (1,) * (output_ndim - input_ndim))
+    elif output_ndim == input_ndim - 1:
         # multichannel case: append shape of last axis
-        output_shape = output_shape + (image.shape[-1],)
-    elif output_ndim < image.ndim:
+        output_shape = output_shape + (input_shape[-1],)
+    elif output_ndim < input_ndim:
         raise ValueError("output_shape length cannot be smaller than the image number of dimensions")
 
     return image, output_shape
