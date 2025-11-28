@@ -331,11 +331,17 @@ class ExtensionsTrie(Trie):
         Returns:
             list: List of tokens generated from the given node.
         """
-        tokens = [self._termination_char] if self._termination_char in node else []
-        for token, subtrie_head in node.items():
-            if token != self._termination_char:
-                subtokens = self._collect_tokens(subtrie_head)
-                tokens.extend([token + subtoken for subtoken in subtokens])
+        stack = [(node, "")]
+        tokens = []
+        termination_char = self._termination_char
+
+        while stack:
+            cur_node, prefix = stack.pop()
+            if termination_char in cur_node:
+                tokens.append(prefix + termination_char)
+            for token, subtrie_head in reversed(cur_node.items()):
+                if token != termination_char:
+                    stack.append((subtrie_head, prefix + token))
         return tokens
 
 
