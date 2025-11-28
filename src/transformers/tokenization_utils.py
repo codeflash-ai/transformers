@@ -41,6 +41,9 @@ from .tokenization_utils_base import (
 from .utils import PaddingStrategy, TensorType, add_end_docstrings, logging
 
 
+_category_cache = {}
+
+
 logger = logging.get_logger(__name__)
 
 # Slow tokenizers are saved in a vocabulary plus three separated files
@@ -355,10 +358,13 @@ def _is_control(char):
     """Checks whether `char` is a control character."""
     # These are technically control characters but we count them as whitespace
     # characters.
-    if char == "\t" or char == "\n" or char == "\r":
+    if char in ("\t", "\n", "\r"):
         return False
-    cat = unicodedata.category(char)
-    if cat.startswith("C"):
+    cat = _category_cache.get(char)
+    if cat is None:
+        cat = unicodedata.category(char)
+        _category_cache[char] = cat
+    if cat[0] == "C":
         return True
     return False
 
@@ -1033,7 +1039,9 @@ class PreTrainedTokenizer(PreTrainedTokenizerBase):
             return super().get_special_tokens_mask(
                 token_ids_0=token_ids_0, token_ids_1=token_ids_1, already_has_special_tokens=True
             )
-        return [0] * ((len(token_ids_1) if token_ids_1 else 0) + len(token_ids_0))
+        # Optimization: direct allocation for zero mask
+        total_len = (len(token_ids_1) if token_ids_1 else 0) + len(token_ids_0)
+        return [0] * total_len
 
     @overload
     def convert_ids_to_tokens(self, ids: int, skip_special_tokens: bool = False) -> str: ...
