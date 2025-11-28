@@ -352,7 +352,7 @@ class SuperPointPreTrainedModel(PreTrainedModel):
             pixel_values: torch.FloatTensor of shape (batch_size, 1, height, width)
 
         """
-        return pixel_values[:, 0, :, :][:, None, :, :]
+        return pixel_values[:, 0:1, :, :]
 
 
 @auto_docstring(
