@@ -39,18 +39,21 @@ def remove_keypoints_from_borders(
     keypoints: torch.Tensor, scores: torch.Tensor, border: int, height: int, width: int
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """Removes keypoints (and their associated scores) that are too close to the border"""
-    mask_h = (keypoints[:, 0] >= border) & (keypoints[:, 0] < (height - border))
-    mask_w = (keypoints[:, 1] >= border) & (keypoints[:, 1] < (width - border))
-    mask = mask_h & mask_w
+    # Use bitwise operations for mask computation for slightly improved performance and memory usage
+    y = keypoints[:, 0]
+    x = keypoints[:, 1]
+    mask = (y >= border) & (y < (height - border)) & (x >= border) & (x < (width - border))
+    # Avoid intermediate mask variables
     return keypoints[mask], scores[mask]
 
 
 def top_k_keypoints(keypoints: torch.Tensor, scores: torch.Tensor, k: int) -> tuple[torch.Tensor, torch.Tensor]:
     """Keeps the k keypoints with highest score"""
-    if k >= len(keypoints):
+    if k >= keypoints.size(0):
         return keypoints, scores
-    scores, indices = torch.topk(scores, k, dim=0)
-    return keypoints[indices], scores
+    # Use scores.topk for slightly faster extraction
+    scores_topk, indices = scores.topk(k, dim=0)
+    return keypoints[indices], scores_topk
 
 
 def simple_nms(scores: torch.Tensor, nms_radius: int) -> torch.Tensor:
@@ -239,25 +242,28 @@ class SuperPointInterestPointDecoder(nn.Module):
         Based on their scores, extract the pixels that represent the keypoints that will be used for descriptors computation.
         The keypoints are in the form of relative (x, y) coordinates.
         """
-        _, height, width = scores.shape
+        # Use .shape directly without unpacking unused variable
+        height, width = scores.shape[1], scores.shape[2]
 
         # Threshold keypoints by score value
-        keypoints = torch.nonzero(scores[0] > self.keypoint_threshold)
-        scores = scores[0][tuple(keypoints.t())]
+        # Prefer to use the result directly for indexing, add contiguous for efficiency if needed
+        mask = scores[0] > self.keypoint_threshold
+        keypoints = torch.nonzero(mask, as_tuple=False)
+        scores_flat = scores[0][mask]
 
         # Discard keypoints near the image borders
-        keypoints, scores = remove_keypoints_from_borders(
-            keypoints, scores, self.border_removal_distance, height * 8, width * 8
+        keypoints, scores_flat = remove_keypoints_from_borders(
+            keypoints, scores_flat, self.border_removal_distance, height * 8, width * 8
         )
 
         # Keep the k keypoints with highest score
         if self.max_keypoints >= 0:
-            keypoints, scores = top_k_keypoints(keypoints, scores, self.max_keypoints)
+            keypoints, scores_flat = top_k_keypoints(keypoints, scores_flat, self.max_keypoints)
 
         # Convert (y, x) to (x, y)
-        keypoints = torch.flip(keypoints, [1]).to(scores.dtype)
+        keypoints = torch.flip(keypoints, [1]).to(scores_flat.dtype)
 
-        return keypoints, scores
+        return keypoints, scores_flat
 
 
 class SuperPointDescriptorDecoder(nn.Module):
