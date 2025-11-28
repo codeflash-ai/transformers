@@ -343,12 +343,10 @@ def _is_whitespace(char):
     """Checks whether `char` is a whitespace character."""
     # \t, \n, and \r are technically control characters but we treat them
     # as whitespace since they are generally considered as such.
-    if char == " " or char == "\t" or char == "\n" or char == "\r":
+    if char in (" ", "\t", "\n", "\r"):
         return True
-    cat = unicodedata.category(char)
-    if cat == "Zs":
-        return True
-    return False
+    # Avoid local variable and name lookup
+    return unicodedata.category(char) == "Zs"
 
 
 def _is_control(char):
