@@ -17,6 +17,7 @@ tokenization_utils_fast.py
 """
 
 import bisect
+import functools
 import itertools
 import re
 import unicodedata
@@ -39,6 +40,11 @@ from .tokenization_utils_base import (
     TruncationStrategy,
 )
 from .utils import PaddingStrategy, TensorType, add_end_docstrings, logging
+
+
+_ASCII_PUNCTUATION = set(range(33, 48)) | set(range(58, 65)) | set(range(91, 97)) | set(range(123, 127))
+
+_category_cache = {}
 
 
 logger = logging.get_logger(__name__)
@@ -355,10 +361,13 @@ def _is_control(char):
     """Checks whether `char` is a control character."""
     # These are technically control characters but we count them as whitespace
     # characters.
-    if char == "\t" or char == "\n" or char == "\r":
+    if char in ("\t", "\n", "\r"):
         return False
-    cat = unicodedata.category(char)
-    if cat.startswith("C"):
+    cat = _category_cache.get(char)
+    if cat is None:
+        cat = unicodedata.category(char)
+        _category_cache[char] = cat
+    if cat[0] == "C":
         return True
     return False
 
@@ -370,9 +379,9 @@ def _is_punctuation(char):
     # Characters such as "^", "$", and "`" are not in the Unicode
     # Punctuation class but we treat them as punctuation anyways, for
     # consistency.
-    if (cp >= 33 and cp <= 47) or (cp >= 58 and cp <= 64) or (cp >= 91 and cp <= 96) or (cp >= 123 and cp <= 126):
+    if cp in _ASCII_PUNCTUATION:
         return True
-    cat = unicodedata.category(char)
+    cat = _unicode_category(char)
     if cat.startswith("P"):
         return True
     return False
@@ -401,6 +410,11 @@ def _insert_one_token_to_ordered_list(token_list: list[str], new_token: str):
         return
     else:
         token_list.insert(insertion_idx, new_token)
+
+
+@functools.lru_cache(maxsize=128)
+def _unicode_category(char):
+    return unicodedata.category(char)
 
 
 @add_end_docstrings(INIT_TOKENIZER_DOCSTRING)
