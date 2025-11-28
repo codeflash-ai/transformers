@@ -80,11 +80,12 @@ def get_all_supported_aspect_ratios(max_image_tiles: int) -> list[tuple[int, int
         [(1, 1), (1, 2), (1, 3), (1, 4), (2, 1), (2, 2), (3, 1), (4, 1)]
 
     """
-    aspect_ratios = []
-    for width in range(1, max_image_tiles + 1):
-        for height in range(1, max_image_tiles + 1):
-            if width * height <= max_image_tiles:
-                aspect_ratios.append((width, height))
+    # Optimize nested loop with generator expression and avoid unnecessary iterations
+    aspect_ratios = [
+        (width, height)
+        for width in range(1, max_image_tiles + 1)
+        for height in range(1, (max_image_tiles // width) + 1)
+    ]
     return aspect_ratios
 
 
