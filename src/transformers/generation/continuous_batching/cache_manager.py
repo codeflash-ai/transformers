@@ -128,6 +128,7 @@ class SlidingAttentionCacheAllocator(CacheAllocator):
         self._index = index
         self.block_size = block_size
         self.sliding_window = sliding_window
+        self._sliding_window_minus_1 = sliding_window - 1  # optimize: precompute sliding_window - 1
         self._max_blocks_per_request = ceil(self.sliding_window / self.block_size)
         self._block_table = {}
 
@@ -199,7 +200,8 @@ class SlidingAttentionCacheAllocator(CacheAllocator):
 
     def get_seqlens_k(self, request_id: str, past_length: int, query_length: int) -> tuple[str, int]:
         """Returns the attention type of the cache allocator and the key sequence length for the given request_id."""
-        seqlens_k = query_length + min(past_length, self.sliding_window - 1)
+        # Optimization: use precomputed self._sliding_window_minus_1
+        seqlens_k = query_length + (min(self._sliding_window_minus_1, past_length))
         return "sliding_attention", seqlens_k
 
 
