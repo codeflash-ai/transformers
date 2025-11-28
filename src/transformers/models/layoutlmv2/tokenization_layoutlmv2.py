@@ -159,8 +159,7 @@ def whitespace_tokenize(text):
     text = text.strip()
     if not text:
         return []
-    tokens = text.split()
-    return tokens
+    return text.split()
 
 
 table = dict.fromkeys(i for i in range(sys.maxunicode) if unicodedata.category(chr(i)).startswith("P"))
@@ -1508,34 +1507,47 @@ class WordpieceTokenizer:
         """
 
         output_tokens = []
+        vocab = self.vocab  # local variable lookup is faster than attribute access
+        unk_token = self.unk_token
+        max_input_chars_per_word = self.max_input_chars_per_word
+
         for token in whitespace_tokenize(text):
-            chars = list(token)
-            if len(chars) > self.max_input_chars_per_word:
-                output_tokens.append(self.unk_token)
+            if len(token) > max_input_chars_per_word:
+                output_tokens.append(unk_token)
                 continue
 
             is_bad = False
             start = 0
+            token_len = len(token)
             sub_tokens = []
-            while start < len(chars):
-                end = len(chars)
-                cur_substr = None
-                while start < end:
-                    substr = "".join(chars[start:end])
-                    if start > 0:
-                        substr = "##" + substr
-                    if substr in self.vocab:
-                        cur_substr = substr
-                        break
-                    end -= 1
-                if cur_substr is None:
+            while start < token_len:
+                end = token_len
+                found = False  # instead of cur_substr = None for faster check
+                # Precompute first substring un-prefixed to avoid unnecessary string concatenations
+                if start == 0:
+                    while end > start:
+                        substr = token[start:end]
+                        if substr in vocab:
+                            sub_tokens.append(substr)
+                            start = end
+                            found = True
+                            break
+                        end -= 1
+                else:
+                    while end > start:
+                        substr = "##" + token[start:end]
+                        if substr in vocab:
+                            sub_tokens.append(substr)
+                            start = end
+                            found = True
+                            break
+                        end -= 1
+                if not found:
                     is_bad = True
                     break
-                sub_tokens.append(cur_substr)
-                start = end
 
             if is_bad:
-                output_tokens.append(self.unk_token)
+                output_tokens.append(unk_token)
             else:
                 output_tokens.extend(sub_tokens)
         return output_tokens
