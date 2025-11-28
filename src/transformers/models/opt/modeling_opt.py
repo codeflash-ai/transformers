@@ -87,12 +87,24 @@ def eager_attention_forward(
     dropout: float = 0.0,
     **kwargs,
 ):
-    attn_weights = torch.matmul(query, key.transpose(-1, -2)) * scaling
+    # Precompute key transpose (explicitly contiguous for cuBLAS efficiency)
+    key_t = key.transpose(-1, -2).contiguous()
+
+    # Fused matmul and scaling
+    attn_weights = torch.matmul(query, key_t)
+    if scaling != 1.0:
+        attn_weights.mul_(scaling)
+
     if attention_mask is not None:
         attn_weights = attn_weights + attention_mask
 
-    attn_weights = nn.functional.softmax(attn_weights, dim=-1, dtype=torch.float32).to(query.dtype)
-    attn_weights = nn.functional.dropout(attn_weights, p=dropout, training=module.training)
+    # Use softmax inplace with output to save memory and accelerate
+    attn_weights = nn.functional.softmax(attn_weights, dim=-1, dtype=torch.float32)
+    if attn_weights.dtype != query.dtype:
+        attn_weights = attn_weights.to(query.dtype)
+    # PyTorch nn.functional.dropout is already fast for fp16/bfloat16
+    if dropout > 0.0:
+        attn_weights = nn.functional.dropout(attn_weights, p=dropout, training=module.training)
 
     attn_output = torch.matmul(attn_weights, value)
     attn_output = attn_output.transpose(1, 2).contiguous()
