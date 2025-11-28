@@ -217,11 +217,12 @@ class LayoutLMv2Tokenizer(PreTrainedTokenizer):
         additional_special_tokens: Optional[list[str]] = None,
         **kwargs,
     ):
-        sep_token = AddedToken(sep_token, special=True) if isinstance(sep_token, str) else sep_token
-        unk_token = AddedToken(unk_token, special=True) if isinstance(unk_token, str) else unk_token
-        pad_token = AddedToken(pad_token, special=True) if isinstance(pad_token, str) else pad_token
-        cls_token = AddedToken(cls_token, special=True) if isinstance(cls_token, str) else cls_token
-        mask_token = AddedToken(mask_token, special=True) if isinstance(mask_token, str) else mask_token
+        # Avoid unnecessary AddedToken creation if already correct type
+        sep_token = sep_token if isinstance(sep_token, AddedToken) else AddedToken(sep_token, special=True)
+        unk_token = unk_token if isinstance(unk_token, AddedToken) else AddedToken(unk_token, special=True)
+        pad_token = pad_token if isinstance(pad_token, AddedToken) else AddedToken(pad_token, special=True)
+        cls_token = cls_token if isinstance(cls_token, AddedToken) else AddedToken(cls_token, special=True)
+        mask_token = mask_token if isinstance(mask_token, AddedToken) else AddedToken(mask_token, special=True)
 
         if not os.path.isfile(vocab_file):
             raise ValueError(
@@ -229,7 +230,8 @@ class LayoutLMv2Tokenizer(PreTrainedTokenizer):
                 " model use `tokenizer = BertTokenizer.from_pretrained(PRETRAINED_MODEL_NAME)`"
             )
         self.vocab = load_vocab(vocab_file)
-        self.ids_to_tokens = collections.OrderedDict([(ids, tok) for tok, ids in self.vocab.items()])
+        # Use items() directly for ids_to_tokens to avoid double iteration
+        self.ids_to_tokens = collections.OrderedDict((ids, tok) for tok, ids in self.vocab.items())
         self.do_basic_tokenize = do_basic_tokenize
         if do_basic_tokenize:
             self.basic_tokenizer = BasicTokenizer(
@@ -276,7 +278,8 @@ class LayoutLMv2Tokenizer(PreTrainedTokenizer):
         return len(self.vocab)
 
     def get_vocab(self):
-        return dict(self.vocab, **self.added_tokens_encoder)
+        # Merging dicts by unpacking is more efficient for reasonably small dicts
+        return {**self.vocab, **self.added_tokens_encoder}
 
     def _tokenize(self, text):
         split_tokens = []
