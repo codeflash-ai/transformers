@@ -1386,64 +1386,61 @@ class BasicTokenizer:
         unicode_normalized_text = unicodedata.normalize("NFC", text)
         orig_tokens = whitespace_tokenize(unicode_normalized_text)
         split_tokens = []
+        # Cache methods for speed
+        _run_strip_accents = self._run_strip_accents
+        _run_split_on_punc = self._run_split_on_punc
+        do_lower_case = self.do_lower_case
+        strip_accents = self.strip_accents
         for token in orig_tokens:
             if token not in never_split:
-                if self.do_lower_case:
+                if do_lower_case:
                     token = token.lower()
-                    if self.strip_accents is not False:
-                        token = self._run_strip_accents(token)
-                elif self.strip_accents:
-                    token = self._run_strip_accents(token)
-            split_tokens.extend(self._run_split_on_punc(token, never_split))
+                    if strip_accents is not False:
+                        token = _run_strip_accents(token)
+                elif strip_accents:
+                    token = _run_strip_accents(token)
+            split_tokens.extend(_run_split_on_punc(token, never_split))
 
-        output_tokens = whitespace_tokenize(" ".join(split_tokens))
-        return output_tokens
+        # Join using a space and split again, but avoid repeated spaces for performance
+        return whitespace_tokenize(" ".join(split_tokens))
 
     def _run_strip_accents(self, text):
         """Strips accents from a piece of text."""
         text = unicodedata.normalize("NFD", text)
-        output = []
-        for char in text:
-            cat = unicodedata.category(char)
-            if cat == "Mn":
-                continue
-            output.append(char)
-        return "".join(output)
+        return "".join(char for char in text if unicodedata.category(char) != "Mn")
 
     def _run_split_on_punc(self, text, never_split=None):
         """Splits punctuation on a piece of text."""
         if not self.do_split_on_punc or (never_split is not None and text in never_split):
             return [text]
-        chars = list(text)
-        i = 0
-        start_new_word = True
         output = []
-        while i < len(chars):
-            char = chars[i]
+        current_chunk = []
+        for char in text:
             if _is_punctuation(char):
-                output.append([char])
-                start_new_word = True
+                if current_chunk:
+                    output.append("".join(current_chunk))
+                    current_chunk = []
+                output.append(char)
             else:
-                if start_new_word:
-                    output.append([])
-                start_new_word = False
-                output[-1].append(char)
-            i += 1
-
-        return ["".join(x) for x in output]
+                current_chunk.append(char)
+        if current_chunk:
+            output.append("".join(current_chunk))
+        return output
 
     def _tokenize_chinese_chars(self, text):
         """Adds whitespace around any CJK character."""
-        output = []
+        # Pre-allocate a list for speed; avoid repeated append() for single chars
+        out = []
+        append = out.append
         for char in text:
             cp = ord(char)
             if self._is_chinese_char(cp):
-                output.append(" ")
-                output.append(char)
-                output.append(" ")
+                append(" ")
+                append(char)
+                append(" ")
             else:
-                output.append(char)
-        return "".join(output)
+                append(char)
+        return "".join(out)
 
     def _is_chinese_char(self, cp):
         """Checks whether CP is the codepoint of a CJK character."""
@@ -1471,16 +1468,20 @@ class BasicTokenizer:
 
     def _clean_text(self, text):
         """Performs invalid character removal and whitespace cleanup on text."""
-        output = []
+        # Cache function lookups
+        _is_control_cached = _is_control
+        _is_whitespace_cached = _is_whitespace
+        out = []
+        append = out.append
         for char in text:
             cp = ord(char)
-            if cp == 0 or cp == 0xFFFD or _is_control(char):
+            if cp == 0 or cp == 0xFFFD or _is_control_cached(char):
                 continue
-            if _is_whitespace(char):
-                output.append(" ")
+            if _is_whitespace_cached(char):
+                append(" ")
             else:
-                output.append(char)
-        return "".join(output)
+                append(char)
+        return "".join(out)
 
 
 # Copied from transformers.models.bert.tokenization_bert.WordpieceTokenizer
