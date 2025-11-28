@@ -69,11 +69,22 @@ class OPTLearnedPositionalEmbedding(nn.Embedding):
 
         if position_ids is None:
             position_ids = torch.cumsum(attention_mask, dim=1)
-            position_ids = (position_ids * attention_mask - 1).long()
-            # cut positions if `past_key_values_length` is > 0
-            position_ids = position_ids[:, past_key_values_length:]
+            position_ids.mul_(attention_mask)
+            position_ids.add_(-1)
+            # position_ids is already long or int64 after cumsum, but to match .long() in all cases:
+            if position_ids.dtype != torch.long:
+                position_ids = position_ids.to(torch.long)
+            # Slicing after allocation
+            if past_key_values_length != 0:
+                position_ids = position_ids[:, past_key_values_length:]
 
-        return super().forward(position_ids + self.offset)
+        # Avoid repeated allocation for (position_ids + self.offset) if possible:
+        # Pytorch Embedding.offset can be passed negative values for index, but here we must shift positive
+        return super().forward(
+            position_ids.add(self.offset)
+            if position_ids is not None and not position_ids.is_leaf
+            else position_ids + self.offset
+        )
 
 
 # Copied from transformers.models.siglip.modeling_siglip.eager_attention_forward
