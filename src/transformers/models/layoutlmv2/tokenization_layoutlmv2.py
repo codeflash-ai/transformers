@@ -1414,12 +1414,10 @@ class BasicTokenizer:
         """Splits punctuation on a piece of text."""
         if not self.do_split_on_punc or (never_split is not None and text in never_split):
             return [text]
-        chars = list(text)
-        i = 0
-        start_new_word = True
         output = []
-        while i < len(chars):
-            char = chars[i]
+        start_new_word = True
+        # Iterate over text directly, removing unnecessary list() conversion
+        for char in text:
             if _is_punctuation(char):
                 output.append([char])
                 start_new_word = True
@@ -1428,7 +1426,6 @@ class BasicTokenizer:
                     output.append([])
                 start_new_word = False
                 output[-1].append(char)
-            i += 1
 
         return ["".join(x) for x in output]
 
