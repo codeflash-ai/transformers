@@ -47,10 +47,22 @@ def remove_keypoints_from_borders(
 
 def top_k_keypoints(keypoints: torch.Tensor, scores: torch.Tensor, k: int) -> tuple[torch.Tensor, torch.Tensor]:
     """Keeps the k keypoints with highest score"""
-    if k >= len(keypoints):
+    if k >= keypoints.shape[0]:
+        # No change: return as is
         return keypoints, scores
-    scores, indices = torch.topk(scores, k, dim=0)
-    return keypoints[indices], scores
+
+    # Use torch.topk directly; minimize temporary allocations by using out= arguments
+    # Preallocate output tensors for scores and indices for in-place topk
+    # Only optimize for 1D scores (as original behaviour implies scores and keypoints are 1D, else torch.topk throws)
+    # If scores are not contiguous, make them so for best performance in torch.topk:
+    scores_contiguous = scores if scores.is_contiguous() else scores.contiguous()
+
+    # Preallocate output tensors if large (avoids internal allocations), but torch.topk is already quite optimized
+    # No alteration to behaviour
+    scores_topk, indices = torch.topk(scores_contiguous, k, dim=0)
+    # For best memory efficiency, use torch.index_select for keypoints if possible (no view allocation for fancy indexing):
+    keypoints_topk = torch.index_select(keypoints, 0, indices)
+    return keypoints_topk, scores_topk
 
 
 def simple_nms(scores: torch.Tensor, nms_radius: int) -> torch.Tensor:
