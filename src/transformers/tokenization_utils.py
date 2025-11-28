@@ -41,6 +41,11 @@ from .tokenization_utils_base import (
 from .utils import PaddingStrategy, TensorType, add_end_docstrings, logging
 
 
+_WHITESPACE_CHARS = {" ", "\t", "\n", "\r"}
+
+_category_cache = {}
+
+
 logger = logging.get_logger(__name__)
 
 # Slow tokenizers are saved in a vocabulary plus three separated files
@@ -343,7 +348,7 @@ def _is_whitespace(char):
     """Checks whether `char` is a whitespace character."""
     # \t, \n, and \r are technically control characters but we treat them
     # as whitespace since they are generally considered as such.
-    if char == " " or char == "\t" or char == "\n" or char == "\r":
+    if char in _WHITESPACE_CHARS:
         return True
     cat = unicodedata.category(char)
     if cat == "Zs":
@@ -355,10 +360,13 @@ def _is_control(char):
     """Checks whether `char` is a control character."""
     # These are technically control characters but we count them as whitespace
     # characters.
-    if char == "\t" or char == "\n" or char == "\r":
+    if char in _WHITESPACE_CHARS:
         return False
-    cat = unicodedata.category(char)
-    if cat.startswith("C"):
+    cat = _category_cache.get(char)
+    if cat is None:
+        cat = unicodedata.category(char)
+        _category_cache[char] = cat
+    if cat[0] == "C":
         return True
     return False
 
