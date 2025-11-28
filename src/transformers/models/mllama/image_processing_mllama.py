@@ -494,11 +494,22 @@ def convert_to_rgb(image: ImageInput) -> ImageInput:
     if image.mode == "RGB":
         return image
 
-    image_rgba = image.convert("RGBA")
-    background = Image.new("RGBA", image_rgba.size, (255, 255, 255))
-    alpha_composite = Image.alpha_composite(background, image_rgba)
-    alpha_composite = alpha_composite.convert("RGB")
-    return alpha_composite
+    if image.mode in ("RGBA", "LA"):
+        # Optimize for images that already have alpha; skip extra conversion step
+        image_rgba = image if image.mode == "RGBA" else image.convert("RGBA")
+        background = Image.new("RGBA", image_rgba.size, (255, 255, 255))
+        alpha_composite = Image.alpha_composite(background, image_rgba)
+        return alpha_composite.convert("RGB")
+
+    if "transparency" in image.info:
+        # Fast path for paletted images with transparency (e.g., PNGs)
+        image_rgba = image.convert("RGBA")
+        background = Image.new("RGBA", image_rgba.size, (255, 255, 255))
+        alpha_composite = Image.alpha_composite(background, image_rgba)
+        return alpha_composite.convert("RGB")
+
+    # For all other cases (e.g., L, P, CMYK, etc., without transparency), direct conversion is safe
+    return image.convert("RGB")
 
 
 def _validate_size(size: dict[str, int]) -> None:
