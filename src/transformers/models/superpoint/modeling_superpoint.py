@@ -39,10 +39,16 @@ def remove_keypoints_from_borders(
     keypoints: torch.Tensor, scores: torch.Tensor, border: int, height: int, width: int
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """Removes keypoints (and their associated scores) that are too close to the border"""
-    mask_h = (keypoints[:, 0] >= border) & (keypoints[:, 0] < (height - border))
-    mask_w = (keypoints[:, 1] >= border) & (keypoints[:, 1] < (width - border))
-    mask = mask_h & mask_w
-    return keypoints[mask], scores[mask]
+    keypoints_0 = keypoints[:, 0]
+    keypoints_1 = keypoints[:, 1]
+    # Use torch.logical_and for in-place mask construction with reduced temp allocations
+    mask_h = keypoints_0.ge(border)
+    mask_h.logical_and_(keypoints_0.lt(height - border))
+    mask_w = keypoints_1.ge(border)
+    mask_w.logical_and_(keypoints_1.lt(width - border))
+    mask_h.logical_and_(mask_w)
+    # mask_h now holds the composite mask, no new array created for "mask"
+    return keypoints[mask_h], scores[mask_h]
 
 
 def top_k_keypoints(keypoints: torch.Tensor, scores: torch.Tensor, k: int) -> tuple[torch.Tensor, torch.Tensor]:
