@@ -26,6 +26,7 @@ from inspect import Parameter, signature
 from typing import Any, Optional, Union
 
 from packaging import version
+from torchao.quantization.quant_api import AOBaseConfig
 
 from ..utils import (
     is_auto_awq_available,
@@ -156,7 +157,7 @@ class QuantizationConfigMixin:
         Serializes this instance to a Python dictionary. Returns:
             `dict[str, Any]`: Dictionary of all the attributes that make up this configuration instance.
         """
-        return copy.deepcopy(self.__dict__)
+        return self.__dict__.copy()
 
     def __iter__(self):
         """allows `dict(obj)` for situations where obj may be a dict or QuantizationConfigMixin"""
@@ -1801,16 +1802,25 @@ class TorchAoConfig(QuantizationConfigMixin):
 
         if isinstance(self.quant_type, str):
             # Handle layout serialization if present
-            if "quant_type_kwargs" in d and "layout" in d["quant_type_kwargs"]:
-                if is_dataclass(d["quant_type_kwargs"]["layout"]):
-                    d["quant_type_kwargs"]["layout"] = [
-                        d["quant_type_kwargs"]["layout"].__class__.__name__,
-                        dataclasses.asdict(d["quant_type_kwargs"]["layout"]),
+            quant_type_kwargs = d.get("quant_type_kwargs", None)
+            if quant_type_kwargs is not None and "layout" in quant_type_kwargs:
+                layout = quant_type_kwargs["layout"]
+                if is_dataclass(layout):
+                    # Only mutate copy, never self attribute (no observable side effects)
+                    quant_type_kwargs = quant_type_kwargs.copy()
+                    quant_type_kwargs["layout"] = [
+                        layout.__class__.__name__,
+                        dataclasses.asdict(layout),
                     ]
-                if isinstance(d["quant_type_kwargs"]["layout"], list):
-                    assert len(d["quant_type_kwargs"]["layout"]) == 2, "layout saves layout name and layout kwargs"
-                    assert isinstance(d["quant_type_kwargs"]["layout"][0], str), "layout name must be a string"
-                    assert isinstance(d["quant_type_kwargs"]["layout"][1], dict), "layout kwargs must be a dict"
+                    d["quant_type_kwargs"] = quant_type_kwargs
+                    layout = quant_type_kwargs["layout"]
+                if isinstance(layout, list):
+                    if len(layout) != 2:
+                        raise AssertionError("layout saves layout name and layout kwargs")
+                    if not isinstance(layout[0], str):
+                        raise AssertionError("layout name must be a string")
+                    if not isinstance(layout[1], dict):
+                        raise AssertionError("layout kwargs must be a dict")
                 else:
                     raise ValueError("layout must be a list")
         else:
@@ -1819,6 +1829,7 @@ class TorchAoConfig(QuantizationConfigMixin):
 
             # For now we assume there is 1 config per Transformer, however in the future
             # We may want to support a config per fqn.
+            d = d.copy()
             d["quant_type"] = {"default": config_to_dict(self.quant_type)}
 
         return d
