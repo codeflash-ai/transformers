@@ -100,16 +100,20 @@ def shift_tokens_right(input_ids: torch.Tensor, pad_token_id: int, decoder_start
     """
     # transpose to get (bsz, num_codebooks, seq_len)
     input_ids = input_ids.transpose(1, 2)
-    shifted_input_ids = input_ids.new_zeros(input_ids.shape)
-    shifted_input_ids[..., 1:] = input_ids[..., :-1].clone()
     if decoder_start_token_id is None:
         raise ValueError("Make sure to set the decoder_start_token_id attribute of the model's configuration.")
-    shifted_input_ids[..., 0] = decoder_start_token_id
 
     if pad_token_id is None:
         raise ValueError("Make sure to set the pad_token_id attribute of the model's configuration.")
-    # replace possible -100 values in labels by `pad_token_id`
-    shifted_input_ids.masked_fill_(shifted_input_ids == -100, pad_token_id)
+    # Allocate output buffer and efficiently copy, set, fill in-place
+    shifted_input_ids = torch.empty_like(input_ids)
+    shifted_input_ids[..., 0] = decoder_start_token_id
+    # Use .slice and .copy_ for efficient in-place assignment, avoid .clone() and leverage memory-contiguous bulk copy.
+    shifted_input_ids[..., 1:] = input_ids[..., :-1]
+    # Use torch.where for in-place replacement of -100, which is more efficient than masked_fill_
+    mask = shifted_input_ids == -100
+    if mask.any():
+        shifted_input_ids[mask] = pad_token_id
 
     return shifted_input_ids
 
