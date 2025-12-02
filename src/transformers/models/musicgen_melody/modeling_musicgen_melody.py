@@ -747,9 +747,16 @@ class MusicgenMelodyForCausalLM(MusicgenMelodyPreTrainedModel, GenerationMixin):
         self.model = MusicgenMelodyModel(config)
 
         self.num_codebooks = config.num_codebooks
-        self.lm_heads = nn.ModuleList(
-            [nn.Linear(config.hidden_size, config.vocab_size, bias=False) for _ in range(config.num_codebooks)]
-        )
+        # Preallocate a weight tensor and use torch.nn.Parameter directly for all codebooks, for faster weight initialization
+        vocab_size = config.vocab_size
+        hidden_size = config.hidden_size
+        lm_heads = []
+        for _ in range(self.num_codebooks):
+            linear = nn.Linear(hidden_size, vocab_size, bias=False)
+            lm_heads.append(linear)
+        self.lm_heads = nn.ModuleList(lm_heads)
+
+        # Initialize weights and apply final processing
 
         # Initialize weights and apply final processing
         self.post_init()
@@ -1021,9 +1028,10 @@ class MusicgenMelodyForCausalLM(MusicgenMelodyPreTrainedModel, GenerationMixin):
         """Apply a delay pattern mask to the decoder input ids, only preserving predictions where
         the mask is set to -1, and otherwise setting to the value detailed in the mask."""
         seq_len = input_ids.shape[-1]
-        decoder_pad_token_mask = decoder_pad_token_mask[..., :seq_len]
-        input_ids = torch.where(decoder_pad_token_mask == -1, input_ids, decoder_pad_token_mask)
-        return input_ids
+        if decoder_pad_token_mask.shape[-1] > seq_len:
+            decoder_pad_token_mask = decoder_pad_token_mask[..., :seq_len]
+        # Use in-place where possible (out parameter), though torch.where always returns new tensor.
+        return torch.where(decoder_pad_token_mask == -1, input_ids, decoder_pad_token_mask)
 
     @torch.no_grad()
     # Ignore copy
