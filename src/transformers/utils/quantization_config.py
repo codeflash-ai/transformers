@@ -121,12 +121,12 @@ class QuantizationConfigMixin:
         """
         config = cls(**config_dict)
 
-        to_remove = []
-        for key, value in kwargs.items():
-            if hasattr(config, key):
-                setattr(config, key, value)
-                to_remove.append(key)
+        # More efficient, only iterate once over kwargs:
+        config_keys = config.__dict__.keys()
+        to_remove = [key for key in kwargs if key in config_keys]
         for key in to_remove:
+            setattr(config, key, kwargs[key])
+            # Remove from kwargs so unused kwargs can be returned if requested
             kwargs.pop(key, None)
 
         if return_unused_kwargs:
