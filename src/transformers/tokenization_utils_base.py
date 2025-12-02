@@ -1406,13 +1406,17 @@ class PreTrainedTokenizerBase(SpecialTokensMixin, PushToHubMixin):
                 f"Padding side should be selected between 'right' and 'left', current value: {self.padding_side}"
             )
 
-        self.truncation_side = kwargs.pop("truncation_side", self.truncation_side)
+        self.truncation_side = kwargs.pop("truncation_side", getattr(self, "truncation_side", "right"))
         if self.truncation_side not in ["right", "left"]:
             raise ValueError(
                 f"Truncation side should be selected between 'right' and 'left', current value: {self.truncation_side}"
             )
 
-        self.model_input_names = kwargs.pop("model_input_names", self.model_input_names)
+        self.model_input_names = kwargs.pop(
+            "model_input_names", getattr(self, "model_input_names", ["input_ids", "token_type_ids", "attention_mask"])
+        )
+
+        # By default, cleaning tokenization spaces for both fast and slow tokenizers
 
         # By default, cleaning tokenization spaces for both fast and slow tokenizers
         self.clean_up_tokenization_spaces = kwargs.pop("clean_up_tokenization_spaces", False)

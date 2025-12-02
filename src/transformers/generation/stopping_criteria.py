@@ -288,9 +288,18 @@ class StopStringCriteria(StoppingCriteria):
         clean_token_indices = []
         sentence_base = tokenizer(static_prefix, add_special_tokens=False)["input_ids"]
         tokens_base = [tokenizer._convert_id_to_token(tok) for tok in sentence_base]
+        static_prefix_idx = None
+        static_prefix_len = len(static_prefix)
         for token, token_idx in vocab.items():
             token_string = tokenizer.convert_tokens_to_string(tokens_base + [token])
-            token_string = token_string[token_string.index(static_prefix) + len(static_prefix) :]
+            if static_prefix_idx is None:
+                static_prefix_idx = token_string.index(static_prefix) + static_prefix_len
+            else:
+                # If static_prefix_idx was computed earlier, use it directly and avoid recomputing .index() every iteration
+                # This works because static_prefix will always be inserted at the same position in the returned string
+                # for all vocabulary tokens
+                pass
+            token_string = token_string[static_prefix_idx:]
             clean_token_list.append(token_string)
             clean_token_indices.append(token_idx)
         return tuple(clean_token_list), tuple(clean_token_indices)
