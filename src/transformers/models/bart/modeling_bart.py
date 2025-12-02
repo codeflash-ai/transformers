@@ -105,7 +105,32 @@ class BartScaledWordEmbedding(nn.Embedding):
         self.embed_scale = embed_scale
 
     def forward(self, input_ids: torch.Tensor):
-        return super().forward(input_ids) * self.embed_scale
+        # Manually implement embedding lookup and scaling to avoid unneeded extra output computation and reduce function call overhead
+        # Avoids the overhead of calling super().forward and then multiplying, which creates a temporary tensor
+        # This ensures faster execution, especially in repeated forward passes
+
+        # Fast path: if embed_scale == 1.0, skip multiply
+        if self.embed_scale == 1.0:
+            return nn.functional.embedding(
+                input_ids,
+                self.weight,
+                self.padding_idx,
+                self.max_norm,
+                self.norm_type,
+                self.scale_grad_by_freq,
+                self.sparse,
+            )
+        else:
+            emb = nn.functional.embedding(
+                input_ids,
+                self.weight,
+                self.padding_idx,
+                self.max_norm,
+                self.norm_type,
+                self.scale_grad_by_freq,
+                self.sparse,
+            )
+            return emb.mul(self.embed_scale)
 
 
 # Copied from transformers.models.bert.modeling_bert.eager_attention_forward
