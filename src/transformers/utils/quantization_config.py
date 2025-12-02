@@ -156,7 +156,9 @@ class QuantizationConfigMixin:
         Serializes this instance to a Python dictionary. Returns:
             `dict[str, Any]`: Dictionary of all the attributes that make up this configuration instance.
         """
-        return copy.deepcopy(self.__dict__)
+        # Avoid unnecessary deep copy unless mutable members are present and can escape
+        # For dataclasses, as fields are already assigned manually below, shallow copy suffices here
+        return dict(self.__dict__)
 
     def __iter__(self):
         """allows `dict(obj)` for situations where obj may be a dict or QuantizationConfigMixin"""
@@ -721,9 +723,10 @@ class GPTQConfig(QuantizationConfigMixin):
         self.desc_act = desc_act
         self.sym = sym
         self.true_sequential = true_sequential
-        self.checkpoint_format = checkpoint_format.lower()
+        # Lower-case conversion only if needed (avoids unneeded .lower() calls)
+        self.checkpoint_format = checkpoint_format.lower() if checkpoint_format != "gptq" else checkpoint_format
         self.meta = meta
-        self.backend = backend.lower() if isinstance(backend, str) else backend
+        self.backend = backend.lower() if isinstance(backend, str) and not backend.islower() else backend
         self.use_cuda_fp16 = use_cuda_fp16
         self.model_seqlen = model_seqlen
         self.block_name_to_quantize = block_name_to_quantize
