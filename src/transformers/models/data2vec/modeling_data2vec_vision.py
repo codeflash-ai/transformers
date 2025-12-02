@@ -69,7 +69,8 @@ def drop_path(input: torch.Tensor, drop_prob: float = 0.0, training: bool = Fals
     shape = (input.shape[0],) + (1,) * (input.ndim - 1)  # work with diff dim tensors, not just 2D ConvNets
     random_tensor = keep_prob + torch.rand(shape, dtype=input.dtype, device=input.device)
     random_tensor.floor_()  # binarize
-    output = input.div(keep_prob) * random_tensor
+    random_tensor.div_(keep_prob)
+    output = input * random_tensor
     return output
 
 
