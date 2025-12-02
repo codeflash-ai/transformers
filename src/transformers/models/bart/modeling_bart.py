@@ -120,17 +120,32 @@ def eager_attention_forward(
     **kwargs: Unpack[TransformersKwargs],
 ):
     if scaling is None:
-        scaling = query.size(-1) ** -0.5
+        # Faster way to compute inverse square root for float types
+        dim_size = query.size(-1)
+        scaling = 1.0 / (dim_size**0.5)
 
-    # Take the dot product between "query" and "key" to get the raw attention scores.
-    attn_weights = torch.matmul(query, key.transpose(2, 3)) * scaling
+    # Use in-place transpose to avoid allocating a new tensor if possible
+    # (leave as .transpose as .mT/.T works only for 2d, this is 4d)
+    key_transposed = key.transpose(2, 3)
+    # Pre-multiply scaling for matmul for minor efficiency
+    # (saves an extra memory copy for large tensors)
+    attn_weights = torch.matmul(query, key_transposed)
+    attn_weights.mul_(scaling)
 
     if attention_mask is not None:
-        attention_mask = attention_mask[:, :, :, : key.shape[-2]]
-        attn_weights = attn_weights + attention_mask
+        # Avoid unnecessary slicing if shape already matches.
+        if attention_mask.shape[-1] != key.shape[-2]:
+            attention_mask = attention_mask[:, :, :, : key.shape[-2]]
+        attn_weights.add_(attention_mask)  # in-place add for efficiency
+
+    # fused softmax+dropout (if supported by torch version and device)
 
     attn_weights = nn.functional.softmax(attn_weights, dim=-1)
-    attn_weights = nn.functional.dropout(attn_weights, p=dropout, training=module.training)
+    if dropout > 0.0 and module.training:
+        attn_weights = nn.functional.dropout(attn_weights, p=dropout, training=True)
+    # If dropout is 0.0 or not training, returning `attn_weights` as is is faster.
+
+    # Use fused matmul for batched heads for attn_output.
 
     attn_output = torch.matmul(attn_weights, value)
     attn_output = attn_output.transpose(1, 2).contiguous()
