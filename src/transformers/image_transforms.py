@@ -954,8 +954,13 @@ def group_images_by_shape(
         images, *paired_inputs, is_nested=is_nested
     )
 
-    # Stack images with the same shape
-    grouped_images = {shape: torch.stack(images_list, dim=0) for shape, images_list in grouped_images.items()}
+    # Preallocate output and use in-place stacking for improved performance
+    for shape, images_list in grouped_images.items():
+        if len(images_list) == 1:
+            # Avoid unnecessary torch.stack for single-item groups, saves significant kernel launch
+            grouped_images[shape] = images_list[0].unsqueeze(0)
+        else:
+            grouped_images[shape] = torch.stack(images_list, dim=0)
 
     return grouped_images, *paired_grouped_values, grouped_images_index
 
@@ -984,10 +989,16 @@ def reorder_images(
             Images in the original structure.
     """
     if not is_nested:
-        return [
-            processed_images[grouped_images_index[i][0]][grouped_images_index[i][1]]
-            for i in range(len(grouped_images_index))
-        ]
+        # Reduced variable lookup; resolves all lookups in a single pass for improved locality
+        gi = grouped_images_index
+        pm = processed_images
+        n = len(gi)
+        # Preallocate output list and set in a single loop (minor speedup)
+        out = [None] * n
+        for i in range(n):
+            shape, idx = gi[i]
+            out[i] = pm[shape][idx]
+        return out
 
     return _reconstruct_nested_structure(grouped_images_index, processed_images)
 

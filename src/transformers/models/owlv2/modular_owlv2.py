@@ -56,14 +56,28 @@ class Owlv2ImageProcessorFast(OwlViTImageProcessorFast):
         """
         Pad an image with zeros to the given size.
         """
-        height, width = images.shape[-2:]
+        # Expect images to be a batch (B, C, H, W)
+        shape = images.shape
+        if len(shape) == 3:
+            # Single image, add batch dimension
+            images = images.unsqueeze(0)
+            shape = images.shape
+
+        batch, channels, height, width = shape
         size = max(height, width)
         pad_bottom = size - height
         pad_right = size - width
 
+        # Only pad if required
+        if pad_bottom == 0 and pad_right == 0:
+            return images if len(shape) == 4 else images.squeeze(0)
+
+        # Use single pad call for batch for efficiency
         padding = (0, 0, pad_right, pad_bottom)
-        padded_image = F.pad(images, padding, fill=constant_value)
-        return padded_image
+        padded = F.pad(images, padding, fill=constant_value)
+        if len(shape) == 3:
+            return padded.squeeze(0)
+        return padded
 
     def pad(
         self,
@@ -79,11 +93,9 @@ class Owlv2ImageProcessorFast(OwlViTImageProcessorFast):
         grouped_images, grouped_images_index = group_images_by_shape(images, disable_grouping=disable_grouping)
         processed_images_grouped = {}
         for shape, stacked_images in grouped_images.items():
-            stacked_images = self._pad_images(
-                stacked_images,
-                constant_value=constant_value,
-            )
-            processed_images_grouped[shape] = stacked_images
+            # Stacked_images is of shape (B, C, H, W)
+            padded_images = self._pad_images(stacked_images, constant_value)
+            processed_images_grouped[shape] = padded_images
 
         processed_images = reorder_images(processed_images_grouped, grouped_images_index)
 
