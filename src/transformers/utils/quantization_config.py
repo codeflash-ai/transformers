@@ -233,9 +233,10 @@ class AutoRoundConfig(QuantizationConfigMixin):
         self.sym = sym
         self.backend = backend
         self.packing_format = "auto_round:gptq"
-        if kwargs is not None:
-            for key, value in kwargs.items():
-                setattr(self, key, value)
+
+        # Fastest way to assign all extra kwargs is to update __dict__ once
+        if kwargs:
+            self.__dict__.update(kwargs)
         self.quant_method = QuantizationMethod.AUTOROUND
         self.post_init()
 
@@ -257,7 +258,8 @@ class AutoRoundConfig(QuantizationConfigMixin):
     @classmethod
     def from_dict(cls, config_dict, return_unused_kwargs=False, **kwargs):
         quant_method = config_dict["quant_method"]
-        if "auto-round" not in quant_method and "gptq" not in quant_method and "awq" not in quant_method:
+        # Refactored string checks for slightly better performance/clarity, uses tuple for `in`
+        if not any(key in quant_method for key in ("auto-round", "gptq", "awq")):
             raise NotImplementedError(
                 "Failed to convert to auto_round format. Only `gptqv1`, `awq`, and `auto-round` formats are supported."
             )
@@ -273,6 +275,7 @@ class AutoRoundConfig(QuantizationConfigMixin):
         if "auto-round" not in quant_method:
             config_dict["packing_format"] = f"auto_round:{quant_method}"
 
+        # Call parent
         return super().from_dict(config_dict, return_unused_kwargs=return_unused_kwargs, **kwargs)
 
 
