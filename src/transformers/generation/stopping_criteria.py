@@ -2,7 +2,6 @@ import time
 import warnings
 from abc import ABC
 from collections import OrderedDict
-from copy import deepcopy
 from typing import Optional, Union
 
 import numpy as np
@@ -512,7 +511,7 @@ class StoppingCriteriaList(list):
 
 def validate_stopping_criteria(stopping_criteria: StoppingCriteriaList, max_length: int) -> StoppingCriteriaList:
     stopping_max_length = stopping_criteria.max_length
-    new_stopping_criteria = deepcopy(stopping_criteria)
+    new_stopping_criteria = stopping_criteria.copy()
     if stopping_max_length is not None and stopping_max_length != max_length:
         warnings.warn("You set different `max_length` for stopping criteria and `max_length` parameter", UserWarning)
     elif stopping_max_length is None:
