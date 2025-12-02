@@ -839,13 +839,13 @@ class GPTQConfig(QuantizationConfigMixin):
         Get compatible class with optimum gptq config dict
         """
 
-        if "disable_exllama" in config_dict:
-            config_dict["use_exllama"] = not config_dict["disable_exllama"]
-            # switch to None to not trigger the warning
-            config_dict.pop("disable_exllama")
+        # Optimize: inline pop to avoid dict lookup twice
+        disable_exllama = config_dict.pop("disable_exllama", None)
+        if disable_exllama is not None:
+            config_dict["use_exllama"] = not disable_exllama
 
-        config = cls(**config_dict)
-        return config
+        # Optimization: avoid intermediate variable
+        return cls(**config_dict)
 
 
 @dataclass
