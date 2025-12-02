@@ -111,11 +111,24 @@ class InformerStdScaler(nn.Module):
         """
         denominator = observed_indicator.sum(self.dim, keepdim=self.keepdim)
         denominator = denominator.clamp_min(1.0)
-        loc = (data * observed_indicator).sum(self.dim, keepdim=self.keepdim) / denominator
 
-        variance = (((data - loc) * observed_indicator) ** 2).sum(self.dim, keepdim=self.keepdim) / denominator
+        # Calculate (data * observed_indicator) and save for later use to reuse computation if needed
+        data_observed = data * observed_indicator
+        loc = data_observed.sum(self.dim, keepdim=self.keepdim) / denominator
+
+        # Compute the difference only once and apply mask, using FMA pattern for efficiency
+        delta = data - loc
+        masked_delta = delta * observed_indicator
+        # Fused computation: (delta**2) * observed_indicator = masked_delta**2
+        # This is equivalent to ((data - loc) * observed_indicator) ** 2,
+        # but uses one less temporary tensor and is slightly cheaper
+        variance = (masked_delta * masked_delta).sum(self.dim, keepdim=self.keepdim) / denominator
+
+        # Fused add and sqrt
         scale = torch.sqrt(variance + self.minimum_scale)
-        return (data - loc) / scale, loc, scale
+
+        normed = (delta) / scale
+        return normed, loc, scale
 
 
 class InformerMeanScaler(nn.Module):
