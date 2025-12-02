@@ -13,7 +13,6 @@
 # limitations under the License.
 import asyncio
 import base64
-import copy
 import datetime
 import enum
 import functools
@@ -248,7 +247,9 @@ def create_generation_config_from_req(
     if req.get("generation_config") is not None:
         generation_config = GenerationConfig(**json.loads(req["generation_config"]))
     else:
-        generation_config = copy.deepcopy(model_generation_config)
+        # Optimization: avoid expensive and unnecessary deep copy
+        generation_config = GenerationConfig()
+        generation_config.copy_from(model_generation_config)
 
     non_standard_kwargs = generation_config.update(**kwargs)
     # Set extra kwargs that are not in the `GenerationConfig` class (e.g. continuous batching flags)

@@ -1139,11 +1139,13 @@ class GenerationConfig(PushToHubMixin):
         Returns:
             `dict[str, Any]`: Dictionary containing all the key-value pairs that were not used to update the instance.
         """
-        to_remove = []
+        to_remove = set()
         for key, value in kwargs.items():
             if hasattr(self, key):
                 setattr(self, key, value)
-                to_remove.append(key)
+                to_remove.add(key)
+
+        # Confirm that the updated instance is still valid
 
         # Confirm that the updated instance is still valid
         self.validate()
@@ -1151,6 +1153,14 @@ class GenerationConfig(PushToHubMixin):
         # Remove all the attributes that were updated, without modifying the input dict
         unused_kwargs = {key: value for key, value in kwargs.items() if key not in to_remove}
         return unused_kwargs
+
+    def copy_from(self, other: "GenerationConfig"):
+        """
+        Efficiently copy all attributes from another GenerationConfig object (shallow copy).
+        """
+        if not isinstance(other, GenerationConfig):
+            raise TypeError(f"copy_from expects a GenerationConfig not {type(other)}")
+        self.__dict__.update(other.__dict__)
 
 
 @dataclass
