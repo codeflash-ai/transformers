@@ -1463,10 +1463,8 @@ class FbgemmFp8Config(QuantizationConfigMixin):
         self.modules_to_not_convert = modules_to_not_convert
 
     def get_loading_attributes(self):
-        attributes_dict = copy.deepcopy(self.__dict__)
-        loading_attributes = ["activation_scale_ub"]
-        loading_attributes_dict = {i: j for i, j in attributes_dict.items() if i in loading_attributes}
-        return loading_attributes_dict
+        # No need to deepcopy self.__dict__ since only simple types are extracted
+        return {"activation_scale_ub": self.activation_scale_ub}
 
 
 @dataclass
