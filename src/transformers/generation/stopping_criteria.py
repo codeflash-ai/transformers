@@ -357,34 +357,35 @@ class StopStringCriteria(StoppingCriteria):
                 "strings containing unusual characters that are not in the tokenizer vocabulary."
             )
         max_valid_end_lens = max(valid_end_lens)
+        # Use max token id, not length of token_indices, allows compact flat index
+        max_token_id = max(token_indices)
         vec_size = len(stop_strings) * (max_valid_positions + max_valid_end_lens) + 1
-        # We use +2 instead of +1 so we can have a dummy entry at the end. We will clamp all token values
-        # over the max to this, ensuring they do not contribute to stop string matching.
-        gather_vec = np.full((max(token_indices) + 2, vec_size), dtype=np.int32, fill_value=-1)
-
-        for i, stop_string in enumerate(stop_strings):
+        gather_vec = np.full((max_token_id + 2, vec_size), fill_value=-1, dtype=np.int32)
+        # Fill valid positions and end lens efficiently
+        for s_i, stop_string in enumerate(stop_strings):
             positions = token_valid_positions[stop_string]
             end_lens = token_end_overlaps[stop_string]
 
             # Since this is lots of very small assignments of lists, we build it with numpy rather
             # than torch for speed + simplicity, then convert to torch at the end
+            offset_pos = max_valid_positions * s_i
+            offset_end = max_valid_positions * len(stop_strings) + max_valid_end_lens * s_i
+            # Fill valid_positions with slicing for each token
             for token_idx, valid_positions in positions.items():
-                gather_vec[token_idx, max_valid_positions * i : max_valid_positions * i + len(valid_positions)] = (
-                    valid_positions
-                )
+                gather_vec[token_idx, offset_pos : offset_pos + len(valid_positions)] = valid_positions
             for token_idx, possible_end_lens in end_lens.items():
                 gather_vec[
                     token_idx,
-                    max_valid_positions * len(stop_strings) + max_valid_end_lens * i : max_valid_positions
-                    * len(stop_strings)
-                    + max_valid_end_lens * i
-                    + len(possible_end_lens),
+                    offset_end : offset_end + len(possible_end_lens),
                 ] = possible_end_lens
-            for token, token_idx in zip(token_list, token_indices):
-                gather_vec[token_idx, -1] = len(token)
 
-        gather_vec = torch.tensor(gather_vec, dtype=torch.int32)
+        # Fill length as a separate vector up front for all tokens
+        # Avoid repeated loops, do it once for all tokens
+        token_lengths = [len(t) for t in token_list]
+        for tok_idx, length in zip(token_indices, token_lengths):
+            gather_vec[tok_idx, -1] = length
 
+        gather_vec = torch.from_numpy(gather_vec)
         return gather_vec, max_valid_positions, max_valid_end_lens
 
     @add_start_docstrings(STOPPING_CRITERIA_INPUTS_DOCSTRING)
