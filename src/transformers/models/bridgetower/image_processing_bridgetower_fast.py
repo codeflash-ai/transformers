@@ -68,17 +68,16 @@ def get_resize_output_image_size(
 
     if input_height < input_width:
         new_height = min_size
-        new_width = scale * input_width
+        new_width = int(scale * input_width + 0.5)
     else:
-        new_height = scale * input_height
+        new_height = int(scale * input_height + 0.5)
         new_width = min_size
 
     if max(new_height, new_width) > max_size:
         scale = max_size / max(new_height, new_width)
-        new_height = scale * new_height
-        new_width = scale * new_width
+        new_height = int(scale * new_height + 0.5)
+        new_width = int(scale * new_width + 0.5)
 
-    new_height, new_width = int(new_height + 0.5), int(new_width + 0.5)
     new_height = new_height // size_divisor * size_divisor
     new_width = new_width // size_divisor * size_divisor
 
