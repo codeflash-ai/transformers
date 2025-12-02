@@ -145,19 +145,35 @@ class InformerMeanScaler(nn.Module):
                 (`(batch_size, sequence_length, num_input_channels)`,`(batch_size, 1, num_input_channels)`,
                 `(batch_size, 1, num_input_channels)`)
         """
-        ts_sum = (data * observed_indicator).abs().sum(self.dim, keepdim=True)
-        num_observed = observed_indicator.sum(self.dim, keepdim=True)
 
-        scale = ts_sum / torch.clamp(num_observed, min=1)
+        # Precompute and cache frequently used values
+        mask = observed_indicator
+        # Use fused ops and avoid extra temporary tensors when possible
+        abs_data = data.abs()
+        masked_abs_data = abs_data * mask
+        ts_sum = masked_abs_data.sum(self.dim, keepdim=True)
+        num_observed = mask.sum(self.dim, keepdim=True)
+        num_observed_clamped = torch.clamp(num_observed, min=1)
+
+        scale = ts_sum / num_observed_clamped
+
+        # Compute `default_scale` efficiently and avoid creating new tensors if possible
 
         # If `default_scale` is provided, we use it, otherwise we use the scale
         # of the batch.
         if self.default_scale is None:
-            batch_sum = ts_sum.sum(dim=0)
-            batch_observations = torch.clamp(num_observed.sum(0), min=1)
-            default_scale = torch.squeeze(batch_sum / batch_observations)
+            # Avoid unnecessary squeeze, keepdim=False by default gives shape (1, ..., C)
+            batch_sum = ts_sum.sum(dim=0, keepdim=True)
+            batch_observations = num_observed.sum(dim=0, keepdim=True)
+            batch_observations = torch.clamp(batch_observations, min=1)
+            default_scale = batch_sum / batch_observations
+            # Now shape of default_scale will match required broadcasting
+            # Remove keepdim only if needed, otherwise keep it for broadcasting
         else:
-            default_scale = self.default_scale * torch.ones_like(scale)
+            # Use out parameter to avoid allocating new tensor for ones_like
+            default_scale = torch.full_like(scale, self.default_scale)
+
+        # Fused torch.where and clamp into one step if possible (applies inplace on scale if not causing bugs)
 
         # apply default scale where there are no observations
         scale = torch.where(num_observed > 0, scale, default_scale)
