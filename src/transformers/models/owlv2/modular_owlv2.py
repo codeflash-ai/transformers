@@ -61,6 +61,9 @@ class Owlv2ImageProcessorFast(OwlViTImageProcessorFast):
         pad_bottom = size - height
         pad_right = size - width
 
+        if pad_bottom == 0 and pad_right == 0:
+            return images
+
         padding = (0, 0, pad_right, pad_bottom)
         padded_image = F.pad(images, padding, fill=constant_value)
         return padded_image
