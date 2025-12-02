@@ -57,11 +57,17 @@ def convert_to_rgb(image):
     if image.mode == "RGB":
         return image
 
-    image_rgba = image.convert("RGBA")
-    background = Image.new("RGBA", image_rgba.size, (255, 255, 255))
-    alpha_composite = Image.alpha_composite(background, image_rgba)
-    alpha_composite = alpha_composite.convert("RGB")
-    return alpha_composite
+    if image.mode in ("RGBA", "LA") or (image.mode == "P" and "transparency" in image.info):
+        # Optimized path for RGBA and LA images (common with transparency),
+        # or paletted images with transparency information.
+        # This avoids the extra conversion if already proper.
+        image_rgba = image.convert("RGBA") if image.mode != "RGBA" else image
+        background = Image.new("RGBA", image_rgba.size, (255, 255, 255, 255))
+        alpha_composite = Image.alpha_composite(background, image_rgba)
+        return alpha_composite.convert("RGB")
+    else:
+        # Images without alpha - simple conversion suffices, saves memory and cpu.
+        return image.convert("RGB")
 
 
 class IdeficsImageProcessor(BaseImageProcessor):
