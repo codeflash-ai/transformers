@@ -690,8 +690,8 @@ class Cache:
 
     def __init__(
         self,
-        layers: Optional[list[CacheLayerMixin]] = None,
-        layer_class_to_replicate: Optional[type[CacheLayerMixin]] = None,
+        layers: Optional[list["CacheLayerMixin"]] = None,
+        layer_class_to_replicate: Optional[type["CacheLayerMixin"]] = None,
         offloading: bool = False,
         offload_only_non_sliding: bool = True,
     ):
@@ -768,17 +768,21 @@ class Cache:
         Return:
             A tuple containing the updated key and value states.
         """
+        layer_class_to_replicate = self.layer_class_to_replicate
+        layers = self.layers
+
         # In this case, the `layers` were not provided, and we must append as much as `layer_idx`
-        if self.layer_class_to_replicate is not None:
-            while len(self.layers) <= layer_idx:
-                self.layers.append(self.layer_class_to_replicate())
+        if layer_class_to_replicate is not None:
+            append = layers.append
+            while len(layers) <= layer_idx:
+                append(layer_class_to_replicate())
 
         if self.offloading:
-            # Wait for the stream to finish if needed, and start prefetching the next layer
-            torch.cuda.default_stream(key_states.device).wait_stream(self.prefetch_stream)
+            stream = self.prefetch_stream
+            torch.cuda.default_stream(key_states.device).wait_stream(stream)
             self.prefetch(layer_idx + 1, self.only_non_sliding)
 
-        keys, values = self.layers[layer_idx].update(key_states, value_states, cache_kwargs)
+        keys, values = layers[layer_idx].update(key_states, value_states, cache_kwargs)
 
         if self.offloading:
             self.offload(layer_idx, self.only_non_sliding)

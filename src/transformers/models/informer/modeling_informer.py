@@ -462,19 +462,34 @@ class InformerProbSparseAttention(nn.Module):
 
         # if key_value_states are provided this layer is used as a cross-attention layer
         # for the decoder
+
+        # Local variables for fast access
+        num_heads = self.num_heads
+        head_dim = self.head_dim
+        factor = self.factor
+        scaling = self.scaling
+        embed_dim = self.embed_dim
+        is_decoder = self.is_decoder
+        layer_idx = self.layer_idx
+        k_proj = self.k_proj
+        v_proj = self.v_proj
+        q_proj = self.q_proj
+        out_proj = self.out_proj
+        dropout = self.dropout
+
         is_cross_attention = key_value_states is not None
 
         bsz, tgt_len, _ = hidden_states.size()
         src_len = key_value_states.shape[1] if is_cross_attention else tgt_len
-        kv_input_shape = (bsz, src_len, -1, self.head_dim)
+        kv_input_shape = (bsz, src_len, -1, head_dim)
 
         # get query proj
-        query_states = self.q_proj(hidden_states) * self.scaling
+        query_states = q_proj(hidden_states).mul_(scaling)  # in-place
 
         is_updated = False
         if past_key_values is not None:
             if isinstance(past_key_values, EncoderDecoderCache):
-                is_updated = past_key_values.is_updated.get(self.layer_idx)
+                is_updated = past_key_values.is_updated.get(layer_idx)
                 if is_cross_attention:
                     # after the first generated id, we can subsequently re-use all key/value_states from cache
                     curr_past_key_values = past_key_values.cross_attention_cache
@@ -483,44 +498,58 @@ class InformerProbSparseAttention(nn.Module):
             else:
                 curr_past_key_values = past_key_values
 
+        else:
+            curr_past_key_values = None
+
         current_states = key_value_states if is_cross_attention else hidden_states
         if is_cross_attention and past_key_values is not None and is_updated:
-            # reuse k,v, cross_attentions
-            key_states = curr_past_key_values.layers[self.layer_idx].keys
-            value_states = curr_past_key_values.layers[self.layer_idx].values
+            key_states = curr_past_key_values.layers[layer_idx].keys
+            value_states = curr_past_key_values.layers[layer_idx].values
         else:
-            key_states = self.k_proj(current_states)
-            value_states = self.v_proj(current_states)
+            key_states = k_proj(current_states)
+            value_states = v_proj(current_states)
             key_states = key_states.view(*kv_input_shape).transpose(1, 2)
             value_states = value_states.view(*kv_input_shape).transpose(1, 2)
 
             if past_key_values is not None:
-                # save all key/value_states to cache to be re-used for fast auto-regressive generation
-                cache_position = cache_position if not is_cross_attention else None
+                cache_position_arg = cache_position if not is_cross_attention else None
                 key_states, value_states = curr_past_key_values.update(
-                    key_states, value_states, self.layer_idx, {"cache_position": cache_position}
+                    key_states, value_states, layer_idx, {"cache_position": cache_position_arg}
                 )
                 # set flag that curr layer for cross-attn is already updated so we can re-use in subsequent calls
                 if is_cross_attention and isinstance(past_key_values, EncoderDecoderCache):
-                    past_key_values.is_updated[self.layer_idx] = True
+                    past_key_values.is_updated[layer_idx] = True
 
-        proj_shape = (bsz * self.num_heads, -1, self.head_dim)
-        query_states = self._shape(query_states, tgt_len, bsz).view(*proj_shape)
+        # Project shapes for batched operations
+        proj_shape = (bsz * num_heads, -1, head_dim)
+        query_states = self._shape(query_states, tgt_len, bsz).reshape(*proj_shape)
         key_states = key_states.reshape(*proj_shape)
         value_states = value_states.reshape(*proj_shape)
 
         key_states_time_length = key_states.size(1)  # L_K
-        log_key_states_time_length = np.ceil(np.log1p(key_states_time_length)).astype("int").item()  # log_L_K
+        # Use torch ops (GPU) for log/ceil/astype for faster execution
+        if not torch.is_tensor(key_states_time_length):
+            ks_len_tensor = torch.tensor(key_states_time_length, device=key_states.device, dtype=torch.float32)
+        else:
+            ks_len_tensor = key_states_time_length.float()
+        log_key_states_time_length = torch.log1p(ks_len_tensor).ceil().to(dtype=torch.int64).item()
 
         query_states_time_length = query_states.size(1)  # L_Q
-        log_query_states_time_length = np.ceil(np.log1p(query_states_time_length)).astype("int").item()  # log_L_Q
+        if not torch.is_tensor(query_states_time_length):
+            qs_len_tensor = torch.tensor(query_states_time_length, device=query_states.device, dtype=torch.float32)
+        else:
+            qs_len_tensor = query_states_time_length.float()
+        log_query_states_time_length = torch.log1p(qs_len_tensor).ceil().to(dtype=torch.int64).item()
 
-        u_part = min(self.factor * query_states_time_length * log_key_states_time_length, key_states_time_length)
-        u = min(self.factor * log_query_states_time_length, query_states_time_length)
+        u_part = min(factor * query_states_time_length * log_key_states_time_length, key_states_time_length)
+        u = min(factor * log_query_states_time_length, query_states_time_length)
+
+        # Sample keys for attention
 
         if key_states_time_length > 0:
-            index_sample = torch.randint(0, key_states_time_length, (u_part,))
-            k_sample = key_states[:, index_sample, :]
+            # index_sample: (u_part,)
+            index_sample = torch.randint(0, key_states_time_length, (u_part,), device=key_states.device)
+            k_sample = key_states.index_select(1, index_sample)
         else:
             k_sample = key_states
 
@@ -528,14 +557,16 @@ class InformerProbSparseAttention(nn.Module):
 
         # find the Top_k query with sparsity measurement
         if u > 0:
-            sparsity_measurement = queries_keys_sample.max(dim=-1)[0] - torch.div(
-                queries_keys_sample.sum(dim=-1), key_states_time_length
+            sparsity_measurement = queries_keys_sample.amax(dim=-1) - (
+                queries_keys_sample.sum(dim=-1) / key_states_time_length
             )  # M
+
+            # Efficient arg-topk
             top_u_sparsity_measurement = sparsity_measurement.topk(u, sorted=False)[1]  # M_top
 
-            # calculate q_reduce: query_states[:, top_u_sparsity_measurement]
-            dim_for_slice = torch.arange(query_states.size(0)).unsqueeze(-1)
-            q_reduce = query_states[dim_for_slice, top_u_sparsity_measurement]
+            # batched-indexing (gather) for high parallel performance
+            batch_indices = torch.arange(query_states.size(0), device=query_states.device).unsqueeze(-1).expand(-1, u)
+            q_reduce = query_states.gather(1, top_u_sparsity_measurement.unsqueeze(-1).expand(-1, -1, head_dim))
         else:
             q_reduce = query_states
             top_u_sparsity_measurement = None
@@ -543,79 +574,72 @@ class InformerProbSparseAttention(nn.Module):
         # Use q_reduce to calculate attention weights
         attn_weights = torch.bmm(q_reduce, key_states.transpose(1, 2))
 
-        src_len = key_states.size(1)
-        if attn_weights.size() != (bsz * self.num_heads, u, src_len):
+        src_len_actual = key_states.size(1)
+        if attn_weights.size() != (bsz * num_heads, u, src_len_actual):
             raise ValueError(
-                f"Attention weights should be of size {(bsz * self.num_heads, u, src_len)}, but is"
+                f"Attention weights should be of size {(bsz * num_heads, u, src_len_actual)}, but is"
                 f" {attn_weights.size()}"
             )
 
         if attention_mask is not None:
-            if attention_mask.size() != (bsz, 1, tgt_len, src_len):
+            if attention_mask.size() != (bsz, 1, tgt_len, src_len_actual):
                 raise ValueError(
-                    f"Attention mask should be of size {(bsz, 1, tgt_len, src_len)}, but is {attention_mask.size()}"
+                    f"Attention mask should be of size {(bsz, 1, tgt_len, src_len_actual)}, but is {attention_mask.size()}"
                 )
-            prob_mask = attention_mask.expand(bsz, self.num_heads, tgt_len, src_len).reshape(
-                bsz * self.num_heads, tgt_len, src_len
+            prob_mask = attention_mask.expand(bsz, num_heads, tgt_len, src_len_actual).reshape(
+                bsz * num_heads, tgt_len, src_len_actual
             )
 
             if top_u_sparsity_measurement is not None:
-                dim_for_slice = torch.arange(prob_mask.size(0)).unsqueeze(-1)
-                prob_mask = prob_mask[dim_for_slice, top_u_sparsity_measurement, :]
+                batch_indices_mask = (
+                    torch.arange(prob_mask.size(0), device=prob_mask.device).unsqueeze(-1).expand(-1, u)
+                )
+                prob_mask = prob_mask.gather(
+                    1, top_u_sparsity_measurement.unsqueeze(-1).expand(-1, -1, src_len_actual)
+                )
 
-            attn_weights = attn_weights.view(bsz, self.num_heads, u, src_len) + prob_mask.view(
-                bsz, self.num_heads, u, src_len
+            attn_weights = attn_weights.view(bsz, num_heads, u, src_len_actual) + prob_mask.view(
+                bsz, num_heads, u, src_len_actual
             )
-            attn_weights = attn_weights.view(bsz * self.num_heads, u, src_len)
+            attn_weights = attn_weights.reshape(bsz * num_heads, u, src_len_actual)
 
         attn_weights = nn.functional.softmax(attn_weights, dim=-1)
 
         if output_attentions:
-            # this operation is a bit awkward, but it's required to
-            # make sure that attn_weights keeps its gradient.
-            # In order to do so, attn_weights have to be reshaped
-            # twice and have to be reused in the following
-            attn_weights_reshaped = attn_weights.view(bsz, self.num_heads, u, src_len)
-            attn_weights = attn_weights_reshaped.view(bsz * self.num_heads, u, src_len)
+            attn_weights_reshaped = attn_weights.view(bsz, num_heads, u, src_len_actual)
+            attn_weights = attn_weights_reshaped.reshape(bsz * num_heads, u, src_len_actual)
         else:
             attn_weights_reshaped = None
 
-        attn_probs = nn.functional.dropout(attn_weights, p=self.dropout, training=self.training)
+        attn_probs = nn.functional.dropout(attn_weights, p=dropout, training=self.training)
         attn_output = torch.bmm(attn_probs, value_states)
 
-        # calculate context for updating the attn_output, based on:
-        # https://github.com/zhouhaoyi/Informer2020/blob/ac59c7447135473fb2aafeafe94395f884d5c7a5/models/attn.py#L74
-        if self.is_decoder:
+        if is_decoder:
             # cast to float32 before operation to avoid overflow
             context = value_states.cumsum(dim=-2, dtype=torch.float32).to(value_states.dtype)
         else:
-            v_mean_dim_time = value_states.mean(dim=-2)
+            v_mean_dim_time = value_states.mean(dim=-2, keepdim=False)
+            # To reduce unnecessary memory usage, .expand_as if possible
             context = (
                 v_mean_dim_time.unsqueeze(dim=1)
-                .expand(bsz * self.num_heads, query_states_time_length, v_mean_dim_time.size(-1))
+                .expand(bsz * num_heads, query_states_time_length, v_mean_dim_time.size(-1))
                 .clone()
             )
 
         if top_u_sparsity_measurement is not None:
-            # update context: copy the attention output to the context at top_u_sparsity_measurement index
-            dim_for_slice = torch.arange(context.size(0)).unsqueeze(-1)
-            context[dim_for_slice, top_u_sparsity_measurement, :] = attn_output
+            batch_indices_ctx = torch.arange(context.size(0), device=context.device).unsqueeze(-1).expand(-1, u)
+            context[batch_indices_ctx, top_u_sparsity_measurement, :] = attn_output
             attn_output = context
 
-        if attn_output.size() != (bsz * self.num_heads, tgt_len, self.head_dim):
+        if attn_output.size() != (bsz * num_heads, tgt_len, head_dim):
             raise ValueError(
-                f"`attn_output` should be of size {(bsz * self.num_heads, tgt_len, self.head_dim)}, but is"
-                f" {attn_output.size()}"
+                f"`attn_output` should be of size {(bsz * num_heads, tgt_len, head_dim)}, but is {attn_output.size()}"
             )
 
-        attn_output = attn_output.view(bsz, self.num_heads, tgt_len, self.head_dim)
+        attn_output = attn_output.view(bsz, num_heads, tgt_len, head_dim)
         attn_output = attn_output.transpose(1, 2)
-
-        # Use the `embed_dim` from the config (stored in the class) rather than `hidden_state` because `attn_output` can be
-        # partitioned across GPUs when using tensor-parallelism.
-        attn_output = attn_output.reshape(bsz, tgt_len, self.embed_dim)
-
-        attn_output = self.out_proj(attn_output)
+        attn_output = attn_output.reshape(bsz, tgt_len, embed_dim)
+        attn_output = out_proj(attn_output)
 
         return attn_output, attn_weights_reshaped
 
