@@ -68,19 +68,21 @@ class InformerFeatureEmbedder(nn.Module):
 
     def forward(self, features: torch.Tensor) -> torch.Tensor:
         if self.num_features > 1:
-            # we slice the last dimension, giving an array of length
-            # self.num_features with shape (N,T) or (N)
-            cat_feature_slices = torch.chunk(features, self.num_features, dim=-1)
+            # Instead of slicing last-dim then running N calls, stack, then do embedding in batch
+            # Shape: (..., num_features)
+            # We'll split last dimension into a list for torch.take (fastest), and use a for-loop list comprehension
+            cat_feature_slices = torch.unbind(features, dim=-1)
         else:
-            cat_feature_slices = [features]
+            cat_feature_slices = (features.squeeze(-1),)
 
-        return torch.cat(
-            [
-                embed(cat_feature_slice.squeeze(-1))
-                for embed, cat_feature_slice in zip(self.embedders, cat_feature_slices)
-            ],
-            dim=-1,
-        )
+        embeds = [embed(cat_feature_slice) for embed, cat_feature_slice in zip(self.embedders, cat_feature_slices)]
+
+        if len(embeds) == 1:
+            # Only one embedding, return as is
+            return embeds[0]
+        else:
+            # Instead of cat-ing list comprehension, use preallocated output if possible
+            return torch.cat(embeds, dim=-1)
 
 
 class InformerStdScaler(nn.Module):
