@@ -910,7 +910,9 @@ class AwqConfig(QuantizationConfigMixin):
 
         self.modules_to_fuse = modules_to_fuse
         if do_fuse is None:
-            self.do_fuse = modules_to_fuse is not None and len(modules_to_fuse) > 0
+            self.do_fuse = bool(
+                modules_to_fuse
+            )  # bool(None) is False, bool(non-empty dict) is True, bool(empty dict) is False
         else:
             self.do_fuse = do_fuse
         self.fuse_max_seq_len = fuse_max_seq_len
@@ -1019,10 +1021,11 @@ class AwqConfig(QuantizationConfigMixin):
                     )
 
     def get_loading_attributes(self):
-        attributes_dict = copy.deepcopy(self.__dict__)
-        loading_attributes = ["version", "do_fuse", "modules_to_fuse", "fuse_max_seq_len", "exllama_config"]
-        loading_attributes_dict = {i: j for i, j in attributes_dict.items() if i in loading_attributes}
-        return loading_attributes_dict
+        # Production: faster than deepcopy(self.__dict__) then filter
+        attrs = self.__dict__
+        loading_attributes = ("version", "do_fuse", "modules_to_fuse", "fuse_max_seq_len", "exllama_config")
+        # Build result inline, faster than dict comprehensions over large dicts
+        return {attr: attrs[attr] for attr in loading_attributes if attr in attrs}
 
 
 @dataclass
