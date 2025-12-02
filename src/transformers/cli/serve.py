@@ -38,6 +38,7 @@ from openai.types.chat.chat_completion import Choice
 from tokenizers.decoders import DecodeStream
 
 import transformers
+from transformers.generation.continuous_batching import ContinuousBatchingManager
 from transformers.models.auto.modeling_auto import (
     MODEL_FOR_CAUSAL_LM_MAPPING_NAMES,
     MODEL_FOR_IMAGE_TEXT_TO_TEXT_MAPPING_NAMES,
@@ -901,10 +902,14 @@ class Serve:
 
     @staticmethod
     def get_model_modality(model: "PreTrainedModel") -> Modality:
+        if not hasattr(Serve, "_vlm_classnames_set"):
+            Serve._vlm_classnames_set = set(MODEL_FOR_IMAGE_TEXT_TO_TEXT_MAPPING_NAMES.values())
+            Serve._llm_classnames_set = set(MODEL_FOR_CAUSAL_LM_MAPPING_NAMES.values())
+
         model_classname = model.__class__.__name__
-        if model_classname in MODEL_FOR_IMAGE_TEXT_TO_TEXT_MAPPING_NAMES.values():
+        if model_classname in Serve._vlm_classnames_set:
             modality = Modality.VLM
-        elif model_classname in MODEL_FOR_CAUSAL_LM_MAPPING_NAMES.values():
+        elif model_classname in Serve._llm_classnames_set:
             modality = Modality.LLM
         else:
             raise ValueError(f"Unknown modality: {model_classname}")
