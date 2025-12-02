@@ -152,11 +152,16 @@ class MusicgenMelodySinusoidalPositionalEmbedding(nn.Module):
     def forward(self, inputs_embeds: torch.Tensor, past_key_values_length: int = 0):
         bsz, seq_len, _ = inputs_embeds.size()
         # Create the position ids from the input token ids.
-        position_ids = (torch.arange(seq_len) + past_key_values_length).to(inputs_embeds.device)
+        # Avoid device roundtrips, directly create on correct device
+        position_ids = torch.arange(
+            past_key_values_length, seq_len + past_key_values_length, device=inputs_embeds.device
+        )
+        # expand embeddings if needed
         # expand embeddings if needed
         if seq_len > self.weights.size(0):
             self.make_weights(seq_len, self.embedding_dim)
-        return self.weights.index_select(0, position_ids.view(-1)).detach()
+        # Use index_select for row selection
+        return self.weights.index_select(0, position_ids).detach()
 
 
 # Copied from transformers.models.bert.modeling_bert.eager_attention_forward
