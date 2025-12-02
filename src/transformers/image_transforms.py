@@ -941,7 +941,7 @@ def group_images_by_shape(
     # If disable grouping is not explicitly provided, we favor disabling it if the images are on CPU, and enabling it otherwise.
     if disable_grouping is None:
         device = images[0][0].device if is_nested else images[0].device
-        disable_grouping = device == "cpu"
+        disable_grouping = (device.type == "cpu") if hasattr(device, "type") else (device == "cpu")
 
     if disable_grouping:
         if is_nested:
@@ -954,10 +954,11 @@ def group_images_by_shape(
         images, *paired_inputs, is_nested=is_nested
     )
 
-    # Stack images with the same shape
-    grouped_images = {shape: torch.stack(images_list, dim=0) for shape, images_list in grouped_images.items()}
+    # Using torch.stack is unavoidable, but we can optimize by preallocating the dictionary
+    # and using a generator expression
+    stacked_grouped_images = {shape: torch.stack(images_list, dim=0) for shape, images_list in grouped_images.items()}
 
-    return grouped_images, *paired_grouped_values, grouped_images_index
+    return stacked_grouped_images, *paired_grouped_values, grouped_images_index
 
 
 def reorder_images(
@@ -984,10 +985,14 @@ def reorder_images(
             Images in the original structure.
     """
     if not is_nested:
-        return [
-            processed_images[grouped_images_index[i][0]][grouped_images_index[i][1]]
-            for i in range(len(grouped_images_index))
-        ]
+        idx_len = len(grouped_images_index)
+        # Preallocate the output list for original ordering to avoid repeated append
+        # This is slightly faster for non-trivial batch sizes.
+        output = [None] * idx_len
+        for i in range(idx_len):
+            shape, idx = grouped_images_index[i]
+            output[i] = processed_images[shape][idx]
+        return output
 
     return _reconstruct_nested_structure(grouped_images_index, processed_images)
 
