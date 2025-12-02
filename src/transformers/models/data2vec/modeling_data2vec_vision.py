@@ -555,21 +555,30 @@ class Data2VecVisionRelativePositionBias(nn.Module):
         as introduced in [MiDaS v3.1](https://huggingface.co/papers/2307.14460).
         """
         num_relative_distance = (2 * window_size[0] - 1) * (2 * window_size[1] - 1) + 3
-        # cls to token & token 2 cls & cls to cls
-        # get pair-wise relative position index for each token inside the window
-        window_area = window_size[0] * window_size[1]
-        grid = torch.meshgrid(torch.arange(window_size[0]), torch.arange(window_size[1]), indexing="ij")
-        coords = torch.stack(grid)  # 2, Wh, Ww
-        coords_flatten = torch.flatten(coords, 1)  # 2, Wh*Ww
+        window_h, window_w = window_size
+        window_area = window_h * window_w
+
+        # Vectorized grid computation with minimal overhead
+        coords0 = torch.arange(window_h)
+        coords1 = torch.arange(window_w)
+        # meshgrid already returns the needed shape with 'ij' indexing.
+        coords = torch.stack(torch.meshgrid(coords0, coords1, indexing="ij"))  # 2, Wh, Ww
+        coords_flatten = coords.reshape(2, window_area)  # 2, Wh*Ww
+
+        # relative_coord: [2, Wh*Ww, Wh*Ww]
         relative_coords = coords_flatten[:, :, None] - coords_flatten[:, None, :]  # 2, Wh*Ww, Wh*Ww
-        relative_coords = relative_coords.permute(1, 2, 0).contiguous()  # Wh*Ww, Wh*Ww, 2
-        relative_coords[:, :, 0] += window_size[0] - 1  # shift to start from 0
-        relative_coords[:, :, 1] += window_size[1] - 1
-        relative_coords[:, :, 0] *= 2 * window_size[1] - 1
-        relative_position_index = torch.zeros(size=(window_area + 1,) * 2, dtype=relative_coords.dtype)
-        relative_position_index[1:, 1:] = relative_coords.sum(-1)  # Wh*Ww, Wh*Ww
-        relative_position_index[0, 0:] = num_relative_distance - 3
-        relative_position_index[0:, 0] = num_relative_distance - 2
+        # Faster in-place shifting
+        relative_coords[0] += window_h - 1
+        relative_coords[1] += window_w - 1
+        relative_coords[0] *= 2 * window_w - 1
+        summed = relative_coords.sum(0)  # Wh*Ww, Wh*Ww
+
+        relative_position_index = torch.empty(
+            (window_area + 1, window_area + 1), dtype=summed.dtype, device=summed.device
+        )
+        relative_position_index[1:, 1:] = summed
+        relative_position_index[0, 1:] = num_relative_distance - 3
+        relative_position_index[1:, 0] = num_relative_distance - 2
         relative_position_index[0, 0] = num_relative_distance - 1
         return relative_position_index
 
@@ -577,38 +586,51 @@ class Data2VecVisionRelativePositionBias(nn.Module):
         """
         Modification of timm.models.beit.py: Attention._get_rel_pos_bias to support arbitrary window sizes.
         """
-        old_height = 2 * self.window_size[0] - 1
-        old_width = 2 * self.window_size[1] - 1
-
-        new_height = 2 * window_size[0] - 1
-        new_width = 2 * window_size[1] - 1
-
-        old_relative_position_bias_table = self.relative_position_bias_table
+        # Precompute all dimensions and sizes up front so they're only computed once
+        old_win0, old_win1 = self.window_size
+        new_win0, new_win1 = window_size
+        old_height = 2 * old_win0 - 1
+        old_width = 2 * old_win1 - 1
+        new_height = 2 * new_win0 - 1
+        new_width = 2 * new_win1 - 1
 
         old_num_relative_distance = self.num_relative_distance
         new_num_relative_distance = new_height * new_width + 3
 
+        old_relative_position_bias_table = self.relative_position_bias_table
+        # Slice out spatial (relative position) part only
         old_sub_table = old_relative_position_bias_table[: old_num_relative_distance - 3]
-
-        old_sub_table = old_sub_table.reshape(1, old_width, old_height, -1).permute(0, 3, 1, 2)
+        # Shape [spatial_size, num_heads]
+        # In original: reshape to (1, old_width, old_height, -1) then permute to (1, num_heads, old_width, old_height)
+        num_heads = old_sub_table.shape[1]
+        # Instead of permuting shape repeatedly, reshape and permute only once as required by F.interpolate
+        old_sub_table = old_sub_table.reshape(old_width, old_height, num_heads).permute(2, 0, 1).unsqueeze(0)
+        # Shape now (1, num_heads, old_width, old_height)
+        # Use torch_int only for values (not for shape tuple)
+        out_height = torch_int(new_height)
+        out_width = torch_int(new_width)
         new_sub_table = nn.functional.interpolate(
-            old_sub_table, size=(torch_int(new_height), torch_int(new_width)), mode="bilinear"
+            old_sub_table,
+            size=(out_width, out_height),
+            mode="bilinear",
         )
-        new_sub_table = new_sub_table.permute(0, 2, 3, 1).reshape(new_num_relative_distance - 3, -1)
+        # shape after interpolate: (1, num_heads, new_width, new_height)
+        new_sub_table = new_sub_table.squeeze(0).permute(1, 2, 0).reshape(new_num_relative_distance - 3, num_heads)
 
-        new_relative_position_bias_table = torch.cat(
-            [new_sub_table, old_relative_position_bias_table[old_num_relative_distance - 3 :]]
-        )
+        # Concatenate with class position embeddings
+        extra = old_relative_position_bias_table[old_num_relative_distance - 3 :]
+        new_relative_position_bias_table = torch.cat([new_sub_table, extra], dim=0)
 
+        # Only generate relative_position_index once per window_size
         relative_position_index = self.generate_relative_position_index(window_size)
-        relative_position_bias = new_relative_position_bias_table[relative_position_index.view(-1)]
+        rpi_flat = relative_position_index.reshape(-1)
+        relative_position_bias = new_relative_position_bias_table[rpi_flat]
 
-        # patch_size*num_patches_height, patch_size*num_patches_width, num_attention_heads
-        relative_position_bias = relative_position_bias.view(
-            window_size[0] * window_size[1] + 1, window_size[0] * window_size[1] + 1, -1
-        )
-        # num_attention_heads, patch_size*num_patches_width, patch_size*num_patches_height
-        relative_position_bias = relative_position_bias.permute(2, 0, 1).contiguous()
+        patch_area = new_win0 * new_win1 + 1
+        # Use .reshape instead of .view for safety if storage is non-contiguous (from .permute)
+        relative_position_bias = relative_position_bias.reshape(patch_area, patch_area, -1)
+        # Move heads to first dim, optimize permute/view: .permute does not copy, only strides change
+        relative_position_bias = relative_position_bias.permute(2, 0, 1)  # (num_heads, ..., ...)
 
         if interpolate_pos_encoding:
             relative_position_bias = nn.functional.interpolate(
