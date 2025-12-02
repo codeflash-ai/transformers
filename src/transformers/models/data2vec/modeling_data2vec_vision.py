@@ -556,18 +556,19 @@ class Data2VecVisionRelativePositionBias(nn.Module):
         """
         num_relative_distance = (2 * window_size[0] - 1) * (2 * window_size[1] - 1) + 3
         # cls to token & token 2 cls & cls to cls
-        # get pair-wise relative position index for each token inside the window
         window_area = window_size[0] * window_size[1]
-        grid = torch.meshgrid(torch.arange(window_size[0]), torch.arange(window_size[1]), indexing="ij")
-        coords = torch.stack(grid)  # 2, Wh, Ww
-        coords_flatten = torch.flatten(coords, 1)  # 2, Wh*Ww
-        relative_coords = coords_flatten[:, :, None] - coords_flatten[:, None, :]  # 2, Wh*Ww, Wh*Ww
-        relative_coords = relative_coords.permute(1, 2, 0).contiguous()  # Wh*Ww, Wh*Ww, 2
-        relative_coords[:, :, 0] += window_size[0] - 1  # shift to start from 0
-        relative_coords[:, :, 1] += window_size[1] - 1
-        relative_coords[:, :, 0] *= 2 * window_size[1] - 1
-        relative_position_index = torch.zeros(size=(window_area + 1,) * 2, dtype=relative_coords.dtype)
-        relative_position_index[1:, 1:] = relative_coords.sum(-1)  # Wh*Ww, Wh*Ww
+
+        coords = torch.stack(torch.meshgrid(torch.arange(window_size[0]), torch.arange(window_size[1]), indexing="ij"))
+        coords_flatten = coords.reshape(2, -1)
+
+        rel_y = coords_flatten[0][:, None] - coords_flatten[0][None, :]
+        rel_x = coords_flatten[1][:, None] - coords_flatten[1][None, :]
+        rel_y += window_size[0] - 1
+        rel_x += window_size[1] - 1
+        rel_y *= 2 * window_size[1] - 1
+
+        relative_position_index = torch.zeros((window_area + 1, window_area + 1), dtype=rel_y.dtype)
+        relative_position_index[1:, 1:] = rel_y + rel_x
         relative_position_index[0, 0:] = num_relative_distance - 3
         relative_position_index[0:, 0] = num_relative_distance - 2
         relative_position_index[0, 0] = num_relative_distance - 1
