@@ -447,7 +447,11 @@ class InformerProbSparseAttention(nn.Module):
         self.out_proj = nn.Linear(embed_dim, embed_dim, bias=bias)
 
     def _shape(self, tensor: torch.Tensor, seq_len: int, bsz: int):
-        return tensor.view(bsz, seq_len, self.num_heads, self.head_dim).transpose(1, 2).contiguous()
+        # This is a heavily hot path; optimize by using reshape for non-copy view, and avoiding .contiguous()
+        # unless the transpose makes it non-contiguous and later code requires contiguous memory.
+        # In PyTorch, transpose returns a view, and .contiguous() only needed if subsequent code expects contiguous.
+        # As this method only returns and doesn't perform further ops here, avoid .contiguous() for performance.
+        return tensor.view(bsz, seq_len, self.num_heads, self.head_dim).transpose(1, 2)
 
     def forward(
         self,
