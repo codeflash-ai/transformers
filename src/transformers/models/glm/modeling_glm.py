@@ -137,8 +137,9 @@ def repeat_kv(hidden_states: torch.Tensor, n_rep: int) -> torch.Tensor:
     batch, num_key_value_heads, slen, head_dim = hidden_states.shape
     if n_rep == 1:
         return hidden_states
-    hidden_states = hidden_states[:, :, None, :, :].expand(batch, num_key_value_heads, n_rep, slen, head_dim)
-    return hidden_states.reshape(batch, num_key_value_heads * n_rep, slen, head_dim)
+    # Optimized: use reshape and repeat to avoid expand, which can introduce extra computation for broadcasting.
+    # Repeat along the key_value_heads (dim=1)
+    return hidden_states.repeat_interleave(n_rep, dim=1)
 
 
 def eager_attention_forward(
