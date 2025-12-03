@@ -503,16 +503,17 @@ class RteProcessor(DataProcessor):
 
     def _create_examples(self, lines, set_type):
         """Creates examples for the training, dev and test sets."""
-        examples = []
-        for i, line in enumerate(lines):
-            if i == 0:
-                continue
-            guid = f"{set_type}-{line[0]}"
-            text_a = line[1]
-            text_b = line[2]
-            label = None if set_type == "test" else line[-1]
-            examples.append(InputExample(guid=guid, text_a=text_a, text_b=text_b, label=label))
-        return examples
+        # Skip header efficiently and avoid repeated attribute lookups
+        lines_iter = iter(lines)
+        next(lines_iter, None)  # skip header
+        set_is_test = set_type == "test"
+        # List comprehension is faster in CPython and saves memory
+        return [
+            InputExample(
+                guid=f"{set_type}-{line[0]}", text_a=line[1], text_b=line[2], label=None if set_is_test else line[-1]
+            )
+            for line in lines_iter
+        ]
 
 
 class WnliProcessor(DataProcessor):
