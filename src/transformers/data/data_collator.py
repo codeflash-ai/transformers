@@ -982,10 +982,12 @@ class DataCollatorForLanguageModeling(DataCollatorMixin):
         token_starts = offsets[:, :, 0]
         token_ends = offsets[:, :, 1]
 
-        prev_token_ends = np.roll(token_ends, 1, axis=1)
+        prev_token_ends = np.empty_like(token_ends)
+        prev_token_ends[:, 1:] = token_ends[:, :-1]
         prev_token_ends[:, 0] = -1  # First token has no previous token
 
-        prev_token_special = np.roll(special_tokens_mask, 1, axis=1)
+        prev_token_special = np.empty_like(special_tokens_mask)
+        prev_token_special[:, 1:] = special_tokens_mask[:, :-1]
         prev_token_special[:, 0] = 0
 
         # Not special token AND (gap from previous or previous token was special)
