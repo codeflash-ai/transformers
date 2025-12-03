@@ -296,10 +296,20 @@ class GlmRMSNorm(nn.Module):
 
     def forward(self, hidden_states):
         input_dtype = hidden_states.dtype
-        hidden_states = hidden_states.to(torch.float32)
-        variance = hidden_states.pow(2).mean(-1, keepdim=True)
-        hidden_states = hidden_states * torch.rsqrt(variance + self.variance_epsilon)
-        return self.weight * hidden_states.to(input_dtype)
+        # Skip unnecessary dtype conversion if already float32:
+        if hidden_states.dtype != torch.float32:
+            hidden_states = hidden_states.to(torch.float32)
+            compute_dtype = torch.float32
+        else:
+            compute_dtype = input_dtype
+        # Fused mean of squares + rsqrt product is more efficient
+        # .pow(2) can be less efficient than .mul for some dtypes
+        variance = torch.mean(hidden_states.mul(hidden_states), dim=-1, keepdim=True)
+        rms_normed = hidden_states * torch.rsqrt(variance + self.variance_epsilon)
+        # Only cast if needed
+        if rms_normed.dtype != input_dtype:
+            rms_normed = rms_normed.to(input_dtype)
+        return self.weight * rms_normed
 
     def extra_repr(self):
         return f"{tuple(self.weight.shape)}, eps={self.variance_epsilon}"
