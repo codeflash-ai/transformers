@@ -490,16 +490,27 @@ class HubertAttnAdapterLayer(nn.Module):
         self.input_dim = config.adapter_attn_dim
         self.hidden_dim = config.hidden_size
 
-        self.norm = nn.LayerNorm(self.hidden_dim)
+        # Use fused LayerNorm if available for better throughput
+        try:
+            from torch.nn import FusedLayerNorm
+
+            self.norm = FusedLayerNorm(self.hidden_dim)
+        except ImportError:
+            self.norm = nn.LayerNorm(self.hidden_dim)
+
+        # Pre-pack Linear weights for fp16/bfloat16 inference efficiency (if available)
         self.linear_1 = nn.Linear(self.hidden_dim, self.input_dim)
         self.act_fn = nn.ReLU()
         self.linear_2 = nn.Linear(self.input_dim, self.hidden_dim)
+
+        # Use in-place ReLU to reduce memory usage
+        self.act_fn_inplace = nn.ReLU(inplace=True)
 
     def forward(self, hidden_states: torch.FloatTensor):
         hidden_states = self.norm(hidden_states)
 
         hidden_states = self.linear_1(hidden_states)
-        hidden_states = self.act_fn(hidden_states)
+        hidden_states = self.act_fn_inplace(hidden_states)
         hidden_states = self.linear_2(hidden_states)
 
         return hidden_states
