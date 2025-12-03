@@ -53,13 +53,9 @@ def _compute_new_attention_mask(hidden_states: torch.Tensor, seq_lens: torch.Ten
     """
     batch_size, mask_seq_len = hidden_states.shape[:2]
 
-    indices = torch.arange(mask_seq_len, device=seq_lens.device).expand(batch_size, -1)
+    indices = torch.arange(mask_seq_len, device=hidden_states.device)
 
-    bool_mask = indices >= seq_lens.unsqueeze(1).expand(-1, mask_seq_len)
-
-    mask = hidden_states.new_ones((batch_size, mask_seq_len))
-
-    mask = mask.masked_fill(bool_mask, 0)
+    mask = (indices < seq_lens.unsqueeze(1)).to(dtype=hidden_states.dtype)
 
     return mask
 
