@@ -842,6 +842,9 @@ def _compute_mask_indices(
     # epsilon is used for probabilistic rounding
     epsilon = np.random.rand(1).item()
 
+    # Precompute values outside the inner loop for efficiency
+    arange_mask_length = np.arange(mask_length)
+
     def compute_num_masked_span(input_length):
         """Given input length, compute how many spans should be masked"""
         num_masked_span = int(mask_prob * input_length / mask_length + epsilon)
@@ -858,67 +861,63 @@ def _compute_mask_indices(
         return num_masked_span
 
     # compute number of masked spans in batch
-    input_lengths = (
-        attention_mask.detach().sum(-1).tolist()
-        if attention_mask is not None
-        else [sequence_length for _ in range(batch_size)]
-    )
+    if attention_mask is not None:
+        input_lengths = attention_mask.detach().sum(-1).tolist()
+    else:
+        input_lengths = [sequence_length] * batch_size
+
+    # SpecAugment mask to fill
 
     # SpecAugment mask to fill
     spec_aug_mask = np.zeros((batch_size, sequence_length), dtype=bool)
-    spec_aug_mask_idxs = []
 
     max_num_masked_span = compute_num_masked_span(sequence_length)
 
     if max_num_masked_span == 0:
         return spec_aug_mask
 
-    for input_length in input_lengths:
+    # Preallocate the mask indices array for efficiency
+    spec_aug_mask_idxs = np.empty((batch_size, max_num_masked_span), dtype=np.int32)
+
+    for i, input_length in enumerate(input_lengths):
         # compute num of masked spans for this input
         num_masked_span = compute_num_masked_span(input_length)
+        available_indices = input_length - (mask_length - 1)
 
-        # get random indices to mask
-        spec_aug_mask_idx = np.random.choice(
-            np.arange(input_length - (mask_length - 1)), num_masked_span, replace=False
-        )
-
-        # pick first sampled index that will serve as a dummy index to pad vector
-        # to ensure same dimension for all batches due to probabilistic rounding
-        # Picking first sample just pads those vectors twice.
-        if len(spec_aug_mask_idx) == 0:
+        if num_masked_span > 0 and available_indices > 0:
+            rand_indices = np.random.choice(available_indices, num_masked_span, replace=False)
+            # Pad with dummy index to reach max_num_masked_span required length
+            if num_masked_span < max_num_masked_span:
+                dummy_mask_idx = rand_indices[0]
+                pad_array = np.full((max_num_masked_span - num_masked_span,), dummy_mask_idx, dtype=np.int32)
+                spec_aug_mask_idxs[i] = np.concatenate((rand_indices, pad_array))
+            else:
+                spec_aug_mask_idxs[i] = rand_indices
+        else:
+            # this case can only happen if `input_length` is strictly smaller then
+            # `sequence_length` in which case the last token has to be a padding
+            # token which we can use as a dummy mask id
             # this case can only happen if `input_length` is strictly smaller then
             # `sequence_length` in which case the last token has to be a padding
             # token which we can use as a dummy mask id
             dummy_mask_idx = sequence_length - 1
-        else:
-            dummy_mask_idx = spec_aug_mask_idx[0]
+            spec_aug_mask_idxs[i] = np.full((max_num_masked_span,), dummy_mask_idx, dtype=np.int32)
 
-        spec_aug_mask_idx = np.concatenate(
-            [spec_aug_mask_idx, np.ones(max_num_masked_span - num_masked_span, dtype=np.int32) * dummy_mask_idx]
-        )
-        spec_aug_mask_idxs.append(spec_aug_mask_idx)
-
-    spec_aug_mask_idxs = np.array(spec_aug_mask_idxs)
-
-    # expand masked indices to masked spans
-    spec_aug_mask_idxs = np.broadcast_to(
-        spec_aug_mask_idxs[:, :, None], (batch_size, max_num_masked_span, mask_length)
-    )
-    spec_aug_mask_idxs = spec_aug_mask_idxs.reshape(batch_size, max_num_masked_span * mask_length)
-
-    # add offset to the starting indexes so that indexes now create a span
-    offsets = np.arange(mask_length)[None, None, :]
-    offsets = np.broadcast_to(offsets, (batch_size, max_num_masked_span, mask_length)).reshape(
+    # Efficiently expand indices and offsets in one step
+    mask_start_idxs = np.repeat(spec_aug_mask_idxs, mask_length, axis=1)
+    mask_offsets = np.tile(arange_mask_length, max_num_masked_span * batch_size).reshape(
         batch_size, max_num_masked_span * mask_length
     )
-    spec_aug_mask_idxs = spec_aug_mask_idxs + offsets
+    mask_spans = mask_start_idxs + mask_offsets
 
-    # ensure that we cannot have indices larger than sequence_length
-    if spec_aug_mask_idxs.max() > sequence_length - 1:
-        spec_aug_mask_idxs[spec_aug_mask_idxs > sequence_length - 1] = sequence_length - 1
+    # Ensure indices do not exceed sequence_length - 1
+    mask_spans = np.clip(mask_spans, 0, sequence_length - 1)
 
-    # scatter indices to mask
-    np.put_along_axis(spec_aug_mask, spec_aug_mask_idxs, 1, -1)
+    # Scatter indices to mask - vectorized replacement for np.put_along_axis
+    # build (batch_size, sequence_length) mask using advanced indexing
+    row_indices = np.repeat(np.arange(batch_size), mask_spans.shape[1])
+    col_indices = mask_spans.flatten()
+    spec_aug_mask[row_indices, col_indices] = True
 
     return spec_aug_mask
 
