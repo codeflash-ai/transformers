@@ -15,10 +15,94 @@
 """Jukebox configuration"""
 
 import os
-from typing import Union
+from typing import Final, Union
 
 from ....configuration_utils import PreTrainedConfig
 from ....utils import logging
+
+
+# Use tuple instead of list for better lookup & immutability
+_LARGE_ATTENTION: Final = (
+    "block_attn",
+    "transpose_block_attn",
+    "prev_block_attn",
+    "block_attn",
+    "transpose_block_attn",
+    "prev_block_attn",
+    "block_attn",
+    "transpose_block_attn",
+    "prev_block_attn",
+    "block_attn",
+    "transpose_block_attn",
+    "prev_block_attn",
+    "block_attn",
+    "transpose_block_attn",
+    "prev_block_attn",
+    "block_attn",
+    "transpose_block_attn",
+    "prev_block_attn",
+    "cross_attention",
+    "block_attn",
+    "transpose_block_attn",
+    "prev_block_attn",
+    "block_attn",
+    "transpose_block_attn",
+    "prev_block_attn",
+    "block_attn",
+    "transpose_block_attn",
+    "prev_block_attn",
+    "cross_attention",
+    "block_attn",
+    "transpose_block_attn",
+    "prev_block_attn",
+    "block_attn",
+    "transpose_block_attn",
+    "prev_block_attn",
+    "block_attn",
+    "transpose_block_attn",
+    "prev_block_attn",
+    "cross_attention",
+    "block_attn",
+    "transpose_block_attn",
+    "prev_block_attn",
+    "block_attn",
+    "transpose_block_attn",
+    "prev_block_attn",
+    "block_attn",
+    "transpose_block_attn",
+    "prev_block_attn",
+    "cross_attention",
+    "block_attn",
+    "transpose_block_attn",
+    "prev_block_attn",
+    "block_attn",
+    "transpose_block_attn",
+    "prev_block_attn",
+    "block_attn",
+    "transpose_block_attn",
+    "prev_block_attn",
+    "cross_attention",
+    "block_attn",
+    "transpose_block_attn",
+    "prev_block_attn",
+    "block_attn",
+    "transpose_block_attn",
+    "prev_block_attn",
+    "block_attn",
+    "transpose_block_attn",
+    "prev_block_attn",
+    "cross_attention",
+    "block_attn",
+    "transpose_block_attn",
+    "prev_block_attn",
+    "block_attn",
+    "transpose_block_attn",
+    "prev_block_attn",
+    "block_attn",
+    "transpose_block_attn",
+    "prev_block_attn",
+    "cross_attention",
+)
 
 
 logger = logging.get_logger(__name__)
@@ -119,6 +203,7 @@ def raw_column_previous_row_attention(layer):
 
 
 def large_separated_enc_dec_w_lyrics(layer):
+    # tuple lookup is marginally faster and more memory efficient than list
     return _LARGE_ATTENTION[layer % 79]
 
 
