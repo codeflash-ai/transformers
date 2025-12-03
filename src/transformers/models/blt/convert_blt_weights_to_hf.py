@@ -175,30 +175,36 @@ def merge_configurations(config_path: str, entropy_params_path: str) -> dict[str
 
 
 def apply_weight_mapping(state_dict: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
-    component_mappings = {
-        ".attention.": ".self_attn.",
-        ".feed_forward.": ".mlp.",
-        ".attention_norm.": ".input_layernorm.",
-        ".ffn_norm.": ".post_attention_layernorm.",
-        ".tok_embeddings.": ".embed_tokens.",
-        ".cross_attn_norm_q.": ".q_norm.",
-        ".cross_attn_norm_kv.": ".k_norm.",
-        ".w1.": ".gate_proj.",
-        ".w2.": ".down_proj.",
-        ".w3.": ".up_proj.",
-        ".wq.": ".q_proj.",
-        ".wk.": ".k_proj.",
-        ".wv.": ".v_proj.",
-        ".wo.": ".o_proj.",
-        ".output.": ".lm_head.",
-    }
+    component_mappings = [
+        (".attention.", ".self_attn."),
+        (".feed_forward.", ".mlp."),
+        (".attention_norm.", ".input_layernorm."),
+        (".ffn_norm.", ".post_attention_layernorm."),
+        (".tok_embeddings.", ".embed_tokens."),
+        (".cross_attn_norm_q.", ".q_norm."),
+        (".cross_attn_norm_kv.", ".k_norm."),
+        (".w1.", ".gate_proj."),
+        (".w2.", ".down_proj."),
+        (".w3.", ".up_proj."),
+        (".wq.", ".q_proj."),
+        (".wk.", ".k_proj."),
+        (".wv.", ".v_proj."),
+        (".wo.", ".o_proj."),
+        (".output.", ".lm_head."),
+    ]  # Converted to list of tuples for order preservation & a minor speedup
+
+    # Precompile the replacements into a tuple for efficiency
+    mappings = tuple(component_mappings)
+
+    # Local variable lookups for speed
+    items = state_dict.items()
 
     new_state_dict = {}
 
-    for old_key, tensor in state_dict.items():
+    for old_key, tensor in items:
         new_key = old_key
-
-        for old_pattern, new_pattern in component_mappings.items():
+        replaced = False
+        for old_pattern, new_pattern in mappings:
             if old_pattern in new_key:
                 new_key = new_key.replace(old_pattern, new_pattern)
 
