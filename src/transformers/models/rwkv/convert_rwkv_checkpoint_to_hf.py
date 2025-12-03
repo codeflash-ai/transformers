@@ -27,6 +27,25 @@ from transformers import AutoModelForCausalLM, AutoTokenizer, PreTrainedTokenize
 from transformers.modeling_utils import WEIGHTS_INDEX_NAME
 
 
+_emb_prefix = "emb."
+
+_blocks_0_ln0_prefix = "blocks.0.ln0"
+
+_blocks_pattern = re.compile(r"blocks\.(\d+)\.att")
+
+_ffn_pattern = re.compile(r"blocks\.(\d+)\.ffn")
+
+_time_mix_k_suffix = ".time_mix_k"
+
+_time_mix_v_suffix = ".time_mix_v"
+
+_time_mix_r_suffix = ".time_mix_r"
+
+_head_weight = "head.weight"
+
+_rwkv_prefix = "rwkv."
+
+
 NUM_HIDDEN_LAYERS_MAPPING = {
     "169M": 12,
     "430M": 24,
@@ -50,28 +69,37 @@ def convert_state_dict(state_dict):
     state_dict_keys = list(state_dict.keys())
     for name in state_dict_keys:
         weight = state_dict.pop(name)
+        orig_name = name
         # emb -> embedding
-        if name.startswith("emb."):
-            name = name.replace("emb.", "embeddings.")
+        if name.startswith(_emb_prefix):
+            name = "embeddings." + name[len(_emb_prefix) :]
         # ln_0 -> pre_ln (only present at block 0)
-        if name.startswith("blocks.0.ln0"):
-            name = name.replace("blocks.0.ln0", "blocks.0.pre_ln")
-        # att -> attention
-        name = re.sub(r"blocks\.(\d+)\.att", r"blocks.\1.attention", name)
-        # ffn -> feed_forward
-        name = re.sub(r"blocks\.(\d+)\.ffn", r"blocks.\1.feed_forward", name)
+        elif name.startswith(_blocks_0_ln0_prefix):
+            name = "blocks.0.pre_ln" + name[len(_blocks_0_ln0_prefix) :]
+        # att -> attention and ffn -> feed_forward substitutions
+        # These use regex so combine for performance
+        else:
+            # Use pre-compiled regex for .att replacement
+            # b .att and .ffn do not overlap, so it's cheaper to check both in a single else
+            new_name = _blocks_pattern.sub(r"blocks.\1.attention", name)
+            if new_name != name:
+                name = new_name
+            else:
+                new_name = _ffn_pattern.sub(r"blocks.\1.feed_forward", name)
+                if new_name != name:
+                    name = new_name
         # time_mix_k -> time_mix_key and reshape
-        if name.endswith(".time_mix_k"):
-            name = name.replace(".time_mix_k", ".time_mix_key")
+        if name.endswith(_time_mix_k_suffix):
+            name = name[: -len(_time_mix_k_suffix)] + ".time_mix_key"
         # time_mix_v -> time_mix_value and reshape
-        if name.endswith(".time_mix_v"):
-            name = name.replace(".time_mix_v", ".time_mix_value")
-        # time_mix_r -> time_mix_key and reshape
-        if name.endswith(".time_mix_r"):
-            name = name.replace(".time_mix_r", ".time_mix_receptance")
+        elif name.endswith(_time_mix_v_suffix):
+            name = name[: -len(_time_mix_v_suffix)] + ".time_mix_value"
+        # time_mix_r -> time_mix_receptance and reshape
+        elif name.endswith(_time_mix_r_suffix):
+            name = name[: -len(_time_mix_r_suffix)] + ".time_mix_receptance"
 
-        if name != "head.weight":
-            name = "rwkv." + name
+        if name != _head_weight:
+            name = _rwkv_prefix + name
 
         state_dict[name] = weight
     return state_dict
