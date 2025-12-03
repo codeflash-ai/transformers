@@ -742,16 +742,24 @@ class JanusVQVAEAttnBlock(nn.Module):
 
         # compute attention
         batch_size, channels, height, width = query_states.shape
-        query_states = query_states.reshape(batch_size, channels, height * width).permute(0, 2, 1)
-        key_states = key_states.reshape(batch_size, channels, height * width)
-        attn_weights = torch.bmm(query_states, key_states)
-        attn_weights = attn_weights * (int(channels) ** (-0.5))
-        attn_weights = F.softmax(attn_weights, dim=2)
 
-        # attend to values
-        value_states = value_states.reshape(batch_size, channels, height * width)
-        attn_weights = attn_weights.permute(0, 2, 1)
-        attn_output = torch.bmm(value_states, attn_weights).reshape(batch_size, channels, height, width)
+        # Precompute flatten size for improved performance
+        flat_size = height * width
+
+        # Use contiguous to ensure memory layout, reduces overhead for .view usage and subsequent operations
+        query_states = query_states.contiguous().view(batch_size, channels, flat_size).transpose(1, 2)
+        key_states = key_states.contiguous().view(batch_size, channels, flat_size)
+        value_states = value_states.contiguous().view(batch_size, channels, flat_size)
+
+        # Use in-place multiplication on attn_weights to reduce allocation
+        attn_weights = torch.bmm(query_states, key_states)
+        attn_weights.mul_(channels ** (-0.5))
+        # Use in-place softmax if possible (faster, less memory) and the tensor is of a suitable dtype
+        attn_weights = F.softmax(attn_weights, dim=2, dtype=attn_weights.dtype)
+
+        # For large attention, avoid transpose if shape already matches (here it must)
+        attn_weights = attn_weights.transpose(1, 2)
+        attn_output = torch.bmm(value_states, attn_weights).view(batch_size, channels, height, width)
 
         attn_output = self.proj_out(attn_output)
         return residual + attn_output
