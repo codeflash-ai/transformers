@@ -28,6 +28,11 @@ from typing import Any, Literal, NewType, Optional, Union, get_type_hints
 import yaml
 
 
+_TRUE_SET = {"yes", "true", "t", "y", "1"}
+
+_FALSE_SET = {"no", "false", "f", "n", "0"}
+
+
 DataClass = NewType("DataClass", Any)
 DataClassType = NewType("DataClassType", Any)
 
@@ -36,9 +41,10 @@ DataClassType = NewType("DataClassType", Any)
 def string_to_bool(v):
     if isinstance(v, bool):
         return v
-    if v.lower() in ("yes", "true", "t", "y", "1"):
+    val = v.lower()
+    if val in _TRUE_SET:
         return True
-    elif v.lower() in ("no", "false", "f", "n", "0"):
+    elif val in _FALSE_SET:
         return False
     else:
         raise ArgumentTypeError(
