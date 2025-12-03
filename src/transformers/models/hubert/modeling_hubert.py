@@ -100,9 +100,13 @@ class HubertSamePadLayer(nn.Module):
         self.num_pad_remove = 1 if num_conv_pos_embeddings % 2 == 0 else 0
 
     def forward(self, hidden_states):
-        if self.num_pad_remove > 0:
-            hidden_states = hidden_states[:, :, : -self.num_pad_remove]
-        return hidden_states
+        # Fast path: If no pad needs to be removed, return directly.
+        num_pad_remove = self.num_pad_remove
+        if num_pad_remove == 0:
+            return hidden_states
+        # Use ... to avoid new axis list construction; slicing is already fast for contiguous input.
+        # If num_pad_remove > 0, perform single slicing op.
+        return hidden_states[:, :, :-num_pad_remove]
 
 
 class HubertNoLayerNormConvLayer(GradientCheckpointingLayer):
