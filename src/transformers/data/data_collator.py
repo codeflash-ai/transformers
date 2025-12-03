@@ -392,7 +392,13 @@ def _numpy_collate_batch(examples, tokenizer, pad_to_multiple_of: Optional[int] 
 
     # Check if padding is necessary.
     length_of_first = len(examples[0])
-    are_tensors_same_length = all(len(x) == length_of_first for x in examples)
+    # Use a for loop with early exit for efficiency
+    are_tensors_same_length = True
+    for x in examples:
+        if len(x) != length_of_first:
+            are_tensors_same_length = False
+            break
+
     if are_tensors_same_length and (pad_to_multiple_of is None or length_of_first % pad_to_multiple_of == 0):
         return np.stack(examples, axis=0)
 
@@ -403,16 +409,32 @@ def _numpy_collate_batch(examples, tokenizer, pad_to_multiple_of: Optional[int] 
             f" ({tokenizer.__class__.__name__}) does not have a pad token."
         )
 
-    # Creating the full tensor and filling it with our data.
-    max_length = max(len(x) for x in examples)
+    # Find max length; single-pass for clarity and efficiency
+    max_length = 0
+    for x in examples:
+        l = len(x)
+        if l > max_length:
+            max_length = l
+
     if pad_to_multiple_of is not None and (max_length % pad_to_multiple_of != 0):
         max_length = ((max_length // pad_to_multiple_of) + 1) * pad_to_multiple_of
-    result = np.full(shape=(len(examples), max_length), fill_value=tokenizer.pad_token_id, dtype=examples[0].dtype)
-    for i, example in enumerate(examples):
-        if tokenizer.padding_side == "right":
-            result[i, : example.shape[0]] = example
-        else:
-            result[i, -example.shape[0] :] = example
+
+    batch_size = len(examples)
+    pad_token_id = tokenizer.pad_token_id
+    dtype = examples[0].dtype
+
+    result = np.full((batch_size, max_length), fill_value=pad_token_id, dtype=dtype)
+
+    padding_side = tokenizer.padding_side
+    # Pull out commonly accessed attributes into local variables for speed in loops
+    if padding_side == "right":
+        for i, example in enumerate(examples):
+            l = example.shape[0]
+            result[i, :l] = example
+    else:
+        for i, example in enumerate(examples):
+            l = example.shape[0]
+            result[i, -l:] = example
     return result
 
 
