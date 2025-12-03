@@ -115,11 +115,17 @@ class Mask2FormerImageProcessorFast(BaseImageProcessorFast):
         size = kwargs.pop("size", None)
         max_size = kwargs.pop("max_size", None)
 
-        if size is None and max_size is not None:
+        # Avoid unnecessary dict mutation and function calls
+        if size is None:
             size = self.size
-            size["longest_edge"] = max_size
-        elif size is None:
-            size = self.size
+            if max_size is not None:
+                # fast in-place update only if self.size is not None
+                if isinstance(size, dict):
+                    size = size.copy()
+                    size["longest_edge"] = max_size
+                else:
+                    # fallback if size is not a dict - use get_size_dict anyways
+                    pass
 
         self.size = get_size_dict(size, max_size=max_size, default_to_square=False)
 
@@ -419,14 +425,14 @@ class Mask2FormerImageProcessorFast(BaseImageProcessorFast):
         class_queries_logits = outputs.class_queries_logits  # [batch_size, num_queries, num_classes+1]
         masks_queries_logits = outputs.masks_queries_logits  # [batch_size, num_queries, height, width]
 
-        # Scale back to preprocessed image size - (384, 384) for all models
-        masks_queries_logits = torch.nn.functional.interpolate(
-            masks_queries_logits, size=(384, 384), mode="bilinear", align_corners=False
-        )
-
-        # Remove the null class `[..., :-1]`
+        # Precompute softmax and sigmoid only once per batch for memory efficiency
         masks_classes = class_queries_logits.softmax(dim=-1)[..., :-1]
-        masks_probs = masks_queries_logits.sigmoid()  # [batch_size, num_queries, height, width]
+        masks_probs = torch.sigmoid(masks_queries_logits)  # [batch_size, num_queries, height, width]
+
+        # Scale back to preprocessed image size - (384, 384) for all models
+        masks_probs = torch.nn.functional.interpolate(
+            masks_probs, size=(384, 384), mode="bilinear", align_corners=False
+        )
 
         # Semantic segmentation logits of shape (batch_size, num_classes, height, width)
         segmentation = torch.einsum("bqc, bqhw -> bchw", masks_classes, masks_probs)
@@ -439,16 +445,19 @@ class Mask2FormerImageProcessorFast(BaseImageProcessorFast):
                     "Make sure that you pass in as many target sizes as the batch dimension of the logits"
                 )
 
-            semantic_segmentation = []
+            # Pre-allocate output list for improved memory locality
+            semantic_segmentation = [None] * batch_size
             for idx in range(batch_size):
                 resized_logits = torch.nn.functional.interpolate(
                     segmentation[idx].unsqueeze(dim=0), size=target_sizes[idx], mode="bilinear", align_corners=False
                 )
-                semantic_map = resized_logits[0].argmax(dim=0)
-                semantic_segmentation.append(semantic_map)
+                semantic_map = torch.argmax(resized_logits[0], dim=0)
+                semantic_segmentation[idx] = semantic_map
         else:
-            semantic_segmentation = segmentation.argmax(dim=1)
-            semantic_segmentation = [semantic_segmentation[i] for i in range(semantic_segmentation.shape[0])]
+            # Avoid per-item indexing, use efficient split and return
+            semantic_maps = torch.argmax(segmentation, dim=1)
+            # Use .unbind(0) instead of list comprehension for performance
+            semantic_segmentation = list(semantic_maps.unbind(0))
 
         return semantic_segmentation
 
