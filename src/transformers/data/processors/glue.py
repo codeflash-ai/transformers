@@ -408,10 +408,12 @@ class QqpProcessor(DataProcessor):
         test_mode = set_type == "test"
         q1_index = 1 if test_mode else 3
         q2_index = 2 if test_mode else 4
+        # Minor optimization: skip header and precompute length outside loop
+        lines_iter = iter(lines)
+        next(lines_iter, None)  # Skip header line if present
         examples = []
-        for i, line in enumerate(lines):
-            if i == 0:
-                continue
+        append_example = examples.append
+        for line in lines_iter:
             guid = f"{set_type}-{line[0]}"
             try:
                 text_a = line[q1_index]
@@ -419,7 +421,7 @@ class QqpProcessor(DataProcessor):
                 label = None if test_mode else line[5]
             except IndexError:
                 continue
-            examples.append(InputExample(guid=guid, text_a=text_a, text_b=text_b, label=label))
+            append_example(InputExample(guid=guid, text_a=text_a, text_b=text_b, label=label))
         return examples
 
 
