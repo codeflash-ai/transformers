@@ -107,10 +107,15 @@ class LongcatFlashRotaryEmbedding(nn.Module):
 
         attention_factor = 1.0  # Unused in this type of RoPE
 
-        # Compute the inverse frequencies
-        inv_freq = 1.0 / (
-            base ** (torch.arange(0, dim, 2, dtype=torch.int64).to(device=device, dtype=torch.float) / dim)
-        )
+        # OPTIMIZATION: Avoid repeated dtype conversions and redundant tensor operations
+        # Step 1: Directly create float tensor on target device
+        arange_float = torch.arange(0, dim, 2, device=device, dtype=torch.float)
+        # Step 2: In-place division for efficiency
+        power = arange_float.div_(dim)
+        # Step 3: Use torch.pow for element-wise exponentiation (better performance on GPU for some backends)
+        # Step 4: Calculate final inv_freq
+        inv_freq = 1.0 / torch.pow(base, power)
+
         return inv_freq, attention_factor
 
     @torch.no_grad()
