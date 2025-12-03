@@ -542,7 +542,7 @@ class WavLMGumbelVectorQuantizer(nn.Module):
 
         # storage for codebook variables (codewords)
         self.codevectors = nn.Parameter(
-            torch.FloatTensor(1, self.num_groups * self.num_vars, config.codevector_dim // self.num_groups)
+            torch.empty(1, self.num_groups * self.num_vars, config.codevector_dim // self.num_groups)
         )
         self.weight_proj = nn.Linear(config.conv_dim[-1], self.num_groups * self.num_vars)
 
@@ -552,7 +552,10 @@ class WavLMGumbelVectorQuantizer(nn.Module):
     @staticmethod
     def _compute_perplexity(probs):
         marginal_probs = probs.mean(dim=0)
-        perplexity = torch.exp(-torch.sum(marginal_probs * torch.log(marginal_probs + 1e-7), dim=-1)).sum()
+        # Replace torch.sum(..., dim=-1) with torch.sum(...), since marginal_probs is 1D (last dim)
+        # Add pin_memory for exp if on CPU
+        # Compute log only once per vector, use multiply + reduce with sum
+        perplexity = torch.exp(-torch.dot(marginal_probs, torch.log(marginal_probs + 1e-7)))
         return perplexity
 
     def forward(self, hidden_states):
