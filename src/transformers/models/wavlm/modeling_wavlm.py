@@ -38,10 +38,11 @@ class WavLMSamePadLayer(nn.Module):
     def __init__(self, num_conv_pos_embeddings):
         super().__init__()
         self.num_pad_remove = 1 if num_conv_pos_embeddings % 2 == 0 else 0
+        self._slice_end = -self.num_pad_remove if self.num_pad_remove > 0 else None
 
     def forward(self, hidden_states):
-        if self.num_pad_remove > 0:
-            hidden_states = hidden_states[:, :, : -self.num_pad_remove]
+        if self._slice_end is not None:
+            hidden_states = hidden_states[:, :, : self._slice_end]
         return hidden_states
 
 
