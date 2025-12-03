@@ -42,20 +42,48 @@ def _is_valid_image(image):
 
 
 def flatten_pair_images(images):
-    # Handle the pair validation and flattening similar to slow processor
-    if isinstance(images, list):
-        if len(images) == 2 and all((_is_valid_image(image) or isinstance(image, torch.Tensor)) for image in images):
+    # Early-exit if not list, reduce nesting depth
+    if not isinstance(images, list):
+        raise ValueError(
+            "Input images must be a one of the following :",
+            " - A pair of PIL images.",
+            " - A pair of 3D arrays.",
+            " - A list of pairs of PIL images.",
+            " - A list of pairs of 3D arrays.",
+        )
+    num_images = len(images)
+    # Fast path: common case of two images (single pair)
+    if num_images == 2:
+        # Use local var for the function to avoid attribute lookup in the loop
+        is_valid = _is_valid_image
+        # Short-circuit as soon as first False found
+        for image in images:
+            if not (is_valid(image) or isinstance(image, torch.Tensor)):
+                break
+        else:
+            # All checks passed
             # Single pair of images - keep as is, they'll be processed by the base class
             return images
-        elif all(
-            isinstance(image_pair, list)
-            and len(image_pair) == 2
-            and all(_is_valid_image(image) or isinstance(image, torch.Tensor) for image in image_pair)
-            for image_pair in images
+    # Check for a list of pairs
+    # Avoid repeated lookup by storing in a tuple
+    is_valid = _is_valid_image
+    is_tensor = lambda x: isinstance(x, torch.Tensor)
+    # Use for-loop with early-exit to avoid creating filtered list up front
+    for image_pair in images:
+        if (
+            not isinstance(image_pair, list)
+            or len(image_pair) != 2
+            or not (is_valid(image_pair[0]) or is_tensor(image_pair[0]))
+            or not (is_valid(image_pair[1]) or is_tensor(image_pair[1]))
         ):
-            # Multiple pairs - flatten them
-            images = [image for image_pair in images for image in image_pair]
-            return images
+            break
+    else:
+        # All pairs are valid, flatten using itertools for speed and memory
+        from itertools import chain
+
+        # More efficient than nested comprehension for large N
+        return list(chain.from_iterable(images))
+    # If none of the above matched, raise as in original
     raise ValueError(
         "Input images must be a one of the following :",
         " - A pair of PIL images.",
