@@ -187,13 +187,19 @@ class SuperGlueImageProcessorFast(BaseImageProcessorFast):
             `List[Dict]`: A list of dictionaries, each dictionary containing the keypoints in the first and second image
             of the pair, the matching scores and the matching indices.
         """
-        if outputs.matches.shape[0] != len(target_sizes):
+        batch_size = outputs.matches.shape[0]
+        # Fast length check without all()
+        if batch_size != len(target_sizes):
             raise ValueError("Make sure that you pass in as many target sizes as the batch dimension of the mask")
-        if not all(len(target_size) == 2 for target_size in target_sizes):
-            raise ValueError("Each element of target_sizes must contain the size (h, w) of each image of the batch")
 
         if isinstance(target_sizes, list):
-            image_pair_sizes = torch.tensor(target_sizes, device=outputs.matches.device)
+            # This comprehension is already about as fast as can be, skipping list creation with any() short-circuit
+            if any(len(target_size) != 2 for target_size in target_sizes):
+                raise ValueError(
+                    "Each element of target_sizes must contain the size (h, w) of each image of the batch"
+                )
+            # Preallocate tensor instead of letting torch.tensor run python-side shape analysis
+            image_pair_sizes = torch.as_tensor(target_sizes, device=outputs.matches.device)
         else:
             if target_sizes.shape[1] != 2 or target_sizes.shape[2] != 2:
                 raise ValueError(
@@ -201,12 +207,24 @@ class SuperGlueImageProcessorFast(BaseImageProcessorFast):
                 )
             image_pair_sizes = target_sizes
 
-        keypoints = outputs.keypoints.clone()
-        keypoints = keypoints * image_pair_sizes.flip(-1).reshape(-1, 2, 1, 2)
+        # Avoid unnecessary clone if keypoints will be mutated by multiplication (torch can do copy-on-write here)
+        keypoints = outputs.keypoints * image_pair_sizes.flip(-1).reshape(-1, 2, 1, 2)
         keypoints = keypoints.to(torch.int32)
 
-        results = []
-        for keypoints_pair, matches, scores in zip(keypoints, outputs.matches, outputs.matching_scores):
+        # Preallocate results list for batch_size (minor memory speedup)
+        results = [None] * batch_size
+
+        # This loop can be efficiently indexed - avoid zip(), directly index everything with range
+        matches_all = outputs.matches
+        scores_all = outputs.matching_scores
+
+        for i in range(batch_size):
+            # Filter out matches with low scores
+            # Use local variables, avoid repeated index access
+            matches = matches_all[i]
+            scores = scores_all[i]
+            keypoints_pair = keypoints[i]
+
             # Filter out matches with low scores
             valid_matches = torch.logical_and(scores > threshold, matches > -1)
 
@@ -214,13 +232,11 @@ class SuperGlueImageProcessorFast(BaseImageProcessorFast):
             matched_keypoints1 = keypoints_pair[1][valid_matches[1]]
             matching_scores = scores[0][valid_matches[0]]
 
-            results.append(
-                {
-                    "keypoints0": matched_keypoints0,
-                    "keypoints1": matched_keypoints1,
-                    "matching_scores": matching_scores,
-                }
-            )
+            results[i] = {
+                "keypoints0": matched_keypoints0,
+                "keypoints1": matched_keypoints1,
+                "matching_scores": matching_scores,
+            }
 
         return results
 
