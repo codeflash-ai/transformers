@@ -71,9 +71,9 @@ def is_grayscale(
     """Checks if an image is grayscale (all RGB channels are identical)."""
     if image.ndim < 3 or image.shape[0 if image.ndim == 3 else 1] == 1:
         return True
-    return torch.all(image[..., 0, :, :] == image[..., 1, :, :]) and torch.all(
-        image[..., 1, :, :] == image[..., 2, :, :]
-    )
+    if not torch.equal(image[..., 0, :, :], image[..., 1, :, :]):
+        return False
+    return torch.equal(image[..., 1, :, :], image[..., 2, :, :])
 
 
 def convert_to_grayscale(
