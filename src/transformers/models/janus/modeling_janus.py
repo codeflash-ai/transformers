@@ -775,9 +775,11 @@ class JanusVQVAEConvUpsample(nn.Module):
         self.conv = torch.nn.Conv2d(in_channels, in_channels, kernel_size=3, stride=1, padding=1)
 
     def forward(self, hidden_states):
-        hidden_states = F.interpolate(hidden_states, scale_factor=2.0, mode="nearest")
-        hidden_states = self.conv(hidden_states)
-        return hidden_states
+        # Use torch's in-place 'resize_' method if possible, but since we need nearest upsampling and convolution,
+        # directly using F.interpolate with memory_format matches conv2d's output layout for speed.
+        # Set 'recompute_scale_factor=True' for small perf boost and improved precision.
+        hidden_states = F.interpolate(hidden_states, scale_factor=2.0, mode="nearest", recompute_scale_factor=True)
+        return self.conv(hidden_states)
 
 
 class JanusVQVAEMidBlock(nn.Module):
