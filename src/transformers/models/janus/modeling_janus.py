@@ -671,9 +671,12 @@ class JanusVQVAEVectorQuantizer(nn.Module):
         # l2 normalization on the last dimension
         hidden_state_quant = F.normalize(hidden_state_quant, p=2, dim=-1)
 
-        # reshape back to match original input shape
-        hidden_state_quant = hidden_state_quant.view((batch_size, *self.quant_state_dims, emb_dim))
-        hidden_state_quant = hidden_state_quant.permute(0, 3, 1, 2).contiguous()
+        # combine multiple reshape and permute operations into a single, faster reshape, avoiding redundant copies
+        # The data is expected in (batch_size, prod(quant_state_dims), emb_dim) after the embedding
+        # We want (batch_size, emb_dim, quant_state_dims[0], quant_state_dims[1])
+        # Instead of .view + .permute + .contiguous, use .reshape then .permute with minimal intermediate copies
+        shape = (batch_size, self.quant_state_dims[0], self.quant_state_dims[1], emb_dim)
+        hidden_state_quant = hidden_state_quant.reshape(shape).permute(0, 3, 1, 2)
 
         return hidden_state_quant
 
