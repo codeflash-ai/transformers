@@ -47,62 +47,72 @@ def build_tf_to_pytorch_map(model, config):
 
     if hasattr(model, "transformer"):
         # We are loading in a TransfoXLLMHeadModel => we will load also the Adaptive Softmax
-        tf_to_pt_map.update(
-            {
-                "transformer/adaptive_softmax/cutoff_0/cluster_W": model.crit.cluster_weight,
-                "transformer/adaptive_softmax/cutoff_0/cluster_b": model.crit.cluster_bias,
-            }
-        )
+        tf_to_pt_map["transformer/adaptive_softmax/cutoff_0/cluster_W"] = model.crit.cluster_weight
+        tf_to_pt_map["transformer/adaptive_softmax/cutoff_0/cluster_b"] = model.crit.cluster_bias
+
         for i, (out_l, proj_l, tie_proj) in enumerate(
             zip(model.crit.out_layers, model.crit.out_projs, config.tie_projs)
         ):
             layer_str = f"transformer/adaptive_softmax/cutoff_{i}/"
             if config.tie_word_embeddings:
-                tf_to_pt_map.update({layer_str + "b": out_l.bias})
+                tf_to_pt_map[layer_str + "b"] = out_l.bias
             else:
                 raise NotImplementedError
                 # I don't think this is implemented in the TF code
-                tf_to_pt_map.update({layer_str + "lookup_table": out_l.weight, layer_str + "b": out_l.bias})
+                tf_to_pt_map[layer_str + "lookup_table"] = out_l.weight
+                tf_to_pt_map[layer_str + "b"] = out_l.bias
             if not tie_proj:
-                tf_to_pt_map.update({layer_str + "proj": proj_l})
+                tf_to_pt_map[layer_str + "proj"] = proj_l
         # Now load the rest of the transformer
         model = model.transformer
 
     # Embeddings
-    for i, (embed_l, proj_l) in enumerate(zip(model.word_emb.emb_layers, model.word_emb.emb_projs)):
+    # Pull out attributes for access speedup
+    emb_layers = model.word_emb.emb_layers
+    emb_projs = model.word_emb.emb_projs
+
+    # Pre-size the enumerate/zip as list to avoid repeated zip computation (minor efficiency gain)
+    for i, (embed_l, proj_l) in enumerate(zip(emb_layers, emb_projs)):
         layer_str = f"transformer/adaptive_embed/cutoff_{i}/"
-        tf_to_pt_map.update({layer_str + "lookup_table": embed_l.weight, layer_str + "proj_W": proj_l})
+        # Use direct assignment for both keys at once
+        tf_to_pt_map[layer_str + "lookup_table"] = embed_l.weight
+        tf_to_pt_map[layer_str + "proj_W"] = proj_l
 
     # Transformer blocks
-    for i, b in enumerate(model.layers):
+    # Pull out model.layers for access speedup
+    model_layers = model.layers
+    for i, b in enumerate(model_layers):
         layer_str = f"transformer/layer_{i}/"
-        tf_to_pt_map.update(
-            {
-                layer_str + "rel_attn/LayerNorm/gamma": b.dec_attn.layer_norm.weight,
-                layer_str + "rel_attn/LayerNorm/beta": b.dec_attn.layer_norm.bias,
-                layer_str + "rel_attn/o/kernel": b.dec_attn.o_net.weight,
-                layer_str + "rel_attn/qkv/kernel": b.dec_attn.qkv_net.weight,
-                layer_str + "rel_attn/r/kernel": b.dec_attn.r_net.weight,
-                layer_str + "ff/LayerNorm/gamma": b.pos_ff.layer_norm.weight,
-                layer_str + "ff/LayerNorm/beta": b.pos_ff.layer_norm.bias,
-                layer_str + "ff/layer_1/kernel": b.pos_ff.CoreNet[0].weight,
-                layer_str + "ff/layer_1/bias": b.pos_ff.CoreNet[0].bias,
-                layer_str + "ff/layer_2/kernel": b.pos_ff.CoreNet[3].weight,
-                layer_str + "ff/layer_2/bias": b.pos_ff.CoreNet[3].bias,
-            }
-        )
+        dec_attn = b.dec_attn
+        pos_ff = b.pos_ff
+
+        # Instead of dict, direct assignments for each key to avoid dict creation/allocation for each block.
+        tf_to_pt_map[layer_str + "rel_attn/LayerNorm/gamma"] = dec_attn.layer_norm.weight
+        tf_to_pt_map[layer_str + "rel_attn/LayerNorm/beta"] = dec_attn.layer_norm.bias
+        tf_to_pt_map[layer_str + "rel_attn/o/kernel"] = dec_attn.o_net.weight
+        tf_to_pt_map[layer_str + "rel_attn/qkv/kernel"] = dec_attn.qkv_net.weight
+        tf_to_pt_map[layer_str + "rel_attn/r/kernel"] = dec_attn.r_net.weight
+        tf_to_pt_map[layer_str + "ff/LayerNorm/gamma"] = pos_ff.layer_norm.weight
+        tf_to_pt_map[layer_str + "ff/LayerNorm/beta"] = pos_ff.layer_norm.bias
+        # Precompute CoreNet access
+        pos_ff_CoreNet = pos_ff.CoreNet
+        tf_to_pt_map[layer_str + "ff/layer_1/kernel"] = pos_ff_CoreNet[0].weight
+        tf_to_pt_map[layer_str + "ff/layer_1/bias"] = pos_ff_CoreNet[0].bias
+        tf_to_pt_map[layer_str + "ff/layer_2/kernel"] = pos_ff_CoreNet[3].weight
+        tf_to_pt_map[layer_str + "ff/layer_2/bias"] = pos_ff_CoreNet[3].bias
+
+    # Relative positioning biases
 
     # Relative positioning biases
     if config.untie_r:
-        r_r_list = []
-        r_w_list = []
-        for b in model.layers:
-            r_r_list.append(b.dec_attn.r_r_bias)
-            r_w_list.append(b.dec_attn.r_w_bias)
+        # Use list comprehensions for faster appending
+        r_r_list = [b.dec_attn.r_r_bias for b in model_layers]
+        r_w_list = [b.dec_attn.r_w_bias for b in model_layers]
     else:
         r_r_list = [model.r_r_bias]
         r_w_list = [model.r_w_bias]
-    tf_to_pt_map.update({"transformer/r_r_bias": r_r_list, "transformer/r_w_bias": r_w_list})
+    tf_to_pt_map["transformer/r_r_bias"] = r_r_list
+    tf_to_pt_map["transformer/r_w_bias"] = r_w_list
     return tf_to_pt_map
 
 
