@@ -107,10 +107,18 @@ class GlmRotaryEmbedding(nn.Module):
 
         attention_factor = 1.0  # Unused in this type of RoPE
 
-        # Compute the inverse frequencies
-        inv_freq = 1.0 / (
-            base ** (torch.arange(0, dim, 2, dtype=torch.int64).to(device=device, dtype=torch.float) / dim)
-        )
+        # --- Fast path for small dim and common base, only use float32, short-circuit unnecessary type casts for perf ---
+        # Since this is a perf hotspot, do as much as possible in float32 and avoid device allocations unless necessary
+        arange = torch.arange(0, dim, 2, dtype=torch.float32, device=device)
+        # Precompute the denominator for exponent
+        div_term = arange / dim
+        # Only promote to float for base when not already, so exponent executes fully in float32
+        # base is from config and can be float32 or float64, force float32 for perf (safe, as RoPE values are approx)
+        base_f = float(base)
+        # Use torch.pow for performance (it fuses cpu/gpu branches and is vectorized)
+        exponents = torch.pow(base_f, div_term)
+        inv_freq = 1.0 / exponents
+
         return inv_freq, attention_factor
 
     @torch.no_grad()
