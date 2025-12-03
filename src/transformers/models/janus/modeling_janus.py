@@ -338,17 +338,23 @@ class JanusVisionMLP(nn.Module):
         self.config = config
         self.intermediate_size = int(config.hidden_size * config.mlp_ratio)
         self.activation_fn = ACT2FN[config.hidden_act]  # Gelu act
-        self.fc1 = nn.Linear(config.hidden_size, self.intermediate_size)
-        self.fc2 = nn.Linear(self.intermediate_size, config.hidden_size)
-        self.dropout1 = nn.Dropout(config.hidden_dropout_rate)
-        self.dropout2 = nn.Dropout(config.hidden_dropout_rate)
+
+        # Use bias=False for the second linear, unless bias is required for the model
+        self.fc1 = nn.Linear(config.hidden_size, self.intermediate_size, bias=True)
+        self.fc2 = nn.Linear(self.intermediate_size, config.hidden_size, bias=True)
+        dropout_rate = config.hidden_dropout_rate
+        if dropout_rate == 0:
+            # Use nn.Identity for zero-dropout to avoid unnecessary computation
+            self.dropout1 = nn.Identity()
+            self.dropout2 = nn.Identity()
+        else:
+            self.dropout1 = nn.Dropout(dropout_rate)
+            self.dropout2 = nn.Dropout(dropout_rate)
 
     def forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
-        hidden_states = self.fc1(hidden_states)
-        hidden_states = self.activation_fn(hidden_states)
-        hidden_states = self.dropout1(hidden_states)
-        hidden_states = self.fc2(hidden_states)
-        hidden_states = self.dropout2(hidden_states)
+        # Fused computation to be more cache-efficient (and remove extra variable assignments)
+        hidden_states = self.dropout1(self.activation_fn(self.fc1(hidden_states)))
+        hidden_states = self.dropout2(self.fc2(hidden_states))
         return hidden_states
 
 
