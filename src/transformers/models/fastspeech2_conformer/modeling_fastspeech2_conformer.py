@@ -719,34 +719,46 @@ class FastSpeech2ConformerRelPositionalEncoding(nn.Module):
 
     def extend_pos_enc(self, x):
         """Reset the positional encodings."""
-        if self.pos_enc is not None:
-            # self.pos_enc contains both positive and negative parts
-            # the length of self.pos_enc is 2 * input_len - 1
-            if self.pos_enc.size(1) >= x.size(1) * 2 - 1:
-                if self.pos_enc.dtype != x.dtype or self.pos_enc.device != x.device:
-                    self.pos_enc = self.pos_enc.to(dtype=x.dtype, device=x.device)
-                return
-        # Suppose `i` means to the position of query vector and `j` means the
-        # position of key vector. We use position relative positions when keys
-        # are to the left (i>j) and negative relative positions otherwise (i<j).
-        pos_enc_positive = torch.zeros(x.size(1), self.embed_dim)
-        pos_enc_negative = torch.zeros(x.size(1), self.embed_dim)
-        position = torch.arange(0, x.size(1), dtype=torch.int64).float().unsqueeze(1)
-        div_term = torch.exp(
-            torch.arange(0, self.embed_dim, 2, dtype=torch.int64).float() * -(math.log(10000.0) / self.embed_dim)
-        )
-        pos_enc_positive[:, 0::2] = torch.sin(position * div_term)
-        pos_enc_positive[:, 1::2] = torch.cos(position * div_term)
-        pos_enc_negative[:, 0::2] = torch.sin(-1 * position * div_term)
-        pos_enc_negative[:, 1::2] = torch.cos(-1 * position * div_term)
+        input_len = x.size(1)
+        required_size = input_len * 2 - 1
+        # Precheck if pos_enc can be reused and only move/cast if needed
+        if self.pos_enc is not None and self.pos_enc.size(1) >= required_size:
+            # Only move if dtype/device differs
+            if self.pos_enc.dtype != x.dtype or self.pos_enc.device != x.device:
+                self.pos_enc = self.pos_enc.to(dtype=x.dtype, device=x.device)
+            return
 
-        # Reserve the order of positive indices and concat both positive and
-        # negative indices. This is used to support the shifting trick
-        # as in https://huggingface.co/papers/1901.02860
-        pos_enc_positive = torch.flip(pos_enc_positive, [0]).unsqueeze(0)
-        pos_enc_negative = pos_enc_negative[1:].unsqueeze(0)
-        pos_enc = torch.cat([pos_enc_positive, pos_enc_negative], dim=1)
-        self.pos_enc = pos_enc.to(device=x.device, dtype=x.dtype)
+        # Use the correct device and dtype for computation
+        device = x.device
+        dtype = x.dtype
+        embed_dim = self.embed_dim
+        pos_len = input_len
+
+        # Use native torch functions for fewer allocations
+        position = torch.arange(0, pos_len, device=device, dtype=dtype).unsqueeze(1)  # Shape (pos_len, 1)
+        div_term = torch.exp(
+            torch.arange(0, embed_dim, 2, device=device, dtype=dtype) * -(math.log(10000.0) / embed_dim)
+        )
+
+        # Allocate output arrays only once
+        pos_enc_positive = torch.zeros(pos_len, embed_dim, device=device, dtype=dtype)
+        pos_enc_negative = torch.zeros(pos_len, embed_dim, device=device, dtype=dtype)
+
+        # Vectorized computation for even and odd indices to minimize assignment operations
+        pos_mul = position * div_term  # Shape (pos_len, embed_dim//2)
+        neg_mul = -position * div_term
+
+        pos_enc_positive[:, 0::2] = torch.sin(pos_mul)
+        pos_enc_positive[:, 1::2] = torch.cos(pos_mul)
+        pos_enc_negative[:, 0::2] = torch.sin(neg_mul)
+        pos_enc_negative[:, 1::2] = torch.cos(neg_mul)
+
+        # Only flip and concatenate once
+        pos_enc_positive_rev = pos_enc_positive.flip([0]).unsqueeze(0)
+        pos_enc_negative_trimmed = pos_enc_negative[1:].unsqueeze(0)
+        pos_enc = torch.cat((pos_enc_positive_rev, pos_enc_negative_trimmed), dim=1)
+
+        self.pos_enc = pos_enc
 
     def forward(self, feature_representation):
         """
