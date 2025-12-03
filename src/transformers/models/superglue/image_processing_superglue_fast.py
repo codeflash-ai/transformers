@@ -43,19 +43,46 @@ def _is_valid_image(image):
 
 def flatten_pair_images(images):
     # Handle the pair validation and flattening similar to slow processor
-    if isinstance(images, list):
-        if len(images) == 2 and all((_is_valid_image(image) or isinstance(image, torch.Tensor)) for image in images):
+
+    # Fast-path if definitely not a list (avoids type checking inside hot paths)
+    if not isinstance(images, list):
+        raise ValueError(
+            "Input images must be a one of the following :",
+            " - A pair of PIL images.",
+            " - A pair of 3D arrays.",
+            " - A list of pairs of PIL images.",
+            " - A list of pairs of 3D arrays.",
+        )
+
+    n = len(images)
+    if n == 2:
+        # Fast path: check both elements in images; short-circuit evaluation on first failure.
+        a, b = images
+        if (_is_valid_image(a) or isinstance(a, torch.Tensor)) and (_is_valid_image(b) or isinstance(b, torch.Tensor)):
             # Single pair of images - keep as is, they'll be processed by the base class
             return images
-        elif all(
-            isinstance(image_pair, list)
-            and len(image_pair) == 2
-            and all(_is_valid_image(image) or isinstance(image, torch.Tensor) for image in image_pair)
-            for image_pair in images
+
+    # Check: is it a list of pairs, where each pair is length 2 and valid
+    # This is the hot path; optimize by separating checks and avoiding generator overhead in all().
+    # Pre-allocate flat list only if all pairs are valid
+    pairs = images
+    for image_pair in pairs:
+        if not (isinstance(image_pair, list) and len(image_pair) == 2):
+            break
+        x, y = image_pair
+        if not (
+            (_is_valid_image(x) or isinstance(x, torch.Tensor)) and (_is_valid_image(y) or isinstance(y, torch.Tensor))
         ):
-            # Multiple pairs - flatten them
-            images = [image for image_pair in images for image in image_pair]
-            return images
+            break
+    else:
+        # All checks passed; flatten
+        result = []
+        result_extend = result.extend  # local var for tiny perf boost
+        for image_pair in pairs:
+            result_extend(image_pair)
+        return result
+
+    # If we get here input was not valid
     raise ValueError(
         "Input images must be a one of the following :",
         " - A pair of PIL images.",
