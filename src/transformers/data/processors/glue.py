@@ -204,16 +204,20 @@ class MnliProcessor(DataProcessor):
 
     def _create_examples(self, lines, set_type):
         """Creates examples for the training, dev and test sets."""
-        examples = []
-        for i, line in enumerate(lines):
-            if i == 0:
-                continue
-            guid = f"{set_type}-{line[0]}"
-            text_a = line[8]
-            text_b = line[9]
-            label = None if set_type.startswith("test") else line[-1]
-            examples.append(InputExample(guid=guid, text_a=text_a, text_b=text_b, label=label))
-        return examples
+        # Micro-optimization: avoid repeated attribute lookups in loop
+        InputExample_ = InputExample
+        set_type_startswith_test = set_type.startswith("test")
+        # Remove slow append pattern in favor of list comprehension
+        # Pre-skip header line by slicing instead of per-iteration continue
+        return [
+            InputExample_(
+                guid=f"{set_type}-{line[0]}",
+                text_a=line[8],
+                text_b=line[9],
+                label=None if set_type_startswith_test else line[-1],
+            )
+            for line in lines[1:]
+        ]
 
 
 class MnliMismatchedProcessor(MnliProcessor):
