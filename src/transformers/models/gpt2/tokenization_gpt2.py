@@ -163,8 +163,7 @@ class GPT2Tokenizer(PreTrainedTokenizer):
         self.cache = {}
         self.add_prefix_space = add_prefix_space
 
-        # Should have added re.IGNORECASE so BPE merges can happen for capitalized versions of contractions
-        self.pat = re.compile(r"""'s|'t|'re|'ve|'m|'ll|'d| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+""")
+        self._re_pat = re.compile(r"""'s|'t|'re|'ve|'m|'ll|'d| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+""")
 
         super().__init__(
             errors=errors,
@@ -185,8 +184,10 @@ class GPT2Tokenizer(PreTrainedTokenizer):
         return dict(self.encoder, **self.added_tokens_encoder)
 
     def bpe(self, token):
-        if token in self.cache:
-            return self.cache[token]
+        cache = self.cache
+        bpe_ranks = self.bpe_ranks
+        if token in cache:
+            return cache[token]
         word = tuple(token)
         pairs = get_pairs(word)
 
@@ -194,37 +195,42 @@ class GPT2Tokenizer(PreTrainedTokenizer):
             return token
 
         while True:
-            bigram = min(pairs, key=lambda pair: self.bpe_ranks.get(pair, float("inf")))
-            if bigram not in self.bpe_ranks:
+            min_rank = float("inf")
+            min_pair = None
+            for pair in pairs:
+                rank = bpe_ranks.get(pair, float("inf"))
+                if rank < min_rank:
+                    min_rank = rank
+                    min_pair = pair
+            bigram = min_pair
+            if bigram not in bpe_ranks:
                 break
             first, second = bigram
             new_word = []
             i = 0
-            while i < len(word):
+            length_word = len(word)
+            while i < length_word:
                 try:
                     j = word.index(first, i)
                 except ValueError:
                     new_word.extend(word[i:])
                     break
-                else:
-                    new_word.extend(word[i:j])
-                    i = j
-
-                if word[i] == first and i < len(word) - 1 and word[i + 1] == second:
+                new_word.extend(word[i:j])
+                i = j
+                # critical: check boundaries after moving i
+                if i < length_word - 1 and word[i] == first and word[i + 1] == second:
                     new_word.append(first + second)
                     i += 2
                 else:
                     new_word.append(word[i])
                     i += 1
-            new_word = tuple(new_word)
-            word = new_word
+            word = tuple(new_word)
             if len(word) == 1:
                 break
-            else:
-                pairs = get_pairs(word)
-        word = " ".join(word)
-        self.cache[token] = word
-        return word
+            pairs = get_pairs(word)
+        result = " ".join(word)
+        cache[token] = result
+        return result
 
     def build_inputs_with_special_tokens(self, token_ids_0, token_ids_1=None):
         if self.add_bos_token:
@@ -274,11 +280,23 @@ class GPT2Tokenizer(PreTrainedTokenizer):
     def _tokenize(self, text):
         """Tokenize a string."""
         bpe_tokens = []
-        for token in re.findall(self.pat, text):
-            token = "".join(
-                self.byte_encoder[b] for b in token.encode("utf-8")
-            )  # Maps all our bytes to unicode strings, avoiding control tokens of the BPE (spaces in our case)
-            bpe_tokens.extend(bpe_token for bpe_token in self.bpe(token).split(" "))
+        byte_encoder = self.byte_encoder
+        bpe = self.bpe
+
+        # Reusing the compiled pattern as a local variable for faster access in the loop
+        pat = self._re_pat
+
+        for token in pat.findall(text):
+            # Slightly optimize utf-8 to unicode mapping using list comprehension and local var
+            encoded = token.encode("utf-8")
+            unicode_chars = [byte_encoder[b] for b in encoded]
+            mapped_token = "".join(unicode_chars)
+            # Split on ' ' directly, avoid repeated .split calls by using the list directly
+            bpe_result = bpe(mapped_token)
+            if " " in bpe_result:
+                bpe_tokens.extend(bpe_result.split(" "))
+            else:
+                bpe_tokens.append(bpe_result)
         return bpe_tokens
 
     def _convert_token_to_id(self, token):
