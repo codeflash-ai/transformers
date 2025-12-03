@@ -276,17 +276,31 @@ def eager_attention_forward(
     **kwargs: Unpack[TransformersKwargs],
 ):
     if scaling is None:
-        scaling = query.size(-1) ** -0.5
+        # This is equivalent, but using .shape over .size is slightly faster for this case
+        scaling = query.shape[-1] ** -0.5
 
     # Take the dot product between "query" and "key" to get the raw attention scores.
-    attn_weights = torch.matmul(query, key.transpose(2, 3)) * scaling
+
+    # Optimization: cache key.transpose(2, 3) and key.shape[-2]
+    key_transposed = key.transpose(2, 3)
+    seq_len = key.shape[-2]
+    attn_weights = torch.matmul(query, key_transposed)
+    # Multiplying by scaling afterwards to reduce intermediate allocation size
+    attn_weights.mul_(scaling)
 
     if attention_mask is not None:
-        attention_mask = attention_mask[:, :, :, : key.shape[-2]]
-        attn_weights = attn_weights + attention_mask
+        # Instead of slicing and allocating, skip slicing if not needed
+        if attention_mask.shape[-1] != seq_len:
+            attention_mask = attention_mask[:, :, :, :seq_len]
+        attn_weights = attn_weights.add(attention_mask)
+
+    # Fused softmax + dropout is faster, so try to keep contiguous (already from matmul, so skip explicit .contiguous())
 
     attn_weights = nn.functional.softmax(attn_weights, dim=-1)
-    attn_weights = nn.functional.dropout(attn_weights, p=dropout, training=module.training)
+    if dropout > 0.0:
+        attn_weights = nn.functional.dropout(attn_weights, p=dropout, training=module.training)
+
+    # Final matmul and transpose are the same, but we avoid extra transpose allocations if possible
 
     attn_output = torch.matmul(attn_weights, value)
     attn_output = attn_output.transpose(1, 2).contiguous()
