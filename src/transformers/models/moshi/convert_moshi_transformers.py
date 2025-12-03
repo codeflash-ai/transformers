@@ -43,7 +43,11 @@ def assert_param_count(model_1, model_2):
 
 
 def param_count(model):
-    return sum(p[1].numel() for p in model.named_parameters() if "final_proj" not in p[0])
+    s = 0
+    for name, param in model.named_parameters():
+        if "final_proj" not in name:
+            s += param.numel()
+    return s
 
 
 def _grab_best_device(use_gpu=True):
