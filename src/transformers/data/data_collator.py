@@ -165,12 +165,23 @@ def numpy_default_data_collator(features: list[InputDataClass]) -> dict[str, Any
     # Ensure that tensor is created with the correct type
     # (it should be automatically the case, but let's make sure of it.)
     if "label" in first and first["label"] is not None:
-        label = first["label"].item() if isinstance(first["label"], np.ndarray) else first["label"]
-        dtype = np.int64 if isinstance(label, int) else np.float32
-        batch["labels"] = np.array([f["label"] for f in features], dtype=dtype)
+        # micro-opt: avoid in-loop attribute lookup, precompute items
+        if isinstance(first["label"], np.ndarray):
+            arr = np.empty(len(features), dtype=first["label"].dtype)
+            for i, f in enumerate(features):
+                arr[i] = f["label"]
+            batch["labels"] = arr
+        else:
+            # Avoid repeated isinstance checks inside listcomp
+            dtype = np.int64 if isinstance(first["label"], int) else np.float32
+            batch["labels"] = np.array([f["label"] for f in features], dtype=dtype)
     elif "label_ids" in first and first["label_ids"] is not None:
         if isinstance(first["label_ids"], np.ndarray):
-            batch["labels"] = np.stack([f["label_ids"] for f in features])
+            # try to allocate and fill output in-place for stack, small speedup over np.stack(listcomp)
+            arr = np.empty((len(features),) + first["label_ids"].shape, dtype=first["label_ids"].dtype)
+            for i, f in enumerate(features):
+                arr[i] = f["label_ids"]
+            batch["labels"] = arr
         else:
             dtype = np.int64 if isinstance(first["label_ids"][0], int) else np.float32
             batch["labels"] = np.array([f["label_ids"] for f in features], dtype=dtype)
@@ -180,7 +191,10 @@ def numpy_default_data_collator(features: list[InputDataClass]) -> dict[str, Any
     for k, v in first.items():
         if k not in ("label", "label_ids") and v is not None and not isinstance(v, str):
             if isinstance(v, np.ndarray):
-                batch[k] = np.stack([f[k] for f in features])
+                arr = np.empty((len(features),) + v.shape, dtype=v.dtype)
+                for i, f in enumerate(features):
+                    arr[i] = f[k]
+                batch[k] = arr
             else:
                 batch[k] = np.array([f[k] for f in features])
 
