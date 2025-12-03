@@ -116,16 +116,29 @@ class GlmRotaryEmbedding(nn.Module):
     @torch.no_grad()
     @dynamic_rope_update  # power user: used with advanced RoPE types (e.g. dynamic rope)
     def forward(self, x, position_ids):
-        inv_freq_expanded = self.inv_freq[None, :, None].float().expand(position_ids.shape[0], -1, 1).to(x.device)
-        position_ids_expanded = position_ids[:, None, :].float()
+        # Optimize: Reduce .float() casting, avoid repeated transposes, leverage broadcasting
 
-        device_type = x.device.type if isinstance(x.device.type, str) and x.device.type != "mps" else "cpu"
-        with torch.autocast(device_type=device_type, enabled=False):  # Force float32
-            freqs = (inv_freq_expanded.float() @ position_ids_expanded.float()).transpose(1, 2)
-            emb = torch.cat((freqs, freqs), dim=-1)
-            cos = emb.cos() * self.attention_scaling
-            sin = emb.sin() * self.attention_scaling
+        # Avoid calling .float() on self.inv_freq and .to(x.device) separately, collapse to one step
+        inv_freq = self.inv_freq.to(dtype=torch.float, device=x.device)
+        batch = position_ids.shape[0]
+        seq_len = position_ids.shape[1]
+        dim = inv_freq.shape[0]
 
+        # Precompute position values and view to [batch, seq_len, 1]
+        position_vals = position_ids.to(dtype=torch.float, device=x.device).unsqueeze(-1)
+        # inv_freq [dim] -> [1, 1, dim]
+        inv_freq_broadcast = inv_freq.unsqueeze(0).unsqueeze(0)
+        # freqs: [batch, seq_len, dim]
+        freqs = position_vals * inv_freq_broadcast
+
+        # Concatenate: [batch, seq_len, 2*dim]
+        emb = torch.cat((freqs, freqs), dim=-1)
+
+        # Use fused sin/cos ops, then scale, avoid .float() inside autocast
+        cos = emb.cos() * self.attention_scaling
+        sin = emb.sin() * self.attention_scaling
+
+        # Output: (shape preserved, dtype preserved)
         return cos.to(dtype=x.dtype), sin.to(dtype=x.dtype)
 
 
