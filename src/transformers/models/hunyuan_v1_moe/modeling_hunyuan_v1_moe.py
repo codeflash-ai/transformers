@@ -55,10 +55,20 @@ class HunYuanMoEV1RMSNorm(nn.Module):
 
     def forward(self, hidden_states):
         input_dtype = hidden_states.dtype
-        hidden_states = hidden_states.to(torch.float32)
-        variance = hidden_states.pow(2).mean(-1, keepdim=True)
-        hidden_states = hidden_states * torch.rsqrt(variance + self.variance_epsilon)
-        return self.weight * hidden_states.to(input_dtype)
+
+        # Avoid unnecessary .to() and contiguous conversion if already float32
+        if hidden_states.dtype != torch.float32:
+            hidden_states_f32 = hidden_states.float()
+        else:
+            hidden_states_f32 = hidden_states
+
+        # fused pow(2).mean computation using mul
+        variance = torch.mean(hidden_states_f32 * hidden_states_f32, dim=-1, keepdim=True)
+        normed = hidden_states_f32 * torch.rsqrt(variance + self.variance_epsilon)
+        # Avoid unnecessary cast/copy
+        if normed.dtype != input_dtype:
+            normed = normed.to(input_dtype)
+        return self.weight * normed
 
     def extra_repr(self):
         return f"{tuple(self.weight.shape)}, eps={self.variance_epsilon}"
