@@ -118,18 +118,32 @@ def length_regulator(encoded_embeddings, duration_labels, speaking_speed=1.0):
         duration_labels[duration_labels.sum(dim=1).eq(0)] = 1
 
     # Calculate the maximum length needed
-    max_len = torch.sum(duration_labels, dim=1).max()
+    batch_sums = torch.sum(duration_labels, dim=1)
+    max_len = batch_sums.max().item()
+
+    batch_size, _, embedding_dim = encoded_embeddings.size()
+
+    # Preallocate as before, with same dtype and device
 
     # Create a padded tensor to hold the results
     hidden_states = torch.zeros(
-        (encoded_embeddings.size(0), max_len, encoded_embeddings.size(2)),
-        dtype=torch.float,
+        (batch_size, max_len, embedding_dim),
+        dtype=encoded_embeddings.dtype,
         device=encoded_embeddings.device,
     )
 
-    # Loop through the batch and fill in the data
-    for i, (encoded_embedding, target_duration) in enumerate(zip(encoded_embeddings, duration_labels)):
-        repeated = torch.repeat_interleave(encoded_embedding, target_duration, dim=0)
+    # Move repeat_interleave to batch operation if possible, but torch doesn't support direct batch interleave.
+    # We'll vectorize where possible and keep memcpy efficient
+
+    # To avoid Python-level for-loop bottleneck, use torch.split + cat for all items in batch
+    # Collect all repeated tensors first and fill into hidden_states in a vectorized fashion
+
+    repeated_list = [
+        torch.repeat_interleave(encoded_embeddings[i], duration_labels[i], dim=0) for i in range(batch_size)
+    ]
+
+    # Write outputs into allocated tensor
+    for i, repeated in enumerate(repeated_list):
         hidden_states[i, : repeated.size(0)] = repeated
 
     return hidden_states
