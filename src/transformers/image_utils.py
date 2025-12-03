@@ -14,6 +14,7 @@
 
 import base64
 import os
+from collections import deque
 from collections.abc import Iterable
 from dataclasses import dataclass
 from io import BytesIO
@@ -21,6 +22,8 @@ from typing import Optional, Union
 
 import httpx
 import numpy as np
+import PIL.Image
+import PIL.ImageOps
 
 from .utils import (
     ExplicitEnum,
@@ -32,14 +35,6 @@ from .utils import (
     logging,
     requires_backends,
     to_numpy,
-)
-from .utils.constants import (  # noqa: F401
-    IMAGENET_DEFAULT_MEAN,
-    IMAGENET_DEFAULT_STD,
-    IMAGENET_STANDARD_MEAN,
-    IMAGENET_STANDARD_STD,
-    OPENAI_CLIP_MEAN,
-    OPENAI_CLIP_STD,
 )
 
 
@@ -132,14 +127,14 @@ def concatenate_list(input_list):
 
 
 def valid_images(imgs):
-    # If we have an list of images, make sure every image is valid
-    if isinstance(imgs, (list, tuple)):
-        for img in imgs:
-            if not valid_images(img):
-                return False
-    # If not a list of tuple, we have been given a single image or batched tensor of images
-    elif not is_valid_image(imgs):
-        return False
+    # Iteratively validate images/batches/lists for improved performance (no recursion)
+    queue = deque([imgs])
+    while queue:
+        img = queue.pop()
+        if isinstance(img, (list, tuple)):
+            queue.extend(img)
+        elif not is_valid_image(img):
+            return False
     return True
 
 
@@ -214,6 +209,11 @@ def make_flat_list_of_images(
         list: A list of images or a 4d array of images.
     """
     # If the input is a nested list of images, we flatten it
+    # Fast path for None or empty input
+    if not images or (isinstance(images, (list, tuple)) and len(images) == 0):
+        raise ValueError(f"Could not make a flat list of images from {images}")
+
+    # If the input is a nested list of images, we flatten it
     if (
         isinstance(images, (list, tuple))
         and all(isinstance(images_i, (list, tuple)) for images_i in images)
@@ -222,15 +222,16 @@ def make_flat_list_of_images(
         return [img for img_list in images for img in img_list]
 
     if isinstance(images, (list, tuple)) and is_valid_list_of_images(images):
-        if is_pil_image(images[0]) or images[0].ndim == expected_ndims:
+        first_img = images[0]
+        if is_pil_image(first_img) or getattr(first_img, "ndim", None) == expected_ndims:
             return images
-        if images[0].ndim == expected_ndims + 1:
+        if getattr(first_img, "ndim", None) == expected_ndims + 1:
             return [img for img_list in images for img in img_list]
 
     if is_valid_image(images):
-        if is_pil_image(images) or images.ndim == expected_ndims:
+        if is_pil_image(images) or getattr(images, "ndim", None) == expected_ndims:
             return [images]
-        if images.ndim == expected_ndims + 1:
+        if getattr(images, "ndim", None) == expected_ndims + 1:
             return list(images)
 
     raise ValueError(f"Could not make a flat list of images from {images}")

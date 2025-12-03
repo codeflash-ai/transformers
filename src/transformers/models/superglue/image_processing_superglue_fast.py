@@ -247,38 +247,65 @@ class SuperGlueImageProcessorFast(BaseImageProcessorFast):
         from .image_processing_superglue import validate_and_format_image_pairs
 
         images = validate_and_format_image_pairs(images)
-        images = [to_numpy_array(image) for image in images]
-        image_pairs = [images[i : i + 2] for i in range(0, len(images), 2)]
+        # Preallocate numpy arrays
+        get_array = to_numpy_array
+        num_images = len(images)
+        images_arr = [get_array(image) for image in images]  # list of numpy arrays
+
+        # Build image pairs with minimal copying
+        image_pairs = []
+        for i in range(0, num_images, 2):
+            image_pairs.append([images_arr[i], images_arr[i + 1]])
 
         results = []
+        append_result = results.append
         for image_pair, pair_output in zip(image_pairs, keypoint_matching_output):
-            height0, width0 = image_pair[0].shape[:2]
-            height1, width1 = image_pair[1].shape[:2]
-            plot_image = torch.zeros((max(height0, height1), width0 + width1, 3), dtype=torch.uint8)
-            plot_image[:height0, :width0] = torch.from_numpy(image_pair[0])
-            plot_image[:height1, width0:] = torch.from_numpy(image_pair[1])
+            img0, img1 = image_pair
+            height0, width0 = img0.shape[:2]
+            height1, width1 = img1.shape[:2]
+            max_height = max(height0, height1)
+            comb_width = width0 + width1
 
-            plot_image_pil = Image.fromarray(plot_image.numpy())
+            # Preallocate torch image buffer
+            plot_image = torch.zeros((max_height, comb_width, 3), dtype=torch.uint8)
+            plot_image[:height0, :width0] = torch.from_numpy(img0)
+            plot_image[:height1, width0:] = torch.from_numpy(img1)
+
+            plot_np = plot_image.numpy()
+            plot_image_pil = Image.fromarray(plot_np)
             draw = ImageDraw.Draw(plot_image_pil)
 
             keypoints0_x, keypoints0_y = pair_output["keypoints0"].unbind(1)
             keypoints1_x, keypoints1_y = pair_output["keypoints1"].unbind(1)
+            width0_shift = width0  # Precompute for efficiency
+
+            get_color = self._get_color
+            ellipse_width = 2
+            ellipse_fill = "black"
+            line_width = 3
             for keypoint0_x, keypoint0_y, keypoint1_x, keypoint1_y, matching_score in zip(
                 keypoints0_x, keypoints0_y, keypoints1_x, keypoints1_y, pair_output["matching_scores"]
             ):
-                color = self._get_color(matching_score)
+                color = get_color(matching_score)
+                x0i, y0i = int(keypoint0_x), int(keypoint0_y)
+                x1i, y1i = int(keypoint1_x) + width0_shift, int(keypoint1_y)
+                # Draw line
                 draw.line(
-                    (keypoint0_x, keypoint0_y, keypoint1_x + width0, keypoint1_y),
+                    (x0i, y0i, x1i, y1i),
                     fill=color,
-                    width=3,
+                    width=line_width,
                 )
-                draw.ellipse((keypoint0_x - 2, keypoint0_y - 2, keypoint0_x + 2, keypoint0_y + 2), fill="black")
+                # Draw ellipses
                 draw.ellipse(
-                    (keypoint1_x + width0 - 2, keypoint1_y - 2, keypoint1_x + width0 + 2, keypoint1_y + 2),
-                    fill="black",
+                    (x0i - ellipse_width, y0i - ellipse_width, x0i + ellipse_width, y0i + ellipse_width),
+                    fill=ellipse_fill,
+                )
+                draw.ellipse(
+                    (x1i - ellipse_width, y1i - ellipse_width, x1i + ellipse_width, y1i + ellipse_width),
+                    fill=ellipse_fill,
                 )
 
-            results.append(plot_image_pil)
+            append_result(plot_image_pil)
         return results
 
     def _get_color(self, score):
