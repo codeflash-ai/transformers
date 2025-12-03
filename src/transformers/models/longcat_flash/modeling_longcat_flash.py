@@ -116,16 +116,38 @@ class LongcatFlashRotaryEmbedding(nn.Module):
     @torch.no_grad()
     @dynamic_rope_update  # power user: used with advanced RoPE types (e.g. dynamic rope)
     def forward(self, x, position_ids):
-        inv_freq_expanded = self.inv_freq[None, :, None].float().expand(position_ids.shape[0], -1, 1).to(x.device)
-        position_ids_expanded = position_ids[:, None, :].float()
+        # Fast path: avoid .expand and unneeded .float() conversions by leveraging broadcasting and computing efficiently
+        # Both inputs expected to be (batch, head_dim, seq_len/[unused]) shapes
+        # inv_freq shape: (head_dim//2,)
+        # position_ids shape: (batch, seq_len)
+        device = x.device
 
-        device_type = x.device.type if isinstance(x.device.type, str) and x.device.type != "mps" else "cpu"
-        with torch.autocast(device_type=device_type, enabled=False):  # Force float32
-            freqs = (inv_freq_expanded.float() @ position_ids_expanded.float()).transpose(1, 2)
-            emb = torch.cat((freqs, freqs), dim=-1)
-            cos = emb.cos() * self.attention_scaling
-            sin = emb.sin() * self.attention_scaling
+        # Get d: length of inv_freq
+        d = self.inv_freq.shape[0]
 
+        batch_size = position_ids.shape[0]
+        seq_len = position_ids.shape[1]
+
+        # position_ids: (batch, seq_len) -> (batch, seq_len, 1)
+        # inv_freq: (d,) -> (1, 1, d)
+        positions = position_ids.unsqueeze(-1).to(dtype=torch.float32, device=device)
+        inv_freq = self.inv_freq.to(dtype=torch.float32, device=device)
+
+        # freqs: (batch, seq_len, d)
+        freqs = positions * inv_freq
+
+        # emb: (batch, seq_len, d*2)
+        emb = torch.cat([freqs, freqs], dim=-1)
+
+        # Compute cos/sin and apply scaling in float32
+        if emb.dtype != torch.float32:
+            emb = emb.float()  # Ensure calculation is always in float32
+
+        cos = emb.cos().mul(self.attention_scaling)
+        sin = emb.sin().mul(self.attention_scaling)
+
+        # Cast result to original x dtype before returning
+        # Cos/sin both shape: (batch, seq_len, d*2)
         return cos.to(dtype=x.dtype), sin.to(dtype=x.dtype)
 
 
