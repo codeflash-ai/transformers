@@ -228,16 +228,30 @@ class GPT2Tokenizer(PreTrainedTokenizer):
 
     def build_inputs_with_special_tokens(self, token_ids_0, token_ids_1=None):
         if self.add_bos_token:
-            bos_token_ids = [self.bos_token_id]
+            bos_token_id = self.bos_token_id
+            if token_ids_1 is None:
+                # Single sequence
+                # Avoid extra list concatenation: build output directly
+                result = [bos_token_id]
+                result.extend(token_ids_0)
+                return result
+            else:
+                # Paired sequence
+                # Efficient concatenation: pre-size the list and extend
+                result = [bos_token_id]
+                result.extend(token_ids_0)
+                result.append(bos_token_id)
+                result.extend(token_ids_1)
+                return result
         else:
-            bos_token_ids = []
-
-        output = bos_token_ids + token_ids_0
-
-        if token_ids_1 is None:
-            return output
-
-        return output + bos_token_ids + token_ids_1
+            if token_ids_1 is None:
+                # Just copy input
+                return list(token_ids_0)
+            else:
+                # Paired sequence, concatenate efficiently
+                result = list(token_ids_0)
+                result.extend(token_ids_1)
+                return result
 
     def get_special_tokens_mask(
         self, token_ids_0: list[int], token_ids_1: Optional[list[int]] = None, already_has_special_tokens: bool = False
