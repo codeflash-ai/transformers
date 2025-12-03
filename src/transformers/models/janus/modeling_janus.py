@@ -640,11 +640,7 @@ class JanusVQVAEVectorQuantizer(nn.Module):
         hidden_state_flattened = hidden_state.view(-1, self.embedding_dim)
 
         # distances from z to embeddings e_j (z - e)^2 = z^2 + e^2 - 2 e * z
-        distances = (
-            torch.sum(hidden_state_flattened**2, dim=1, keepdim=True)
-            + torch.sum(self.embedding.weight**2, dim=1)
-            - 2 * torch.einsum("bd,dn->bn", hidden_state_flattened, self.embedding.weight.transpose(0, 1))
-        )
+        distances = torch.cdist(hidden_state_flattened, self.embedding.weight, p=2) ** 2
 
         min_encoding_indices = torch.argmin(distances, dim=1)
         hidden_state_quant = self.embedding(min_encoding_indices).view(hidden_state.shape)
