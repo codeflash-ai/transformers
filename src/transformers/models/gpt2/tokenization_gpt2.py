@@ -47,14 +47,13 @@ def bytes_to_unicode():
     bs = (
         list(range(ord("!"), ord("~") + 1)) + list(range(ord("¡"), ord("¬") + 1)) + list(range(ord("®"), ord("ÿ") + 1))
     )
-    cs = bs[:]
-    n = 0
-    for b in range(2**8):
-        if b not in bs:
-            bs.append(b)
-            cs.append(2**8 + n)
-            n += 1
-    cs = [chr(n) for n in cs]
+    # Pre-allocate the full list of 256 bytes to avoid repeated membership comparisons
+    bs_set = set(bs)
+    extra_bs = [b for b in range(256) if b not in bs_set]
+    cs = bs + [256 + n for n in range(len(extra_bs))]
+    bs.extend(extra_bs)
+    # Use map and a generator expression to build the cs list efficiently
+    cs = list(map(chr, cs))
     return dict(zip(bs, cs))
 
 
