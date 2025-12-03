@@ -115,22 +115,37 @@ def validate_and_format_image_pairs(images: ImageInput):
         " - A list of pairs of 3D arrays.",
     )
 
+    ImageTypePIL = ImageType.PIL
+
     def _is_valid_image(image):
         """images is a PIL Image or a 3D array."""
         return is_pil_image(image) or (
-            is_valid_image(image) and get_image_type(image) != ImageType.PIL and len(image.shape) == 3
+            is_valid_image(image)
+            and get_image_type(image) != ImageTypePIL
+            and getattr(image, "ndim", getattr(image, "shape", None) and len(image.shape)) == 3
         )
 
     if isinstance(images, list):
-        if len(images) == 2 and all((_is_valid_image(image)) for image in images):
-            return images
+        if len(images) == 2:
+            # Cache validity inline for both images
+            valid1 = _is_valid_image(images[0])
+            valid2 = _is_valid_image(images[1])
+            if valid1 and valid2:
+                return images
+        # Optimize the nested list handling branch
         if all(
             isinstance(image_pair, list)
             and len(image_pair) == 2
-            and all(_is_valid_image(image) for image in image_pair)
+            and _is_valid_image(image_pair[0])
+            and _is_valid_image(image_pair[1])
             for image_pair in images
         ):
-            return [image for image_pair in images for image in image_pair]
+            # Efficiently flatten
+            out = []
+            for image_pair in images:
+                out.append(image_pair[0])
+                out.append(image_pair[1])
+            return out
     raise ValueError(error_message)
 
 
