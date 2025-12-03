@@ -630,17 +630,22 @@ class Wav2Vec2BertPreTrainedModel(PreTrainedModel):
 
         add_adapter = self.config.add_adapter if add_adapter is None else add_adapter
 
-        def _conv_out_length(input_length, kernel_size, stride, padding):
-            # 1D convolutional layer output length formula taken
-            # from https://pytorch.org/docs/stable/generated/torch.nn.Conv1d.html
-            return torch.div(input_length + 2 * padding - kernel_size, stride, rounding_mode="floor") + 1
+        # Use local variables to avoid repeated attribute lookups in the loop for better performance
+        cfg = self.config
 
         if add_adapter:
-            padding = self.config.adapter_kernel_size // 2
-            for _ in range(self.config.num_adapter_layers):
-                input_lengths = _conv_out_length(
-                    input_lengths, self.config.adapter_kernel_size, self.config.adapter_stride, padding
-                )
+            kernel_size = cfg.adapter_kernel_size
+            stride = cfg.adapter_stride
+            padding = kernel_size // 2
+            num_layers = cfg.num_adapter_layers
+
+            # Precompute static values outside the loop for efficiency
+            ks2p = 2 * padding - kernel_size
+
+            # Use torch.div only once per iteration, and avoid function call overhead
+            for _ in range(num_layers):
+                # input_lengths = torch.div(input_lengths + 2 * padding - kernel_size, stride, rounding_mode="floor") + 1
+                input_lengths = torch.div(input_lengths + ks2p, stride, rounding_mode="floor") + 1
 
         return input_lengths
 
