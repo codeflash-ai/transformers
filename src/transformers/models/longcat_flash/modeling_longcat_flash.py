@@ -55,10 +55,15 @@ class LongcatFlashRMSNorm(nn.Module):
 
     def forward(self, hidden_states):
         input_dtype = hidden_states.dtype
-        hidden_states = hidden_states.to(torch.float32)
-        variance = hidden_states.pow(2).mean(-1, keepdim=True)
-        hidden_states = hidden_states * torch.rsqrt(variance + self.variance_epsilon)
-        return self.weight * hidden_states.to(input_dtype)
+        if input_dtype != torch.float32:
+            hidden_states = hidden_states.to(dtype=torch.float32)
+        # Use fused and in-place ops where possible for speed and reduced memory usage
+        variance = torch.mean(hidden_states * hidden_states, dim=-1, keepdim=True)
+        inv_rms = torch.rsqrt(variance + self.variance_epsilon)
+        hidden_states = hidden_states * inv_rms
+        if input_dtype != torch.float32:
+            hidden_states = hidden_states.to(dtype=input_dtype)
+        return self.weight * hidden_states
 
     def extra_repr(self):
         return f"{tuple(self.weight.shape)}, eps={self.variance_epsilon}"
