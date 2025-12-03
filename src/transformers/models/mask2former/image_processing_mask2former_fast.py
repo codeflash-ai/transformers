@@ -531,25 +531,30 @@ class Mask2FormerImageProcessorFast(BaseImageProcessorFast):
             pred_masks = (mask_pred > 0).float()
 
             # Calculate average mask prob
-            mask_scores_per_image = (mask_pred.sigmoid().flatten(1) * pred_masks.flatten(1)).sum(1) / (
-                pred_masks.flatten(1).sum(1) + 1e-6
+            mask_pred_sigmoid = mask_pred.sigmoid()
+            pred_masks_flat = pred_masks.flatten(1)
+            mask_scores_per_image = (mask_pred_sigmoid.flatten(1) * pred_masks_flat).sum(1) / (
+                pred_masks_flat.sum(1) + 1e-6
             )
             pred_scores = scores_per_image * mask_scores_per_image
             pred_classes = labels_per_image
-
-            segmentation = torch.zeros((384, 384)) - 1
             if target_sizes is not None:
-                segmentation = torch.zeros(target_sizes[i]) - 1
+                tsz_h, tsz_w = target_sizes[i]
+                segmentation = torch.empty((tsz_h, tsz_w), dtype=pred_scores.dtype, device=device)
+                segmentation.fill_(-1)
                 pred_masks = torch.nn.functional.interpolate(
-                    pred_masks.unsqueeze(0), size=target_sizes[i], mode="nearest"
+                    pred_masks.unsqueeze(0), size=(tsz_h, tsz_w), mode="nearest"
                 )[0]
+
+            else:
+                segmentation = torch.empty((384, 384), dtype=pred_scores.dtype, device=device)
+                segmentation.fill_(-1)
 
             instance_maps, segments = [], []
             current_segment_id = 0
             for j in range(num_queries):
                 score = pred_scores[j].item()
-
-                if not torch.all(pred_masks[j] == 0) and score >= threshold:
+                if pred_masks[j].any() and score >= threshold:
                     segmentation[pred_masks[j] == 1] = current_segment_id
                     segments.append(
                         {
@@ -564,7 +569,10 @@ class Mask2FormerImageProcessorFast(BaseImageProcessorFast):
 
             # Return segmentation map in run-length encoding (RLE) format
             if return_coco_annotation:
-                segmentation = convert_segmentation_to_rle(segmentation)
+                segmentation_cpu = segmentation.cpu() if segmentation.is_cuda else segmentation
+                segmentation = convert_segmentation_to_rle(segmentation_cpu)
+
+            # Return a concatenated tensor of binary instance maps
 
             # Return a concatenated tensor of binary instance maps
             if return_binary_maps and len(instance_maps) != 0:
