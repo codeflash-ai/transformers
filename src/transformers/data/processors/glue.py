@@ -313,15 +313,25 @@ class Sst2Processor(DataProcessor):
 
     def _create_examples(self, lines, set_type):
         """Creates examples for the training, dev and test sets."""
-        examples = []
+        # Avoid repeatedly storing attribute access in loop
+        InputExample_ = InputExample
         text_index = 1 if set_type == "test" else 0
-        for i, line in enumerate(lines):
-            if i == 0:
-                continue
-            guid = f"{set_type}-{i}"
-            text_a = line[text_index]
-            label = None if set_type == "test" else line[1]
-            examples.append(InputExample(guid=guid, text_a=text_a, text_b=None, label=label))
+        label_index = 1
+        # Pre-calculate range and length to avoid checking i == 0 every iteration
+        # Also eliminates the need for enumerate (i in range(1, len(lines)))
+        if not lines:
+            return []
+        # Use list comprehension for faster iteration and construction
+        if set_type == "test":
+            examples = [
+                InputExample_(guid=f"{set_type}-{i}", text_a=line[text_index], text_b=None, label=None)
+                for i, line in enumerate(lines[1:], start=1)
+            ]
+        else:
+            examples = [
+                InputExample_(guid=f"{set_type}-{i}", text_a=line[text_index], text_b=None, label=line[label_index])
+                for i, line in enumerate(lines[1:], start=1)
+            ]
         return examples
 
 
