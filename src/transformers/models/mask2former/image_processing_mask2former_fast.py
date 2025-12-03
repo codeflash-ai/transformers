@@ -73,21 +73,31 @@ def convert_segmentation_map_to_binary_masks_fast(
     if ignore_index is not None:
         all_labels = all_labels[all_labels != ignore_index]  # drop background label if applicable
 
-    binary_masks = [(segmentation_map == i) for i in all_labels]
-    if binary_masks:
-        binary_masks = torch.stack(binary_masks, dim=0)
+    # Fast path: use broadcasting & vectorization to build binary masks in one op, if any labels exist
+    if all_labels.numel() > 0:
+        # shape: [num_labels, H, W, ...]
+        masks = segmentation_map == all_labels[:, None, None]
+        binary_masks = masks
     else:
         binary_masks = torch.zeros((0, *segmentation_map.shape), device=segmentation_map.device)
 
     # Convert instance ids to class ids
     if instance_id_to_semantic_id is not None:
-        labels = torch.zeros(all_labels.shape[0], device=segmentation_map.device)
-
-        for i, label in enumerate(all_labels):
-            class_id = instance_id_to_semantic_id[(label.item() + 1 if do_reduce_labels else label.item())]
-            labels[i] = class_id - 1 if do_reduce_labels else class_id
+        # Vectorize the mapping step for labels
+        # labels_to_map shape: [num_labels]
+        if do_reduce_labels:
+            mapped_labels = torch.as_tensor(
+                [instance_id_to_semantic_id[label.item() + 1] - 1 for label in all_labels],
+                device=segmentation_map.device,
+            )
+        else:
+            mapped_labels = torch.as_tensor(
+                [instance_id_to_semantic_id[label.item()] for label in all_labels], device=segmentation_map.device
+            )
+        labels = mapped_labels
     else:
         labels = all_labels
+
     return binary_masks.float(), labels.long()
 
 
