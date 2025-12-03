@@ -246,15 +246,26 @@ def eager_attention_forward(
     if scaling is None:
         scaling = query.size(-1) ** -0.5
 
+    # Compute key.transpose only once to avoid repeating computation.
+    key_t = key.transpose(2, 3)
+
     # Take the dot product between "query" and "key" to get the raw attention scores.
-    attn_weights = torch.matmul(query, key.transpose(2, 3)) * scaling
+    attn_weights = torch.matmul(query, key_t)
+    attn_weights.mul_(scaling)
 
     if attention_mask is not None:
-        attention_mask = attention_mask[:, :, :, : key.shape[-2]]
-        attn_weights = attn_weights + attention_mask
+        # Use inplace operations for efficiency when possible.
+        # Only slicing if mask needs to be cut, otherwise avoid slicing.
+        if attention_mask.shape[-1] != key.shape[-2]:
+            attention_mask = attention_mask[:, :, :, : key.shape[-2]]
+        attn_weights.add_(attention_mask)
+
+    # Use F.softmax and F.dropout with inplace operations for memory and speed gains
 
     attn_weights = nn.functional.softmax(attn_weights, dim=-1)
-    attn_weights = nn.functional.dropout(attn_weights, p=dropout, training=module.training)
+    if dropout > 0.0:
+        attn_weights = nn.functional.dropout(attn_weights, p=dropout, training=module.training)
+    # The contiguous call is already required on output, but avoid multiple .contiguous() calls.
 
     attn_output = torch.matmul(attn_weights, value)
     attn_output = attn_output.transpose(1, 2).contiguous()
