@@ -159,11 +159,23 @@ def convert_segmentation_to_rle(segmentation):
     Returns:
         `list[List]`: A list of lists, where each list is the run-length encoding of a segment / class id.
     """
-    segment_ids = torch.unique(segmentation)
+    # Convert segmentation to numpy if necessary, and extract segment ids using numpy
+    is_torch = isinstance(segmentation, torch.Tensor)
+    if is_torch:
+        seg_np = segmentation.cpu().numpy()
+    else:
+        seg_np = segmentation
+
+    # Get unique ids with numpy for speed
+    segment_ids = np.unique(seg_np)
+
+    # Run RLE extraction using numpy masks
+    from transformers.models.mask2former.image_processing_mask2former import binary_mask_to_rle
 
     run_length_encodings = []
     for idx in segment_ids:
-        mask = torch.where(segmentation == idx, 1, 0)
+        # Fast numpy mask extraction; no .where needed, just direct boolean mask
+        mask = (seg_np == idx).astype(np.uint8)
         rle = binary_mask_to_rle(mask)
         run_length_encodings.append(rle)
 
