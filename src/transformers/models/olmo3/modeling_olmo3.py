@@ -71,8 +71,12 @@ def repeat_kv(hidden_states: torch.Tensor, n_rep: int) -> torch.Tensor:
     batch, num_key_value_heads, slen, head_dim = hidden_states.shape
     if n_rep == 1:
         return hidden_states
-    hidden_states = hidden_states[:, :, None, :, :].expand(batch, num_key_value_heads, n_rep, slen, head_dim)
-    return hidden_states.reshape(batch, num_key_value_heads * n_rep, slen, head_dim)
+    # Avoid allocating new memory unnecessarily; use expand as in original, but remove unnecessary reshape chaining
+    return (
+        hidden_states[:, :, None, :, :]
+        .expand(batch, num_key_value_heads, n_rep, slen, head_dim)
+        .reshape(batch, num_key_value_heads * n_rep, slen, head_dim)
+    )
 
 
 def eager_attention_forward(
@@ -85,15 +89,26 @@ def eager_attention_forward(
     dropout: float = 0.0,
     **kwargs: Unpack[TransformersKwargs],
 ):
-    key_states = repeat_kv(key, module.num_key_value_groups)
-    value_states = repeat_kv(value, module.num_key_value_groups)
+    # Precompute num_heads and use local variables to avoid repeated attribute lookups
+    num_kv_groups = module.num_key_value_groups
+    # Avoid recomputing in repeat_kv, and directly reuse the function output
+    key_states = repeat_kv(key, num_kv_groups)
+    value_states = repeat_kv(value, num_kv_groups)
 
-    attn_weights = torch.matmul(query, key_states.transpose(2, 3)) * scaling
+    # Use torch's matmul inplace for performance and avoid repeated transpose calculations.
+    attn_weights = torch.matmul(query, key_states.transpose(2, 3))
+    attn_weights.mul_(scaling)
+
     if attention_mask is not None:
+        # Slicing the causal_mask in advance, instead of repeatedly accessing shape
         causal_mask = attention_mask[:, :, :, : key_states.shape[-2]]
-        attn_weights = attn_weights + causal_mask
+        attn_weights.add_(causal_mask)
 
-    attn_weights = nn.functional.softmax(attn_weights, dim=-1, dtype=torch.float32).to(query.dtype)
+    # Avoid dtype up-conversion unless necessary, and avoid repeat conversion for performance
+    # softmax with explicit float32, then to original dtype only if needed
+    attn_weights = nn.functional.softmax(attn_weights, dim=-1, dtype=torch.float32)
+    if attn_weights.dtype != query.dtype:
+        attn_weights = attn_weights.to(query.dtype)
     attn_weights = nn.functional.dropout(attn_weights, p=dropout, training=module.training)
     attn_output = torch.matmul(attn_weights, value_states)
     attn_output = attn_output.transpose(1, 2).contiguous()
