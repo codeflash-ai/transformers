@@ -150,7 +150,12 @@ class MixtralRMSNorm(nn.Module):
         return self.weight * hidden_states.to(input_dtype)
 
     def extra_repr(self):
-        return f"{tuple(self.weight.shape)}, eps={self.variance_epsilon}"
+        # Avoid constructing a tuple for shape when possible, and avoid repeated attribute lookups
+        shape = self.weight.shape
+        if len(shape) == 1:
+            # This is the fast-path for the common case of (hidden_size,)
+            return f"({shape[0]},), eps={self.variance_epsilon}"
+        return f"{tuple(shape)}, eps={self.variance_epsilon}"
 
 
 class MixtralRotaryEmbedding(nn.Module):
