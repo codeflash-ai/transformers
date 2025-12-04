@@ -1488,29 +1488,22 @@ def _segment_reduce(values, index, segment_reduce_fn, name):
     # unflattened. Segmented ops support vector-valued operations.
     flat_index = flatten(index)
     vector_shape = values.size()[len(index.indices.size()) :]  # torch.Size object
-    flattened_shape = torch.cat(
-        [torch.as_tensor([-1], dtype=torch.long), torch.as_tensor(vector_shape, dtype=torch.long)], dim=0
-    )
-    # changed "view" by "reshape" in the following line
-    flat_values = values.reshape(flattened_shape.tolist())
 
-    out = torch.zeros(int(flat_index.num_segments), dtype=torch.float, device=flat_values.device)
-    segment_means = out.scatter_reduce(
-        dim=0, index=flat_index.indices.long(), src=flat_values.float(), reduce=segment_reduce_fn, include_self=False
+    # Use torch.Size directly (no conversion to torch.Tensor then list),
+    # which avoids tensor construction and .tolist() overhead.
+    flattened_shape = (-1, *vector_shape)
+    flat_values = values.reshape(flattened_shape)
+
+    # No need to create a zero tensor for scatter_reduce output; scatter_reduce returns the output directly.
+    segment_means = torch.zeros(int(flat_index.num_segments), dtype=flat_values.dtype, device=flat_values.device)
+    segment_means.scatter_reduce_(
+        dim=0, index=flat_index.indices.long(), src=flat_values, reduce=segment_reduce_fn, include_self=False
     )
 
     device = index.num_segments.device
-    # Unflatten the values.
-    new_shape = torch.cat(
-        [
-            torch.as_tensor(index.batch_shape(), dtype=torch.long, device=device),
-            torch.as_tensor([index.num_segments], dtype=torch.long, device=device),
-            torch.as_tensor(vector_shape, dtype=torch.long, device=device),
-        ],
-        dim=0,
-    )
-
-    output_values = segment_means.clone().view(new_shape.tolist()).to(values.dtype)
+    # Use tuple for new_shape instead of unnecessary torch.cat and tolist().
+    new_shape = (*index.batch_shape(), index.num_segments, *vector_shape)
+    output_values = segment_means.view(new_shape).to(values.dtype)
     output_index = range_index_map(index.batch_shape(), index.num_segments)
     return output_values, output_index
 
