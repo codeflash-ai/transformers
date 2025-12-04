@@ -151,17 +151,24 @@ class SwitchTransformersDenseActDense(nn.Module):
         self.act = ACT2FN[config.dense_act_fn]
 
     def forward(self, hidden_states):
-        hidden_states = self.wi(hidden_states)
-        hidden_states = self.act(hidden_states)
-        hidden_states = self.dropout(hidden_states)
+        wi_out = self.wi(hidden_states)
+        act_out = self.act(wi_out)
+        # Using in-place dropout for memory efficiency if training
+        if self.dropout.p > 0 and self.training:
+            act_out = self.dropout(act_out)
+        else:
+            # If not in training or dropout is zero, skip unnecessary function call
+            pass
+        # Avoid redundant .to() if dtype matches
+        wo_weight_dtype = self.wo.weight.dtype
         if (
             isinstance(self.wo.weight, torch.Tensor)
-            and hidden_states.dtype != self.wo.weight.dtype
-            and self.wo.weight.dtype != torch.int8
+            and act_out.dtype != wo_weight_dtype
+            and wo_weight_dtype != torch.int8
         ):
-            hidden_states = hidden_states.to(self.wo.weight.dtype)
-        hidden_states = self.wo(hidden_states)
-        return hidden_states
+            act_out = act_out.to(wo_weight_dtype)
+        wo_out = self.wo(act_out)
+        return wo_out
 
 
 class SwitchTransformersExperts(nn.ModuleDict):
