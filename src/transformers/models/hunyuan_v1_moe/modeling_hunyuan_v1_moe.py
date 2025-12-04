@@ -398,7 +398,9 @@ class HunYuanMoEV1RotaryEmbedding(nn.Module):
             base = self.config.rope_parameters["rope_theta"] * self.config.rope_parameters["alpha"] ** (
                 self.config.head_dim / (self.config.head_dim - 2)
             )
-            inv_freq = 1.0 / (base ** (torch.arange(0, self.dim, 2).float().to(device) / self.config.head_dim))
+            inv_freq = 1.0 / (
+                base ** (torch.arange(0, self.dim, 2, device=device, dtype=torch.float) / self.config.head_dim)
+            )
             self.attention_scaling = 1.0
         else:
             rope_init_fn: Callable = self.compute_default_rope_parameters
@@ -442,16 +444,21 @@ class HunYuanMoEV1RotaryEmbedding(nn.Module):
     @torch.no_grad()
     @dynamic_rope_update  # power user: used with advanced RoPE types (e.g. dynamic rope)
     def forward(self, x, position_ids):
-        inv_freq_expanded = self.inv_freq[None, :, None].float().expand(position_ids.shape[0], -1, 1).to(x.device)
-        position_ids_expanded = position_ids[:, None, :].float()
+        # Avoid unnecessary expanding and transpose by directly broadcasting
+        seq_len = position_ids.shape[1]
+        batch_size = position_ids.shape[0]
 
-        device_type = x.device.type if isinstance(x.device.type, str) and x.device.type != "mps" else "cpu"
-        with torch.autocast(device_type=device_type, enabled=False):  # Force float32
-            freqs = (inv_freq_expanded.float() @ position_ids_expanded.float()).transpose(1, 2)
-            emb = torch.cat((freqs, freqs), dim=-1)
-            cos = emb.cos() * self.attention_scaling
-            sin = emb.sin() * self.attention_scaling
+        # Precompute expanded position_ids and inv_freq on device with right dtype
+        inv_freq = self.inv_freq.to(dtype=torch.float, device=x.device)
+        position_ids = position_ids.to(dtype=torch.float, device=x.device)
 
+        # Compute outer product efficiently: [batch, seq_len, 1] * [1, 1, dim]
+        freq = torch.einsum("bi,d->bid", position_ids, inv_freq)
+        emb = torch.cat((freq, freq), dim=-1)
+        cos = emb.cos() * self.attention_scaling
+        sin = emb.sin() * self.attention_scaling
+
+        # Cast to input dtype before returning
         return cos.to(dtype=x.dtype), sin.to(dtype=x.dtype)
 
 
