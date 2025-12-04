@@ -362,21 +362,12 @@ def _compute_softmax(scores):
     if not scores:
         return []
 
-    max_score = None
-    for score in scores:
-        if max_score is None or score > max_score:
-            max_score = score
+    max_score = max(scores)
 
-    exp_scores = []
-    total_sum = 0.0
-    for score in scores:
-        x = math.exp(score - max_score)
-        exp_scores.append(x)
-        total_sum += x
+    exp_scores = [math.exp(score - max_score) for score in scores]
+    total_sum = sum(exp_scores)
 
-    probs = []
-    for score in exp_scores:
-        probs.append(score / total_sum)
+    probs = [x / total_sum for x in exp_scores]
     return probs
 
 
