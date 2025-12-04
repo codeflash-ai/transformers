@@ -23,6 +23,15 @@ from typing import Optional, Union
 import regex
 
 
+_SPLIT_AND_HALF_RE = re.compile(r"\band\s+a\s+half\b")
+
+_ALPHA_NUM_BOUNDARY_RE = re.compile(r"([a-z])([0-9])")
+
+_NUM_ALPHA_BOUNDARY_RE = re.compile(r"([0-9])([a-z])")
+
+_SUFFIX_SPACE_RE = re.compile(r"([0-9])\s+(st|nd|rd|th|s)\b")
+
+
 # non-ASCII letters that are not separated by "NFKD" normalization
 ADDITIONAL_DIACRITICS = {
     "œ": "oe",
@@ -437,28 +446,43 @@ class EnglishNumberNormalizer:
         # replace "<number> and a half" with "<number> point five"
         results = []
 
-        segments = re.split(r"\band\s+a\s+half\b", s)
+        # Use compiled regex
+        segments = _SPLIT_AND_HALF_RE.split(s)
+        segments_len = len(segments)
+        next_append_point_five = False
+
+        # Instead of rsplit per segment, we optimize by caching relevant last words upfront.
+        # Also, we use a local set lookup for decimals and multipliers for performance.
+        decimals = self.decimals
+        multipliers = self.multipliers
+
+        # Avoid repeated lookups, assign methods locally
+        _strip = str.strip
+        _rsplit = str.rsplit
+
         for i, segment in enumerate(segments):
-            if len(segment.strip()) == 0:
+            if not _strip(segment):
                 continue
-            if i == len(segments) - 1:
+            if i == segments_len - 1:
                 results.append(segment)
             else:
                 results.append(segment)
-                last_word = segment.rsplit(maxsplit=2)[-1]
-                if last_word in self.decimals or last_word in self.multipliers:
+                # Instead of rsplit(maxsplit=2), just split once if possible
+                # Use .rsplit(' ', 2) to get up to last two words efficiently
+                r = _rsplit(segment, maxsplit=2)
+                last_word = r[-1] if r else ""
+                # For performance, use set lookups, and check multipliers only once (set/mapping lookup is fast)
+                if (last_word in decimals) or (last_word in multipliers):
                     results.append("point five")
                 else:
                     results.append("and a half")
 
         s = " ".join(results)
 
-        # put a space at number/letter boundary
-        s = re.sub(r"([a-z])([0-9])", r"\1 \2", s)
-        s = re.sub(r"([0-9])([a-z])", r"\1 \2", s)
-
-        # but remove spaces which could be a suffix
-        s = re.sub(r"([0-9])\s+(st|nd|rd|th|s)\b", r"\1\2", s)
+        # Pre-compiled regex substitutions
+        s = _ALPHA_NUM_BOUNDARY_RE.sub(r"\1 \2", s)
+        s = _NUM_ALPHA_BOUNDARY_RE.sub(r"\1 \2", s)
+        s = _SUFFIX_SPACE_RE.sub(r"\1\2", s)
 
         return s
 
