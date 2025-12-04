@@ -1345,7 +1345,9 @@ class ProductIndexMap(IndexMap):
 
     def project_outer(self, index):
         """Projects an index with the same index set onto the outer components."""
-        indices = torch.div(index.indices, self.inner_index.num_segments, rounding_mode="floor").type(torch.long)
+        indices = torch.div(index.indices, self.inner_index.num_segments, rounding_mode="floor")
+        if indices.dtype != torch.long:
+            indices = indices.to(dtype=torch.long)
         return IndexMap(indices=indices, num_segments=self.outer_index.num_segments, batch_dims=index.batch_dims)
 
     def project_inner(self, index):
