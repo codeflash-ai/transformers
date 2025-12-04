@@ -30,27 +30,18 @@ from ...models.bert import BasicTokenizer
 from ...utils import logging
 
 
+_ARTICLE_RE = re.compile(r"\b(a|an|the)\b", re.UNICODE)
+
+_PUNCTUATION = set(string.punctuation)
+
+
 logger = logging.get_logger(__name__)
 
 
 def normalize_answer(s):
     """Lower text and remove punctuation, articles and extra whitespace."""
-
-    def remove_articles(text):
-        regex = re.compile(r"\b(a|an|the)\b", re.UNICODE)
-        return re.sub(regex, " ", text)
-
-    def white_space_fix(text):
-        return " ".join(text.split())
-
-    def remove_punc(text):
-        exclude = set(string.punctuation)
-        return "".join(ch for ch in text if ch not in exclude)
-
-    def lower(text):
-        return text.lower()
-
-    return white_space_fix(remove_articles(remove_punc(lower(s))))
+    # Optimize by reducing nested function calls and pre-compiling regex/set
+    return _white_space_fix(_remove_articles(_remove_punc(_lower(s))))
 
 
 def get_tokens(s):
@@ -86,9 +77,23 @@ def get_raw_scores(examples, preds):
     exact_scores = {}
     f1_scores = {}
 
+    # Build a cache of normalize_answer results to avoid repeated computation
+    norm_cache = {}
+
+    def norm(text: str) -> str:
+        # Only cache non-empty strings to avoid extra empty key pressure
+        if text == "":
+            return ""
+        if text in norm_cache:
+            return norm_cache[text]
+        ans = normalize_answer(text)
+        norm_cache[text] = ans
+        return ans
+
     for example in examples:
         qas_id = example.qas_id
-        gold_answers = [answer["text"] for answer in example.answers if normalize_answer(answer["text"])]
+        # Use cache for gold answer normalization and filter
+        gold_answers = [answer["text"] for answer in example.answers if norm(answer["text"])]
 
         if not gold_answers:
             # For unanswerable questions, only correct answer is empty string
@@ -99,8 +104,28 @@ def get_raw_scores(examples, preds):
             continue
 
         prediction = preds[qas_id]
-        exact_scores[qas_id] = max(compute_exact(a, prediction) for a in gold_answers)
-        f1_scores[qas_id] = max(compute_f1(a, prediction) for a in gold_answers)
+
+        # Use cache when normalizing gold answers by passing norm through compute_exact/f1
+        def compute_exact_cached(a: str, b: str) -> int:
+            return int(norm(a) == norm(b))
+
+        def compute_f1_cached(a: str, b: str) -> float:
+            gold_toks = norm(a).split()
+            pred_toks = norm(b).split()
+            if len(gold_toks) == 0 or len(pred_toks) == 0:
+                return int(gold_toks == pred_toks)
+            gold_counter = collections.Counter(gold_toks)
+            pred_counter = collections.Counter(pred_toks)
+            num_same = sum(min(gold_counter[tok], pred_counter[tok]) for tok in gold_counter if tok in pred_counter)
+            if num_same == 0:
+                return 0
+            precision = 1.0 * num_same / len(pred_toks)
+            recall = 1.0 * num_same / len(gold_toks)
+            f1 = (2 * precision * recall) / (precision + recall)
+            return f1
+
+        exact_scores[qas_id] = max(compute_exact_cached(a, prediction) for a in gold_answers)
+        f1_scores[qas_id] = max(compute_f1_cached(a, prediction) for a in gold_answers)
 
     return exact_scores, f1_scores
 
@@ -777,3 +802,20 @@ def compute_predictions_log_probs(
             writer.write(json.dumps(scores_diff_json, indent=4) + "\n")
 
     return all_predictions
+
+
+def _remove_articles(text: str) -> str:
+    return _ARTICLE_RE.sub(" ", text)
+
+
+def _white_space_fix(text: str) -> str:
+    return " ".join(text.split())
+
+
+def _remove_punc(text: str) -> str:
+    # Avoid repeated set construction
+    return "".join(ch for ch in text if ch not in _PUNCTUATION)
+
+
+def _lower(text: str) -> str:
+    return text.lower()
