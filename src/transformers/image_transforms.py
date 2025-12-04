@@ -74,11 +74,13 @@ def to_channel_dimension_format(
     if input_channel_dim == target_channel_dim:
         return image
 
+    ndim = image.ndim
+    pre_axes = tuple(range(ndim - 3))
     if target_channel_dim == ChannelDimension.FIRST:
-        axes = list(range(image.ndim - 3)) + [image.ndim - 1, image.ndim - 3, image.ndim - 2]
+        axes = pre_axes + (ndim - 1, ndim - 3, ndim - 2)
         image = image.transpose(axes)
     elif target_channel_dim == ChannelDimension.LAST:
-        axes = list(range(image.ndim - 3)) + [image.ndim - 2, image.ndim - 1, image.ndim - 3]
+        axes = pre_axes + (ndim - 2, ndim - 1, ndim - 3)
         image = image.transpose(axes)
     else:
         raise ValueError(f"Unsupported channel dimension format: {channel_dim}")
