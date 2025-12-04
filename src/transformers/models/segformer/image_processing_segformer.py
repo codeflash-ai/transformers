@@ -234,17 +234,17 @@ class SegformerImageProcessor(BaseImageProcessor):
         input_data_format: Optional[Union[str, ChannelDimension]] = None,
     ) -> np.ndarray:
         """Preprocesses a single image."""
-        # All transformations expect numpy arrays.
-        image = to_numpy_array(image)
-        if do_rescale and is_scaled_image(image):
+        # Fast path: avoid conversion if image is already a np.ndarray
+        np_image = image if isinstance(image, np.ndarray) else to_numpy_array(image)
+        if do_rescale and is_scaled_image(np_image):
             logger.warning_once(
                 "It looks like you are trying to rescale already rescaled images. If the input"
                 " images have pixel values between 0 and 1, set `do_rescale=False` to avoid rescaling them again."
             )
         if input_data_format is None:
-            input_data_format = infer_channel_dimension_format(image)
-        image = self._preprocess(
-            image=image,
+            input_data_format = infer_channel_dimension_format(np_image)
+        result_image = self._preprocess(
+            image=np_image,
             do_reduce_labels=False,
             do_resize=do_resize,
             size=size,
@@ -257,8 +257,8 @@ class SegformerImageProcessor(BaseImageProcessor):
             input_data_format=input_data_format,
         )
         if data_format is not None:
-            image = to_channel_dimension_format(image, data_format, input_channel_dim=input_data_format)
-        return image
+            result_image = to_channel_dimension_format(result_image, data_format, input_channel_dim=input_data_format)
+        return result_image
 
     def _preprocess_mask(
         self,
