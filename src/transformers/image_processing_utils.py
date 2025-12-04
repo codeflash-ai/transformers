@@ -246,14 +246,19 @@ def get_size_dict(
         default_to_square (`bool`, *optional*, defaults to `True`):
             If `size` is an int, whether to default to a square image or not.
     """
-    if not isinstance(size, dict):
-        size_dict = convert_to_size_dict(size, max_size, default_to_square, height_width_order)
-        logger.info(
-            f"{param_name} should be a dictionary on of the following set of keys: {VALID_SIZE_DICT_KEYS}, got {size}."
-            f" Converted to {size_dict}.",
-        )
-    else:
-        size_dict = size
+    # Fast path: dict type
+    if isinstance(size, dict):
+        if not is_valid_size_dict(size):
+            raise ValueError(
+                f"{param_name} must have one of the following set of keys: {VALID_SIZE_DICT_KEYS}, got {size.keys()}"
+            )
+        return size
+
+    size_dict = convert_to_size_dict(size, max_size, default_to_square, height_width_order)
+    logger.info(
+        f"{param_name} should be a dictionary on of the following set of keys: {VALID_SIZE_DICT_KEYS}, got {size}."
+        f" Converted to {size_dict}.",
+    )
 
     if not is_valid_size_dict(size_dict):
         raise ValueError(
@@ -280,16 +285,25 @@ def select_best_resolution(original_size: tuple, possible_resolutions: list) -> 
         tuple: The best fit resolution in the format (height, width).
     """
     original_height, original_width = original_size
+    original_area = original_height * original_width
     best_fit = None
     max_effective_resolution = 0
     min_wasted_resolution = float("inf")
 
     for height, width in possible_resolutions:
-        scale = min(width / original_width, height / original_height)
-        downscaled_width, downscaled_height = int(original_width * scale), int(original_height * scale)
-        effective_resolution = min(downscaled_width * downscaled_height, original_width * original_height)
+        # Compute scale without constructing new floats unless necessary
+        width_scale = width / original_width
+        height_scale = height / original_height
+        scale = min(height_scale, width_scale)  # min(width/original, height/original)
+
+        downscaled_width = int(original_width * scale)
+        downscaled_height = int(original_height * scale)
+        downscaled_area = downscaled_width * downscaled_height
+
+        effective_resolution = min(original_area, downscaled_area)
         wasted_resolution = (width * height) - effective_resolution
 
+        # Check if current resolution is better than best so far
         if effective_resolution > max_effective_resolution or (
             effective_resolution == max_effective_resolution and wasted_resolution < min_wasted_resolution
         ):
