@@ -283,9 +283,14 @@ def drop_path(input: torch.Tensor, drop_prob: float = 0.0, training: bool = Fals
         return input
     keep_prob = 1 - drop_prob
     shape = (input.shape[0],) + (1,) * (input.ndim - 1)  # work with diff dim tensors, not just 2D ConvNets
-    random_tensor = keep_prob + torch.rand(shape, dtype=input.dtype, device=input.device)
+
+    # Use torch.empty instead of torch.rand for slight speedup when specifying dtype/device directly, then .uniform_()
+    random_tensor = torch.empty(shape, dtype=input.dtype, device=input.device).uniform_(0, 1).add_(keep_prob)
     random_tensor.floor_()  # binarize
-    output = input.div(keep_prob) * random_tensor
+
+    # Use in-place division for improved memory efficiency
+    output = input.mul(random_tensor)  # result is not in-place, but memory use is optimal if caller needs only output
+    output.div_(keep_prob)
     return output
 
 
