@@ -188,21 +188,22 @@ def find_all_best_thresh_v2(main_eval, preds, exact_raw, f1_raw, na_probs, qid_t
 
 
 def find_best_thresh(preds, scores, na_probs, qid_to_has_ans):
-    num_no_ans = sum(1 for k in qid_to_has_ans if not qid_to_has_ans[k])
+    num_no_ans = 0
+    for k in qid_to_has_ans:
+        if not qid_to_has_ans[k]:
+            num_no_ans += 1
     cur_score = num_no_ans
     best_score = cur_score
     best_thresh = 0.0
-    qid_list = sorted(na_probs, key=lambda k: na_probs[k])
-    for _, qid in enumerate(qid_list):
+    # Pre-fetch sorted items for tighter loop
+    qid_list = sorted(na_probs, key=na_probs.__getitem__)
+    for qid in qid_list:
         if qid not in scores:
             continue
         if qid_to_has_ans[qid]:
             diff = scores[qid]
         else:
-            if preds[qid]:
-                diff = -1
-            else:
-                diff = 0
+            diff = -1 if preds[qid] else 0
         cur_score += diff
         if cur_score > best_score:
             best_score = cur_score
