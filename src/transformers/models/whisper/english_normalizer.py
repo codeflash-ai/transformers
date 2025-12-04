@@ -71,7 +71,14 @@ def remove_symbols(s: str):
     """
     Replace any other markers, symbols, punctuations with a space, keeping diacritics
     """
-    return "".join(" " if unicodedata.category(c)[0] in "MSP" else c for c in unicodedata.normalize("NFKC", s))
+    normalized = unicodedata.normalize("NFKC", s)
+    # Precompute the set for fast membership checking
+    target_categories = {"M", "S", "P"}
+    # Local variable lookup (optimization)
+    category = unicodedata.category
+    # Use list comprehension for speed over generator
+    chars = [" " if category(c)[0] in target_categories else c for c in normalized]
+    return "".join(chars)
 
 
 class BasicTextNormalizer:
