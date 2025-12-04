@@ -291,20 +291,26 @@ def _unpad_modernbert_input(
         unpadded_position_ids: (total_nnz) or None
         unpadded_labels: (total_nnz) or None
     """
+    # Compute where mask is valid just once and reuse
+    flat_mask = attention_mask.flatten()
+    indices = torch.nonzero(flat_mask, as_tuple=False).flatten()
     seqlens_in_batch = attention_mask.sum(dim=-1, dtype=torch.int32)
-    indices = torch.nonzero(attention_mask.flatten(), as_tuple=False).flatten()
     max_seqlen_in_batch = int(seqlens_in_batch.max().item())
-    cu_seqlens = torch.nn.functional.pad(torch.cumsum(seqlens_in_batch, dim=0, dtype=torch.int32), (1, 0))
+    cu_seqlens = torch.empty((attention_mask.shape[0] + 1,), dtype=torch.int32, device=attention_mask.device)
+    torch.cumsum(seqlens_in_batch, dim=0, dtype=torch.int32, out=cu_seqlens[1:])
+    cu_seqlens[0] = 0
 
     if inputs.dim() == 2:
-        unpadded_inputs = inputs.flatten()[indices]
+        flat_inputs = inputs.flatten()
+        unpadded_inputs = flat_inputs.index_select(0, indices)
     else:
         batch, seqlen, *rest = inputs.shape
         shape = batch * seqlen
-        unpadded_inputs = inputs.view(shape, *rest)[indices]
+        flat_inputs = inputs.reshape(shape, *rest)
+        unpadded_inputs = flat_inputs.index_select(0, indices)
 
-    unpadded_position_ids = position_ids.flatten()[indices] if position_ids is not None else None
-    unpadded_labels = labels.flatten()[indices] if labels is not None else None
+    unpadded_position_ids = position_ids.flatten().index_select(0, indices) if position_ids is not None else None
+    unpadded_labels = labels.flatten().index_select(0, indices) if labels is not None else None
 
     return unpadded_inputs, indices, cu_seqlens, max_seqlen_in_batch, unpadded_position_ids, unpadded_labels
 
