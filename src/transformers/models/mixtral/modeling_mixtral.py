@@ -205,15 +205,27 @@ class MixtralRotaryEmbedding(nn.Module):
     @torch.no_grad()
     @dynamic_rope_update  # power user: used with advanced RoPE types (e.g. dynamic rope)
     def forward(self, x, position_ids):
-        inv_freq_expanded = self.inv_freq[None, :, None].float().expand(position_ids.shape[0], -1, 1).to(x.device)
-        position_ids_expanded = position_ids[:, None, :].float()
+        # Compute expanded inverse frequencies and position ids in the optimal way
+        # Instead of transposing after matmul, build the correct broadcasting for elementwise multiplication
 
-        device_type = x.device.type if isinstance(x.device.type, str) and x.device.type != "mps" else "cpu"
-        with torch.autocast(device_type=device_type, enabled=False):  # Force float32
-            freqs = (inv_freq_expanded.float() @ position_ids_expanded.float()).transpose(1, 2)
-            emb = torch.cat((freqs, freqs), dim=-1)
-            cos = emb.cos() * self.attention_scaling
-            sin = emb.sin() * self.attention_scaling
+        # position_ids: [batch, n_positions]  (usually [batch_size, seq_len])
+        # inv_freq: [dim/2]
+        # We want: freqs: [batch, n_positions, dim/2]
+        device = x.device
+        batch_size, seq_len = position_ids.shape
+        dim = self.inv_freq.shape[0]
+
+        # position_ids: [batch, seq_len] -> [batch, seq_len, 1]
+        position_ids_expanded = position_ids.unsqueeze(-1).float()
+        # inv_freq: [dim] -> [1, 1, dim]
+        inv_freq_expanded = self.inv_freq.unsqueeze(0).unsqueeze(0).to(device)
+        # multiplication uses broadcasting, result: [batch, seq_len, dim]
+        freqs = position_ids_expanded * inv_freq_expanded  # [batch, seq_len, dim]
+        # emb: [batch, seq_len, 2*dim]
+        emb = torch.cat((freqs, freqs), dim=-1)
+        # cos/sin: [batch, seq_len, 2*dim]
+        cos = emb.cos() * self.attention_scaling
+        sin = emb.sin() * self.attention_scaling
 
         return cos.to(dtype=x.dtype), sin.to(dtype=x.dtype)
 
