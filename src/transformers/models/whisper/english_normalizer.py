@@ -23,6 +23,13 @@ from typing import Optional, Union
 import regex
 
 
+_CURRENCY_CENTS_PATTERN = re.compile(r"([€£$])([0-9]+) (?:and )?¢([0-9]{1,2})\b")
+
+_ZERO_CENTS_PATTERN = re.compile(r"[€£$]0.([0-9]{1,2})\b")
+
+_ONE_S_PATTERN = re.compile(r"\b1(s?)\b")
+
+
 # non-ASCII letters that are not separated by "NFKD" normalization
 ADDITIONAL_DIACRITICS = {
     "œ": "oe",
@@ -72,6 +79,23 @@ def remove_symbols(s: str):
     Replace any other markers, symbols, punctuations with a space, keeping diacritics
     """
     return "".join(" " if unicodedata.category(c)[0] in "MSP" else c for c in unicodedata.normalize("NFKC", s))
+
+
+def _combine_cents(m: Match) -> str:
+    try:
+        currency = m.group(1)
+        integer = m.group(2)
+        cents = int(m.group(3))
+        return f"{currency}{integer}.{cents:02d}"
+    except ValueError:
+        return m.string
+
+
+def _extract_cents(m: Match) -> str:
+    try:
+        return f"¢{int(m.group(1))}"
+    except ValueError:
+        return m.string
 
 
 class BasicTextNormalizer:
@@ -463,28 +487,10 @@ class EnglishNumberNormalizer:
         return s
 
     def postprocess(self, s: str):
-        def combine_cents(m: Match):
-            try:
-                currency = m.group(1)
-                integer = m.group(2)
-                cents = int(m.group(3))
-                return f"{currency}{integer}.{cents:02d}"
-            except ValueError:
-                return m.string
-
-        def extract_cents(m: Match):
-            try:
-                return f"¢{int(m.group(1))}"
-            except ValueError:
-                return m.string
-
-        # apply currency postprocessing; "$2 and ¢7" -> "$2.07"
-        s = re.sub(r"([€£$])([0-9]+) (?:and )?¢([0-9]{1,2})\b", combine_cents, s)
-        s = re.sub(r"[€£$]0.([0-9]{1,2})\b", extract_cents, s)
-
-        # write "one(s)" instead of "1(s)", just for the readability
-        s = re.sub(r"\b1(s?)\b", r"one\1", s)
-
+        # Use precompiled regex and module-level helpers for faster matching/substitution
+        s = _CURRENCY_CENTS_PATTERN.sub(_combine_cents, s)
+        s = _ZERO_CENTS_PATTERN.sub(_extract_cents, s)
+        s = _ONE_S_PATTERN.sub(r"one\1", s)
         return s
 
     def __call__(self, s: str):
