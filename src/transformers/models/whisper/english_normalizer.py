@@ -49,22 +49,34 @@ def remove_symbols_and_diacritics(s: str, keep=""):
     Replace any other markers, symbols, and punctuations with a space, and drop any diacritics (category 'Mn' and some
     manual mappings)
     """
+    if keep:
+        keep_set = set(keep)
+    else:
+        keep_set = None
 
-    def replace_character(char):
-        if char in keep:
-            return char
-        elif char in ADDITIONAL_DIACRITICS:
-            return ADDITIONAL_DIACRITICS[char]
+    # Localize frequently used lookups for speed
+    _category = unicodedata.category
+    _add_diacritics = ADDITIONAL_DIACRITICS
 
-        elif unicodedata.category(char) == "Mn":
-            return ""
+    normalized = unicodedata.normalize("NFKD", s)
+    out: list[str] = []
+    append = out.append
 
-        elif unicodedata.category(char)[0] in "MSP":
-            return " "
+    for c in normalized:
+        if keep_set is not None and c in keep_set:
+            append(c)
+        elif c in _add_diacritics:
+            append(_add_diacritics[c])
+        else:
+            cat = _category(c)
+            if cat == "Mn":
+                continue
+            elif cat[0] in "MSP":
+                append(" ")
+            else:
+                append(c)
 
-        return char
-
-    return "".join(replace_character(c) for c in unicodedata.normalize("NFKD", s))
+    return "".join(out)
 
 
 def remove_symbols(s: str):
