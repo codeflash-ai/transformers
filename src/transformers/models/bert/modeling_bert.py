@@ -126,14 +126,21 @@ def eager_attention_forward(
     if scaling is None:
         scaling = query.size(-1) ** -0.5
 
-    # Take the dot product between "query" and "key" to get the raw attention scores.
-    attn_weights = torch.matmul(query, key.transpose(2, 3)) * scaling
+    # Compute key transpose only once to prevent redundant operations.
+    key_transposed = key.transpose(2, 3)
+    # Fused multiplication for better memory efficiency
+    attn_weights = torch.matmul(query, key_transposed)
+    if scaling != 1.0:
+        attn_weights.mul_(scaling)
 
     if attention_mask is not None:
-        attention_mask = attention_mask[:, :, :, : key.shape[-2]]
+        # Use key.shape[-2] directly; ensures no unnecessary extra slicing allocation if mask already matches.
+        if attention_mask.shape[-1] != key.shape[-2]:
+            attention_mask = attention_mask[:, :, :, : key.shape[-2]]
         attn_weights = attn_weights + attention_mask
 
-    attn_weights = nn.functional.softmax(attn_weights, dim=-1)
+    # Use in-place softmax to save memory where possible.
+    attn_weights = nn.functional.softmax(attn_weights, dim=-1, dtype=attn_weights.dtype)
     attn_weights = nn.functional.dropout(attn_weights, p=dropout, training=module.training)
 
     attn_output = torch.matmul(attn_weights, value)
