@@ -1884,23 +1884,17 @@ def _calculate_aggregation_loss_known(
         aggregation_loss_known (`torch.FloatTensor` of shape `(batch_size,)`): Aggregation loss (when its type is known
         during training) per example.
     """
-    if use_answer_as_supervision:
-        # Prepare "no aggregation" targets for cell selection examples.
-        target_aggregation = torch.zeros_like(aggregate_mask, dtype=torch.long)
-    else:
-        # Use aggregation supervision as the target.
-        target_aggregation = aggregation_labels
-
-    one_hot_labels = nn.functional.one_hot(target_aggregation, num_classes=num_aggregation_labels).type(torch.float32)
     log_probs = nn.functional.log_softmax(logits_aggregation, dim=-1)
 
-    # torch.FloatTensor[batch_size]
-    per_example_aggregation_intermediate = -torch.sum(one_hot_labels * log_probs, dim=-1)
     if use_answer_as_supervision:
+        # Prepare "no aggregation" targets for cell selection examples.
+        per_example_aggregation_intermediate = -log_probs[:, 0]
         # Accumulate loss only for examples requiring cell selection
         # (no aggregation).
         return per_example_aggregation_intermediate * (1 - aggregate_mask)
     else:
+        # Use aggregation supervision as the target.
+        per_example_aggregation_intermediate = -log_probs.gather(1, aggregation_labels.unsqueeze(1)).squeeze(1)
         return per_example_aggregation_intermediate
 
 
