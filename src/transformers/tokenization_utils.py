@@ -21,6 +21,7 @@ import itertools
 import re
 import unicodedata
 from collections import OrderedDict
+from functools import lru_cache
 from typing import Any, Optional, Union, overload
 
 from .tokenization_utils_base import (
@@ -39,6 +40,9 @@ from .tokenization_utils_base import (
     TruncationStrategy,
 )
 from .utils import PaddingStrategy, TensorType, add_end_docstrings, logging
+
+
+_category_cache = {}
 
 
 logger = logging.get_logger(__name__)
@@ -355,14 +359,18 @@ def _is_control(char):
     """Checks whether `char` is a control character."""
     # These are technically control characters but we count them as whitespace
     # characters.
-    if char == "\t" or char == "\n" or char == "\r":
+    if char in ("\t", "\n", "\r"):
         return False
-    cat = unicodedata.category(char)
-    if cat.startswith("C"):
+    cat = _category_cache.get(char)
+    if cat is None:
+        cat = unicodedata.category(char)
+        _category_cache[char] = cat
+    if cat[0] == "C":
         return True
     return False
 
 
+@lru_cache(maxsize=512)
 def _is_punctuation(char):
     """Checks whether `char` is a punctuation character."""
     cp = ord(char)
