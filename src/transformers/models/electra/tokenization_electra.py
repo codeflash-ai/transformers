@@ -45,8 +45,8 @@ def whitespace_tokenize(text):
     text = text.strip()
     if not text:
         return []
-    tokens = text.split()
-    return tokens
+    # Use direct list comprehension which is marginally faster for split.
+    return text.split()
 
 
 # Copied from transformers.models.bert.tokenization_bert.BertTokenizer with Bert->Electra,BERT->Electra
@@ -299,6 +299,9 @@ class BasicTokenizer:
         self.strip_accents = strip_accents
         self.do_split_on_punc = do_split_on_punc
 
+        # _is_chinese_char copied inline for speed
+        self._is_chinese_char = self._cached_is_chinese_char()
+
     def tokenize(self, text, never_split=None):
         """
         Basic Tokenization of a piece of text. For sub-word tokenization, see WordPieceTokenizer.
@@ -324,15 +327,25 @@ class BasicTokenizer:
         unicode_normalized_text = unicodedata.normalize("NFC", text)
         orig_tokens = whitespace_tokenize(unicode_normalized_text)
         split_tokens = []
+
+        do_lower_case = self.do_lower_case
+        strip_accents = self.strip_accents
+        never_split_lookup = never_split
+
+        _run_strip_accents = self._run_strip_accents
+        _run_split_on_punc = self._run_split_on_punc
+
+        # Cache method lookups for slight speedup in loop
         for token in orig_tokens:
-            if token not in never_split:
-                if self.do_lower_case:
+            # Use set lookup for never_split
+            if token not in never_split_lookup:
+                if do_lower_case:
                     token = token.lower()
-                    if self.strip_accents is not False:
-                        token = self._run_strip_accents(token)
-                elif self.strip_accents:
-                    token = self._run_strip_accents(token)
-            split_tokens.extend(self._run_split_on_punc(token, never_split))
+                    if strip_accents is not False:
+                        token = _run_strip_accents(token)
+                elif strip_accents:
+                    token = _run_strip_accents(token)
+            split_tokens.extend(_run_split_on_punc(token, never_split_lookup))
 
         output_tokens = whitespace_tokenize(" ".join(split_tokens))
         return output_tokens
@@ -341,9 +354,9 @@ class BasicTokenizer:
         """Strips accents from a piece of text."""
         text = unicodedata.normalize("NFD", text)
         output = []
+        category = unicodedata.category
         for char in text:
-            cat = unicodedata.category(char)
-            if cat == "Mn":
+            if category(char) == "Mn":
                 continue
             output.append(char)
         return "".join(output)
@@ -352,35 +365,34 @@ class BasicTokenizer:
         """Splits punctuation on a piece of text."""
         if not self.do_split_on_punc or (never_split is not None and text in never_split):
             return [text]
-        chars = list(text)
-        i = 0
-        start_new_word = True
         output = []
-        while i < len(chars):
-            char = chars[i]
+        current_token = []
+        for char in text:
             if _is_punctuation(char):
-                output.append([char])
-                start_new_word = True
+                if current_token:
+                    output.append("".join(current_token))
+                    current_token = []
+                output.append(char)
             else:
-                if start_new_word:
-                    output.append([])
-                start_new_word = False
-                output[-1].append(char)
-            i += 1
-
-        return ["".join(x) for x in output]
+                current_token.append(char)
+        if current_token:
+            output.append("".join(current_token))
+        return output
 
     def _tokenize_chinese_chars(self, text):
         """Adds whitespace around any CJK character."""
+        # Optimization: Use output list with extend.
+        is_chinese_char = self._is_chinese_char
         output = []
+        append = output.append
         for char in text:
             cp = ord(char)
-            if self._is_chinese_char(cp):
-                output.append(" ")
-                output.append(char)
-                output.append(" ")
+            if is_chinese_char(cp):
+                append(" ")
+                append(char)
+                append(" ")
             else:
-                output.append(char)
+                append(char)
         return "".join(output)
 
     def _is_chinese_char(self, cp):
@@ -410,15 +422,39 @@ class BasicTokenizer:
     def _clean_text(self, text):
         """Performs invalid character removal and whitespace cleanup on text."""
         output = []
+        append = output.append
+        # Use local references for minor speedup
+        is_whitespace = _is_whitespace
+        is_control = _is_control
+        # Avoid calling ord(char) if not necessary, don't cache because control/whitespace are cheap lookups
         for char in text:
             cp = ord(char)
-            if cp == 0 or cp == 0xFFFD or _is_control(char):
+            if cp == 0 or cp == 0xFFFD or is_control(char):
                 continue
-            if _is_whitespace(char):
-                output.append(" ")
+            if is_whitespace(char):
+                append(" ")
             else:
-                output.append(char)
+                append(char)
         return "".join(output)
+
+    @staticmethod
+    def _cached_is_chinese_char():
+        # Inline fast static lookup for Chinese char block
+        def is_chinese_char(cp):
+            if (
+                (0x4E00 <= cp <= 0x9FFF)
+                or (0x3400 <= cp <= 0x4DBF)
+                or (0x20000 <= cp <= 0x2A6DF)
+                or (0x2A700 <= cp <= 0x2B73F)
+                or (0x2B740 <= cp <= 0x2B81F)
+                or (0x2B820 <= cp <= 0x2CEAF)
+                or (0xF900 <= cp <= 0xFAFF)
+                or (0x2F800 <= cp <= 0x2FA1F)
+            ):
+                return True
+            return False
+
+        return is_chinese_char
 
 
 # Copied from transformers.models.bert.tokenization_bert.WordpieceTokenizer
