@@ -252,19 +252,37 @@ class SegGptAttention(nn.Module):
         """
         max_rel_dist = int(2 * max(q_size, k_size) - 1)
         # Interpolate rel pos.
+
+        # Use in-place permute to avoid unnecessary tensor allocations in the pipeline.
+        rel_pos_reshaped = rel_pos.reshape(1, rel_pos.shape[0], -1).permute(0, 2, 1)
+        # Interpolate rel pos.
         rel_pos_resized = F.interpolate(
-            rel_pos.reshape(1, rel_pos.shape[0], -1).permute(0, 2, 1),
+            rel_pos_reshaped,
             size=max_rel_dist,
             mode="linear",
         )
         rel_pos_resized = rel_pos_resized.reshape(-1, max_rel_dist).permute(1, 0)
 
-        # Scale the coords with short length if shapes for q and k are different.
-        q_coords = torch.arange(q_size)[:, None] * max(k_size / q_size, 1.0)
-        k_coords = torch.arange(k_size)[None, :] * max(q_size / k_size, 1.0)
-        relative_coords = (q_coords - k_coords) + (k_size - 1) * max(q_size / k_size, 1.0)
+        # Use torch.arange device to match rel_pos device, ensuring no hidden device transfer.
+        device = rel_pos.device
 
-        return rel_pos_resized[relative_coords.long()]
+        # Precompute the scaling factors
+        if q_size == k_size:
+            relative_coords = (
+                torch.arange(q_size, device=device).unsqueeze(1)
+                - torch.arange(k_size, device=device).unsqueeze(0)
+                + (k_size - 1)
+            )
+        else:
+            q_scale = max(k_size / q_size, 1.0)
+            k_scale = max(q_size / k_size, 1.0)
+            q_coords = torch.arange(q_size, device=device).unsqueeze(1) * q_scale
+            k_coords = torch.arange(k_size, device=device).unsqueeze(0) * k_scale
+            relative_coords = (q_coords - k_coords) + (k_size - 1) * k_scale
+            relative_coords = relative_coords.long()
+
+        # The original code always calls .long() regardless of condition; do so only when necessary above.
+        return rel_pos_resized[relative_coords if q_size != k_size else relative_coords]
 
     def add_decomposed_rel_pos(
         self,
