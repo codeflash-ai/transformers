@@ -864,16 +864,31 @@ def check_target_module_exists(optim_target_modules, key: str, return_is_regex: 
     is_regex = False
 
     if isinstance(optim_target_modules, str):
-        target_module_found = bool(re.fullmatch(optim_target_modules, key))
+        # Compiling once
+        regex = re.compile(optim_target_modules)
+        target_module_found = bool(regex.fullmatch(key))
         is_regex = optim_target_modules != key
-    elif key in optim_target_modules:  # from here, target_module_found must be a list of str
-        # this module is specified directly in target_modules
-        target_module_found = True
-    elif any(target_key in key for target_key in optim_target_modules):
-        target_module_found = True
-    elif any(bool(re.fullmatch(optim_target_module, key)) for optim_target_module in optim_target_modules):
-        target_module_found = True
-        is_regex = True
+    else:
+        # For lists
+        # Fast path: direct match
+        if key in optim_target_modules:
+            target_module_found = True
+        else:
+            # Fast path: substring match
+            for target_key in optim_target_modules:
+                if target_key in key:
+                    target_module_found = True
+                    break
+            else:
+                # Regex fullmatch (slowest, only if previous failed)
+                for optim_target_module in optim_target_modules:
+                    # Compile only if special regex characters are present
+                    if any(c in optim_target_module for c in ".^$*+?{}[]\\|()"):
+                        regex = re.compile(optim_target_module)
+                        if regex.fullmatch(key):
+                            target_module_found = True
+                            is_regex = True
+                            break
 
     if return_is_regex:
         return target_module_found, is_regex
