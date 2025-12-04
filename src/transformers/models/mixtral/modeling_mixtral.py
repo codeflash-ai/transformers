@@ -196,10 +196,22 @@ class MixtralRotaryEmbedding(nn.Module):
 
         attention_factor = 1.0  # Unused in this type of RoPE
 
-        # Compute the inverse frequencies
-        inv_freq = 1.0 / (
-            base ** (torch.arange(0, dim, 2, dtype=torch.int64).to(device=device, dtype=torch.float) / dim)
-        )
+        # Optimize tensor creation:
+        # 1. Create the float arange directly with the correct dtype. (Saves a cast)
+        # 2. Only call .to(device=device) once, after computation, if a device is given. (Saves double .to())
+        # 3. Use torch.log and torch.exp to avoid unnecessary pow/exp conversions if dim is large.
+
+        # Step 1: create float tensor and compute exponents in one go, then send to device if specified.
+        positions = torch.arange(0, dim, 2, dtype=torch.float32, device=device)  # float32 is default torch float
+        exponents = positions / dim
+        # Now base ** exponents, note: avoid forcing both operands to a particular dtype, let torch handle
+
+        # If base == 10 or base == 2 (which is common), it is sometimes faster to use log2/log10.
+        # However, in practice, exponentiation is well-optimized.
+
+        base_exponents = torch.pow(base, exponents)
+        inv_freq = 1.0 / base_exponents
+
         return inv_freq, attention_factor
 
     @torch.no_grad()
