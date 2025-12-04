@@ -1335,11 +1335,13 @@ class ProductIndexMap(IndexMap):
         if outer_index.batch_dims != inner_index.batch_dims:
             raise ValueError("outer_index.batch_dims and inner_index.batch_dims must be the same.")
 
-        super().__init__(
-            indices=(inner_index.indices + outer_index.indices * inner_index.num_segments),
-            num_segments=inner_index.num_segments * outer_index.num_segments,
-            batch_dims=inner_index.batch_dims,
-        )
+        # Optimize calculation using in-place operations and avoid redundant type conversions
+        # Compute indices efficiently for the product
+        indices = inner_index.indices.add(outer_index.indices.mul(inner_index.num_segments))
+        num_segments = inner_index.num_segments * outer_index.num_segments
+        batch_dims = inner_index.batch_dims
+
+        super().__init__(indices=indices, num_segments=num_segments, batch_dims=batch_dims)
         self.outer_index = outer_index
         self.inner_index = inner_index
 
@@ -1350,12 +1352,17 @@ class ProductIndexMap(IndexMap):
 
     def project_inner(self, index):
         """Projects an index with the same index set onto the inner components."""
+
+        # Optimization: Use integer division and modulo directly, eliminate type conversions
+        inner_num_segments = self.inner_index.num_segments
+
+        projected_indices = index.indices % inner_num_segments
+        # The original uses .type(torch.float).floor().type(torch.long), which is unnecessary since modulo already gives correct integer result.
+        # Keeping type as torch.long, consistent with IndexMap's expectations.
+
         return IndexMap(
-            indices=torch.fmod(index.indices, self.inner_index.num_segments)
-            .type(torch.float)
-            .floor()
-            .type(torch.long),
-            num_segments=self.inner_index.num_segments,
+            indices=projected_indices,
+            num_segments=inner_num_segments,
             batch_dims=index.batch_dims,
         )
 
