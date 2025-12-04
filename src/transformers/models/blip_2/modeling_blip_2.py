@@ -838,28 +838,39 @@ class Blip2TextEmbeddings(nn.Module):
         query_embeds: Optional[torch.FloatTensor] = None,
     ) -> torch.Tensor:
         if input_ids is not None:
-            seq_length = input_ids.size()[1]
-        else:
-            seq_length = 0
+            # Avoid repeated attribute lookup and call for better efficiency
+            word_embeddings = self.word_embeddings
+            position_embeddings = self.position_embeddings
 
-        if position_ids is None:
-            position_ids = self.position_ids[:, :seq_length]
-
-        if input_ids is not None:
-            input_ids = input_ids.to(self.word_embeddings.weight.device)
-            embeddings = self.word_embeddings(input_ids)
-
-            position_embeddings = self.position_embeddings(position_ids)
-            embeddings += position_embeddings
+            device = word_embeddings.weight.device
+            # Instead of .size()[1], use .shape[1] which is slightly faster
+            seq_length = input_ids.shape[1]
+            # Use cached buffer or passed-in position_ids with correct slicing
+            if position_ids is None:
+                position_ids = self.position_ids[:, :seq_length]
+            # ---
+            # Avoid redundant device transfer if already correct
+            if input_ids.device != device:
+                input_ids = input_ids.to(device)
+            # .forward of nn.Embedding is already efficient; keep usage
+            embeddings = word_embeddings(input_ids)
+            # Combine with positional embeddings directly on embedding (use in-place if safe)
+            # Ensure position_ids is on correct device without unneeded copy
+            if position_ids.device != device:
+                position_ids = position_ids.to(device)
+            pos_emb = position_embeddings(position_ids)
+            embeddings = embeddings.add(pos_emb)  # add returns new tensor but is as fast as += with broadcasting
 
             if query_embeds is not None:
                 # `query_embeds` are kept in fp32 when we use it with Qformer
                 if query_embeds.dtype != embeddings.dtype:
-                    query_embeds = query_embeds.to(embeddings.dtype)
+                    query_embeds = query_embeds.to(dtype=embeddings.dtype, device=embeddings.device)
+                elif query_embeds.device != embeddings.device:
+                    query_embeds = query_embeds.to(device=embeddings.device)
+                # torch.cat: preallocate shape if available, but torch.cat is already efficient for two tensors
                 embeddings = torch.cat((query_embeds, embeddings), dim=1)
         else:
             embeddings = query_embeds
-
         return embeddings
 
 
