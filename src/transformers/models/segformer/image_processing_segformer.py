@@ -269,22 +269,26 @@ class SegformerImageProcessor(BaseImageProcessor):
         input_data_format: Optional[Union[str, ChannelDimension]] = None,
     ) -> np.ndarray:
         """Preprocesses a single mask."""
-        segmentation_map = to_numpy_array(segmentation_map)
+        # Fast path: skip to_numpy_array if already ndarray
+        if not isinstance(segmentation_map, np.ndarray):
+            segmentation_map = to_numpy_array(segmentation_map)
+        # Add channel dimension if missing - needed for certain transformations
+        added_channel_dim = False
         # Add channel dimension if missing - needed for certain transformations
         if segmentation_map.ndim == 2:
-            added_channel_dim = True
             segmentation_map = segmentation_map[None, ...]
             input_data_format = ChannelDimension.FIRST
-        else:
-            added_channel_dim = False
-            if input_data_format is None:
-                input_data_format = infer_channel_dimension_format(segmentation_map, num_channels=1)
+            added_channel_dim = True
+        elif input_data_format is None:
+            input_data_format = infer_channel_dimension_format(segmentation_map, num_channels=1)
+        nearest_resample = PILImageResampling.NEAREST
+        # reduce zero label if needed
         # reduce zero label if needed
         segmentation_map = self._preprocess(
             image=segmentation_map,
             do_reduce_labels=do_reduce_labels,
             do_resize=do_resize,
-            resample=PILImageResampling.NEAREST,
+            resample=nearest_resample,
             size=size,
             do_rescale=False,
             do_normalize=False,
