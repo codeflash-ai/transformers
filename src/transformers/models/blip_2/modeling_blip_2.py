@@ -251,15 +251,22 @@ def eager_attention_forward(
     dropout: float = 0.0,
     **kwargs,
 ):
-    attn_weights = torch.matmul(query, key.transpose(-1, -2)) * scaling
+    # Use in-place operations where safe to reduce memory usage and overhead
+    attn_weights = torch.matmul(query, key.transpose(-1, -2))
+    attn_weights.mul_(scaling)
+
     if attention_mask is not None:
-        attn_weights = attn_weights + attention_mask
+        # Assume attention_mask shape matches attn_weights for broadcasting and in-place add
+        attn_weights.add_(attention_mask)
 
     attn_weights = nn.functional.softmax(attn_weights, dim=-1)
-    attn_weights = nn.functional.dropout(attn_weights, p=dropout, training=module.training)
+    if dropout > 0.0:
+        # Use in-place dropout if possible; torch.nn.functional.dropout is not in-place, but avoids extra unnecessary copy when dropout=0
+        attn_weights = nn.functional.dropout(attn_weights, p=dropout, training=module.training)
 
     attn_output = torch.matmul(attn_weights, value)
-    attn_output = attn_output.transpose(1, 2).contiguous()
+    # Avoid .contiguous() unless necessary for downstream correctness or performance (may trigger unnecessary memory copy)
+    attn_output = attn_output.transpose(1, 2)
 
     return attn_output, attn_weights
 
