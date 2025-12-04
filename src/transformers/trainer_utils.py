@@ -54,6 +54,8 @@ if is_torch_available():
     import torch
     from safetensors.torch import load_file as safe_load_file
 
+_TORCH_ENABLED = is_torch_available()
+
 
 def seed_worker(worker_id: int, num_workers: int, rank: int):
     """
@@ -741,14 +743,14 @@ def denumpify_detensorize(metrics):
     """
     Recursively calls `.item()` on the element of the dictionary passed
     """
-    if isinstance(metrics, (list, tuple)):
-        return type(metrics)(denumpify_detensorize(m) for m in metrics)
+    if isinstance(metrics, np.generic):
+        return metrics.item()
+    elif _TORCH_ENABLED and isinstance(metrics, torch.Tensor) and metrics.numel() == 1:
+        return metrics.item()
     elif isinstance(metrics, dict):
         return type(metrics)({k: denumpify_detensorize(v) for k, v in metrics.items()})
-    elif isinstance(metrics, np.generic):
-        return metrics.item()
-    elif is_torch_available() and isinstance(metrics, torch.Tensor) and metrics.numel() == 1:
-        return metrics.item()
+    elif isinstance(metrics, (list, tuple)):
+        return type(metrics)(denumpify_detensorize(m) for m in metrics)
     return metrics
 
 
