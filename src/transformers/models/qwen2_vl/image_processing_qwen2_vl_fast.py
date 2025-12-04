@@ -76,10 +76,8 @@ class Qwen2VLImageProcessorFast(BaseImageProcessorFast):
         size = self.size if size is None else size
         if min_pixels is not None:
             size["shortest_edge"] = min_pixels
-            size.pop("min_pixels", None)
         if max_pixels is not None:
             size["longest_edge"] = max_pixels
-            size.pop("max_pixels", None)
         if "shortest_edge" not in size or "longest_edge" not in size:
             raise ValueError("size must contain 'shortest_edge' and 'longest_edge' keys.")
 
@@ -219,12 +217,13 @@ class Qwen2VLImageProcessorFast(BaseImageProcessorFast):
             )
 
             processed_images_grouped[shape] = flatten_patches
-            processed_grids[shape] = [[grid_t, grid_h, grid_w]] * batch_size
+            # Use tuple multiplication instead of list for immutability and slight perf gain
+            processed_grids[shape] = [tuple([grid_t, grid_h, grid_w])] * batch_size
 
         processed_images = reorder_images(processed_images_grouped, grouped_images_index)
         processed_grids = reorder_images(processed_grids, grouped_images_index)
         pixel_values = torch.cat(processed_images, dim=0)
-        image_grid_thw = torch.tensor(processed_grids)
+        image_grid_thw = torch.as_tensor(processed_grids)
 
         return BatchFeature(
             data={"pixel_values": pixel_values, "image_grid_thw": image_grid_thw}, tensor_type=return_tensors

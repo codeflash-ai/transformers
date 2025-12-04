@@ -1455,8 +1455,6 @@ class VideoLlama3ImageProcessorFast(Qwen2VLImageProcessorFast):
         device: Optional[Union[str, "torch.device"]] = None,
         **kwargs: Unpack[VideoLlama3ImageProcessorKwargs],
     ) -> BatchFeature:
-        # Prepare input images
-        batch_feature = BatchFeature()
         if kwargs["temporal_patch_size"] != 1:
             raise ValueError("`temporal_patch_size` must be 1 for VideoLLaMA3")
         images = self._prepare_image_like_inputs(
