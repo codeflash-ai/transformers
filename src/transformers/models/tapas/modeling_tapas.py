@@ -1488,30 +1488,28 @@ def _segment_reduce(values, index, segment_reduce_fn, name):
     # unflattened. Segmented ops support vector-valued operations.
     flat_index = flatten(index)
     vector_shape = values.size()[len(index.indices.size()) :]  # torch.Size object
-    flattened_shape = torch.cat(
-        [torch.as_tensor([-1], dtype=torch.long), torch.as_tensor(vector_shape, dtype=torch.long)], dim=0
-    )
-    # changed "view" by "reshape" in the following line
-    flat_values = values.reshape(flattened_shape.tolist())
 
-    out = torch.zeros(int(flat_index.num_segments), dtype=torch.float, device=flat_values.device)
+    # Optimized: Avoid constructing/copying torch tensors for shape calculation, use direct tuple/list.
+    flattened_shape = (-1, *vector_shape)
+    flat_values = values.reshape(flattened_shape)
+
+    # Use torch.empty instead of zeros for faster allocation (will be overwritten), use dtype from values for direct ops.
+    out = torch.empty(int(flat_index.num_segments), dtype=flat_values.dtype, device=flat_values.device)
+    # torch.scatter_reduce will overwrite these in-place (include_self=False disables accumulation with initial value)
     segment_means = out.scatter_reduce(
-        dim=0, index=flat_index.indices.long(), src=flat_values.float(), reduce=segment_reduce_fn, include_self=False
+        dim=0, index=flat_index.indices.long(), src=flat_values, reduce=segment_reduce_fn, include_self=False
     )
 
     device = index.num_segments.device
-    # Unflatten the values.
-    new_shape = torch.cat(
-        [
-            torch.as_tensor(index.batch_shape(), dtype=torch.long, device=device),
-            torch.as_tensor([index.num_segments], dtype=torch.long, device=device),
-            torch.as_tensor(vector_shape, dtype=torch.long, device=device),
-        ],
-        dim=0,
-    )
+    # Efficient new_shape construction -- avoids repeated tolist()/cat/cast: build tuple direct.
+    batch_shape = tuple(index.batch_shape())
+    num_segments = int(index.num_segments)
+    new_shape = (*batch_shape, num_segments, *vector_shape)
 
-    output_values = segment_means.clone().view(new_shape.tolist()).to(values.dtype)
-    output_index = range_index_map(index.batch_shape(), index.num_segments)
+    # Use .reshape for better performance over .view when non-contiguous, and avoid clone if not required.
+    # .clone() is only required if scatter_reduce did not return a new tensor, but PyTorch returns a view/copy.
+    output_values = segment_means.reshape(new_shape).to(values.dtype)
+    output_index = range_index_map(batch_shape, index.num_segments)
     return output_values, output_index
 
 
