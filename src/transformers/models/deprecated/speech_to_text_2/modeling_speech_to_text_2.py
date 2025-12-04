@@ -62,17 +62,28 @@ class Speech2Text2SinusoidalPositionalEmbedding(nn.Module):
         Build sinusoidal embeddings. This matches the implementation in tensor2tensor, but differs slightly from the
         description in Section 3.5 of "Attention Is All You Need".
         """
+        # Use default dtype for intermediate tensors to minimize conversions
+        dtype = torch.get_default_dtype()
         half_dim = embedding_dim // 2
-        emb = math.log(10000) / (half_dim - 1)
-        emb = torch.exp(torch.arange(half_dim, dtype=torch.int64).float() * -emb)
-        emb = torch.arange(num_embeddings, dtype=torch.int64).float().unsqueeze(1) * emb.unsqueeze(0)
-        emb = torch.cat([torch.sin(emb), torch.cos(emb)], dim=1).view(num_embeddings, -1)
+        # Precompute log(10000) only once
+        emb_scale = math.log(10000) / (half_dim - 1)
+        # Vectorized exponential and positions computation with proper dtype
+        exp_range = torch.arange(half_dim, dtype=dtype, device="cpu")
+        emb = torch.exp(-emb_scale * exp_range)
+        positions = torch.arange(num_embeddings, dtype=dtype, device="cpu").unsqueeze(1)
+        emb = positions * emb.unsqueeze(0)
+        # Direct computation and concatenation of sin/cos for efficiency
+        sin_emb = torch.sin(emb)
+        cos_emb = torch.cos(emb)
+        emb = torch.cat([sin_emb, cos_emb], dim=1)
+        emb = emb.view(num_embeddings, -1)
         if embedding_dim % 2 == 1:
             # zero pad
-            emb = torch.cat([emb, torch.zeros(num_embeddings, 1)], dim=1)
+            emb = torch.cat([emb, torch.zeros(num_embeddings, 1, dtype=dtype, device="cpu")], dim=1)
         if padding_idx is not None:
             emb[padding_idx, :] = 0
-        return emb.to(torch.get_default_dtype())
+        # The output must be default dtype, and already is
+        return emb
 
     @torch.no_grad()
     def forward(self, input_ids: torch.Tensor, past_key_values_length: int = 0):
