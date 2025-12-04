@@ -41,6 +41,13 @@ from .tokenization_utils_base import (
 from .utils import PaddingStrategy, TensorType, add_end_docstrings, logging
 
 
+_ASCII_PUNC = set(range(33, 48)) | set(range(58, 65)) | set(range(91, 97)) | set(range(123, 127))
+
+_ucd_category = unicodedata.category
+
+_category_cache = {}
+
+
 logger = logging.get_logger(__name__)
 
 # Slow tokenizers are saved in a vocabulary plus three separated files
@@ -355,10 +362,13 @@ def _is_control(char):
     """Checks whether `char` is a control character."""
     # These are technically control characters but we count them as whitespace
     # characters.
-    if char == "\t" or char == "\n" or char == "\r":
+    if char in ("\t", "\n", "\r"):
         return False
-    cat = unicodedata.category(char)
-    if cat.startswith("C"):
+    cat = _category_cache.get(char)
+    if cat is None:
+        cat = unicodedata.category(char)
+        _category_cache[char] = cat
+    if cat[0] == "C":
         return True
     return False
 
@@ -366,14 +376,11 @@ def _is_control(char):
 def _is_punctuation(char):
     """Checks whether `char` is a punctuation character."""
     cp = ord(char)
-    # We treat all non-letter/number ASCII as punctuation.
-    # Characters such as "^", "$", and "`" are not in the Unicode
-    # Punctuation class but we treat them as punctuation anyways, for
-    # consistency.
-    if (cp >= 33 and cp <= 47) or (cp >= 58 and cp <= 64) or (cp >= 91 and cp <= 96) or (cp >= 123 and cp <= 126):
+    if cp in _ASCII_PUNC:
         return True
-    cat = unicodedata.category(char)
-    if cat.startswith("P"):
+    # `unicodedata.category` is a known fast C call; checking first char is faster than startswith
+    cat = _ucd_category(char)
+    if cat[0] == "P":
         return True
     return False
 
