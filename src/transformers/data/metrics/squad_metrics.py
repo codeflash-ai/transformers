@@ -25,6 +25,7 @@ import json
 import math
 import re
 import string
+from operator import itemgetter
 
 from ...models.bert import BasicTokenizer
 from ...utils import logging
@@ -128,10 +129,20 @@ def make_eval_dict(exact_scores, f1_scores, qid_list=None):
         )
     else:
         total = len(qid_list)
+        if total == 1:
+            exact_sum = exact_scores[qid_list[0]]
+            f1_sum = f1_scores[qid_list[0]]
+        else:
+            qids_tuple = tuple(qid_list)
+            exact_values_batch = itemgetter(*qids_tuple)(exact_scores)
+            f1_values_batch = itemgetter(*qids_tuple)(f1_scores)
+            exact_sum = sum(exact_values_batch)
+            f1_sum = sum(f1_values_batch)
+
         return collections.OrderedDict(
             [
-                ("exact", 100.0 * sum(exact_scores[k] for k in qid_list) / total),
-                ("f1", 100.0 * sum(f1_scores[k] for k in qid_list) / total),
+                ("exact", 100.0 * exact_sum / total),
+                ("f1", 100.0 * f1_sum / total),
                 ("total", total),
             ]
         )
