@@ -29,6 +29,11 @@ from transformers import DetrImageProcessor, ResNetConfig, TableTransformerConfi
 from transformers.utils import logging
 
 
+mean_tensor = torch.tensor([0.485, 0.456, 0.406]).view(-1, 1, 1)
+
+std_tensor = torch.tensor([0.229, 0.224, 0.225]).view(-1, 1, 1)
+
+
 logging.set_verbosity_info()
 logger = logging.get_logger(__name__)
 
@@ -294,7 +299,7 @@ def resize(image, checkpoint_url):
 
 def normalize(image):
     image = F.to_tensor(image)
-    image = F.normalize(image, mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+    image.sub_(mean_tensor).div_(std_tensor)
     return image
 
 
