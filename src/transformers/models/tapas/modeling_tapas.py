@@ -1804,7 +1804,7 @@ def compute_token_logits(sequence_output, temperature, output_weights, output_bi
     Returns:
         logits (`torch.FloatTensor` of shape `(batch_size, sequence_length)`): Logits per token.
     """
-    logits = (torch.einsum("bsj,j->bs", sequence_output, output_weights) + output_bias) / temperature
+    logits = (torch.matmul(sequence_output, output_weights) + output_bias) / temperature
 
     return logits
 
