@@ -287,7 +287,29 @@ def resize(image, checkpoint_url):
     current_max_size = max(width, height)
     target_max_size = 800 if "detection" in checkpoint_url else 1000
     scale = target_max_size / current_max_size
-    resized_image = image.resize((int(round(scale * width)), int(round(scale * height))))
+
+    # Use integer math for target size to avoid unnecessary float computation and rounding
+    target_width = int(round(scale * width))
+    target_height = int(round(scale * height))
+
+    # Specify a fast resampling filter if possible (BILINEAR), fallback if not available
+    # Avoid unnecessary attribute lookup at runtime
+    try:
+        resample = image.BILINEAR
+    except AttributeError:
+        # For PIL.Image, use Image.BILINEAR
+        try:
+            from PIL import Image
+
+            resample = Image.BILINEAR
+        except ImportError:
+            # Fallback to default
+            resample = None
+
+    if resample is not None:
+        resized_image = image.resize((target_width, target_height), resample=resample)
+    else:
+        resized_image = image.resize((target_width, target_height))
 
     return resized_image
 
