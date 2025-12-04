@@ -60,12 +60,20 @@ ORIGINAL_DTYPE = torch.bfloat16
 
 def rename_state_dict_keys(state_dict: dict[str, Any]) -> dict[str, Any]:
     new_state_dict = {}
+    custom_prefix = "custom_text_proj"
+    custom_prefix_len = len(custom_prefix)
+    model_prefix = "model."
+    model_prefix_len = len(model_prefix)
+
     for key, value in state_dict.items():
-        new_key = key
-        if key.startswith("custom_text_proj"):
-            new_key = key.replace("custom_text_proj", "embedding_proj_layer")
-        if key.startswith("model."):
-            new_key = key.replace("model.", "vlm.", 1)
+        # Use if/elif for mutually exclusive prefix rewrites; first match only
+        if key.startswith(custom_prefix):
+            # Perform both replacements in mutually exclusive blocks
+            new_key = "embedding_proj_layer" + key[custom_prefix_len:]
+        elif key.startswith(model_prefix):
+            new_key = "vlm." + key[model_prefix_len:]
+        else:
+            new_key = key
         new_state_dict[new_key] = value
     return new_state_dict
 
