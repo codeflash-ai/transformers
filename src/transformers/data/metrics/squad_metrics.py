@@ -25,6 +25,7 @@ import json
 import math
 import re
 import string
+from functools import lru_cache
 
 from ...models.bert import BasicTokenizer
 from ...utils import logging
@@ -56,7 +57,8 @@ def normalize_answer(s):
 def get_tokens(s):
     if not s:
         return []
-    return normalize_answer(s).split()
+    # Cache normalized answers for identical strings for better speed.
+    return _normalize_answer_cached(s).split()
 
 
 def compute_exact(a_gold, a_pred):
@@ -66,15 +68,18 @@ def compute_exact(a_gold, a_pred):
 def compute_f1(a_gold, a_pred):
     gold_toks = get_tokens(a_gold)
     pred_toks = get_tokens(a_pred)
-    common = collections.Counter(gold_toks) & collections.Counter(pred_toks)
-    num_same = sum(common.values())
     if len(gold_toks) == 0 or len(pred_toks) == 0:
         # If either is no-answer, then F1 is 1 if they agree, 0 otherwise
         return int(gold_toks == pred_toks)
+    # Avoid using Counter intersection, which is slower than mapping both to a Counter,
+    # then summing min counts for matches (since split tokens are typically short).
+    gold_counter = collections.Counter(gold_toks)
+    pred_counter = collections.Counter(pred_toks)
+    num_same = sum(min(gold_counter[tok], pred_counter[tok]) for tok in gold_counter if tok in pred_counter)
     if num_same == 0:
         return 0
-    precision = 1.0 * num_same / len(pred_toks)
-    recall = 1.0 * num_same / len(gold_toks)
+    precision = num_same / len(pred_toks)
+    recall = num_same / len(gold_toks)
     f1 = (2 * precision * recall) / (precision + recall)
     return f1
 
@@ -777,3 +782,16 @@ def compute_predictions_log_probs(
             writer.write(json.dumps(scores_diff_json, indent=4) + "\n")
 
     return all_predictions
+
+
+# The profiling clearly shows that the dominate cost is in normalize_answer(s).
+# The `split()` call is trivial. If the same (normalized) string is repeatedly compared,
+# caching the normalized outputs can help. We implement an LRU cache for normalize_answer(s)
+# for faster repeated calls (as is typical in SQuAD-type metrics).
+# This does not mutate behavior as normalize_answer(s) is pure.
+
+
+@lru_cache(maxsize=16384)
+def _normalize_answer_cached(s: str) -> str:
+    # Use type annotation to avoid changing any signatures.
+    return normalize_answer(s)
