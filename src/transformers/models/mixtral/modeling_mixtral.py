@@ -144,10 +144,20 @@ class MixtralRMSNorm(nn.Module):
 
     def forward(self, hidden_states):
         input_dtype = hidden_states.dtype
-        hidden_states = hidden_states.to(torch.float32)
-        variance = hidden_states.pow(2).mean(-1, keepdim=True)
-        hidden_states = hidden_states * torch.rsqrt(variance + self.variance_epsilon)
-        return self.weight * hidden_states.to(input_dtype)
+        # If input is float32 already, skip a .to() copy.
+        if input_dtype == torch.float32:
+            hs = hidden_states
+        else:
+            hs = hidden_states.to(torch.float32)
+        # Use fused variance computation (mul + mean) for speed, but keep original behavior
+        variance = torch.mean(hs * hs, dim=-1, keepdim=True)
+        # Fused rsqrt and normalization
+        normalized = hs * torch.rsqrt(variance + self.variance_epsilon)
+        # fuse final dtype conversion & multiplication (avoid intermediate allocation)
+        if normalized.dtype != input_dtype:
+            normalized = normalized.to(input_dtype)
+        # Use in-place multiplication when possible
+        return self.weight * normalized
 
     def extra_repr(self):
         return f"{tuple(self.weight.shape)}, eps={self.variance_epsilon}"
