@@ -352,9 +352,9 @@ class VivitPooler(nn.Module):
     def forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
         # We "pool" the model by simply taking the hidden state corresponding
         # to the first token.
-        first_token_tensor = hidden_states[:, 0]
+        first_token_tensor = hidden_states.select(1, 0)
         pooled_output = self.dense(first_token_tensor)
-        pooled_output = self.activation(pooled_output)
+        pooled_output = torch.tanh(pooled_output)
         return pooled_output
 
 
