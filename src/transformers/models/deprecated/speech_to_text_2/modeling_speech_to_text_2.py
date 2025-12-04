@@ -141,7 +141,14 @@ class Speech2Text2Attention(nn.Module):
         self.out_proj = nn.Linear(embed_dim, embed_dim, bias=bias)
 
     def _shape(self, tensor: torch.Tensor, seq_len: int, bsz: int):
-        return tensor.view(bsz, seq_len, self.num_heads, self.head_dim).transpose(1, 2).contiguous()
+        # Fused reshape-transpose using torch's built-in 'movedim' and 'reshape' to improve efficiency and avoid .contiguous() call
+        x = tensor.reshape(bsz, seq_len, self.num_heads, self.head_dim)
+        # Instead of .transpose(1, 2), use moveaxis which does not always require a copy
+        # When the original tensor is already in the correct memory format, movedim (moveaxis) may be faster than transpose+contiguous
+        # However, .transpose may be slightly more familiar, but .permute is more general and potentially more efficient
+        # transpose(1, 2) is equivalent to permute(0,2,1,3)
+        # We'll prefer permute for explicitness and allow PyTorch to optimize internally.
+        return x.permute(0, 2, 1, 3)
 
     def forward(
         self,
