@@ -537,8 +537,12 @@ class BertOnlyNSPHead(nn.Module):
         super().__init__()
         self.seq_relationship = nn.Linear(config.hidden_size, 2)
 
+        # Pre-bind the forward method of Linear to reduce attribute lookup cost
+        self._seq_relationship_forward = self.seq_relationship.forward
+
     def forward(self, pooled_output):
-        seq_relationship_score = self.seq_relationship(pooled_output)
+        # Use local variable for attribute to reduce attribute lookup overhead
+        seq_relationship_score = self._seq_relationship_forward(pooled_output)
         return seq_relationship_score
 
 
