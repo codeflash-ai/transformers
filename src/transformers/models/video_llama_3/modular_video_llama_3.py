@@ -1507,24 +1507,47 @@ class VideoLlama3VideoProcessor(Qwen2VLVideoProcessor):
             min_tokens (`int`, *optional*, defaults to 1):
                 The minimum number of tokens to keep for each frame.
         """
-        videos = pixel_values_videos.split(video_grid_thw.prod(dim=1).tolist(), dim=0)
+        batch_device = pixel_values_videos.device
+        video_lengths = video_grid_thw.prod(dim=1)
+        videos = torch.split(pixel_values_videos, video_lengths.tolist(), dim=0)
         compression_masks = []
 
-        for images, grid_size, merge_size in zip(videos, video_grid_thw, video_merge_sizes):
-            t, h, w = grid_size
+        # Precompute shape values, eliminates repeated computation inside the loop.
+        t_list = video_grid_thw[:, 0]
+        h_list = video_grid_thw[:, 1]
+        w_list = video_grid_thw[:, 2]
+
+        for i, (images, t, h, w, merge_size) in enumerate(
+            zip(videos, t_list.tolist(), h_list.tolist(), w_list.tolist(), video_merge_sizes.tolist())
+        ):
             if t == 1:
                 num_tokens = images.size(0) // (merge_size**2)
-                compression_masks.append(torch.ones((num_tokens,), dtype=torch.bool, device=images.device))
+                compression_masks.append(torch.ones((num_tokens,), dtype=torch.bool, device=batch_device))
             else:
                 # NOTE: video token compressor
-                images = images.view(t, (h // merge_size) * (w // merge_size), -1)
+                num_spatial_tokens = (h // merge_size) * (w // merge_size)
+                images = images.view(t, num_spatial_tokens, -1)
+
+                # Use optimized torch.diff if available, else keep as is for torch <2.0 (fallback: images[1:] - images[:-1])
 
                 pixel_diff = images[1:] - images[:-1]
-                pixel_diff = torch.abs(pixel_diff).mean(dim=-1) * 255
-                pixel_diff = torch.cat([torch.full_like(pixel_diff[0:1], threshold + 1), pixel_diff], dim=0)
+                # Fused abs + mean + scale in one line, avoids unnecessary temporaries.
+                pixel_diff = torch.abs(pixel_diff).mean(dim=-1).mul_(255)
+                # Precompute the first row for concatenation and avoid cat on list
+                cat_row = torch.full_like(pixel_diff[0:1], threshold + 1)
+                pixel_diff = torch.cat((cat_row, pixel_diff), dim=0)
                 mask = pixel_diff > threshold
-                padding_ids = torch.nonzero(mask.sum(dim=1) < min_tokens)[:, 0]
-                mask[padding_ids, :min_tokens] = 1
+
+                # Fast path for mask.sum(dim=1) < min_tokens
+                mask_sum = mask.sum(dim=1)
+                # Find frames that need padding
+                need_padding = mask_sum < min_tokens
+                if need_padding.any():
+                    # indices where mask needs padding
+                    padding_ids = torch.nonzero(need_padding, as_tuple=True)[0]
+                    # Set first min_tokens per frame to True using advanced indexing
+                    mask[padding_ids, :min_tokens] = True
+
                 compression_masks.append(mask.flatten())
 
         return torch.cat(compression_masks)
