@@ -151,6 +151,7 @@ def is_tensorboard_available():
     return importlib.util.find_spec("tensorboard") is not None or importlib.util.find_spec("tensorboardX") is not None
 
 
+@functools.lru_cache(maxsize=1)
 def is_optuna_available():
     return importlib.util.find_spec("optuna") is not None
 
