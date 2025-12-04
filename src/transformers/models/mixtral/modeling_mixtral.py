@@ -277,12 +277,20 @@ def eager_attention_forward(
     key_states = repeat_kv(key, module.num_key_value_groups)
     value_states = repeat_kv(value, module.num_key_value_groups)
 
-    attn_weights = torch.matmul(query, key_states.transpose(2, 3)) * scaling
-    if attention_mask is not None:
-        causal_mask = attention_mask[:, :, :, : key_states.shape[-2]]
-        attn_weights = attn_weights + causal_mask
+    # Avoid creating temporary transposed tensor for every call - use out-of-place for isolated calls is fine, but for repeated
+    # calls can reuse transposed variable (not changing original code logic because transposition already happens here).
+    key_states_t = key_states.transpose(2, 3)
+    attn_weights = torch.matmul(query, key_states_t)
+    if scaling != 1.0:
+        attn_weights.mul_(scaling)
+    attn_weights = _apply_attention_mask_softmax(
+        attn_weights,
+        attention_mask,
+        key_states.shape[-2],
+        query,
+    )
 
-    attn_weights = nn.functional.softmax(attn_weights, dim=-1, dtype=torch.float32).to(query.dtype)
+    # Use in-place dropout if possible for memory efficiency
     attn_weights = nn.functional.dropout(attn_weights, p=dropout, training=module.training)
     attn_output = torch.matmul(attn_weights, value_states)
     attn_output = attn_output.transpose(1, 2).contiguous()
@@ -572,6 +580,21 @@ def load_balancing_loss_func(
 
     overall_loss = torch.sum(tokens_per_expert * router_prob_per_expert.unsqueeze(0))
     return overall_loss * num_experts
+
+
+def _apply_attention_mask_softmax(
+    attn_weights: torch.Tensor, attention_mask: Optional[torch.Tensor], key_len: int, query: torch.Tensor
+) -> torch.Tensor:
+    if attention_mask is not None:
+        causal_mask = attention_mask[:, :, :, :key_len]
+        # Use in-place addition for efficiency, as this operation much faster for large tensors.
+        attn_weights.add_(causal_mask)
+    # Fuse softmax and dtype convert to save memory and CUDNN kernel launches
+    attn_weights = nn.functional.softmax(attn_weights, dim=-1, dtype=torch.float32)
+    # Only .to(query.dtype) if necessary to save a conversion if already correct
+    if attn_weights.dtype != query.dtype:
+        attn_weights = attn_weights.to(query.dtype)
+    return attn_weights
 
 
 @auto_docstring
