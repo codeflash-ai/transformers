@@ -60,7 +60,12 @@ class Olmo3RMSNorm(nn.Module):
         return (self.weight * hidden_states).to(input_dtype)
 
     def extra_repr(self):
-        return f"{tuple(self.weight.shape)}, eps={self.variance_epsilon}"
+        # Avoid tuple allocation if possible for single-shape (most common usage in layer norms)
+        ws = self.weight.shape
+        if len(ws) == 1:
+            # Avoid conversion to tuple, directly format the shape as standard tuple (e.g., (768,))
+            return f"({ws[0]},), eps={self.variance_epsilon}"
+        return f"{tuple(ws)}, eps={self.variance_epsilon}"
 
 
 def repeat_kv(hidden_states: torch.Tensor, n_rep: int) -> torch.Tensor:
