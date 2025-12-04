@@ -252,19 +252,35 @@ class SegGptAttention(nn.Module):
         """
         max_rel_dist = int(2 * max(q_size, k_size) - 1)
         # Interpolate rel pos.
+        # use device matching rel_pos for all tensors
+        device = rel_pos.device
+        dtype = rel_pos.dtype
+
+        # Reshape and interpolate rel pos
+        # Combine reshape and permute for efficiency, avoid repeated .reshape/.permute
+        c = rel_pos.shape[1]
+        rel_pos_1 = rel_pos.view(1, rel_pos.shape[0], c)  # [1, L, C]
+        rel_pos_2 = rel_pos_1.permute(0, 2, 1)  # [1, C, L]
         rel_pos_resized = F.interpolate(
-            rel_pos.reshape(1, rel_pos.shape[0], -1).permute(0, 2, 1),
+            rel_pos_2,
             size=max_rel_dist,
             mode="linear",
         )
-        rel_pos_resized = rel_pos_resized.reshape(-1, max_rel_dist).permute(1, 0)
+        rel_pos_resized = rel_pos_resized[0].transpose(0, 1)  # [max_rel_dist, C]
 
-        # Scale the coords with short length if shapes for q and k are different.
-        q_coords = torch.arange(q_size)[:, None] * max(k_size / q_size, 1.0)
-        k_coords = torch.arange(k_size)[None, :] * max(q_size / k_size, 1.0)
-        relative_coords = (q_coords - k_coords) + (k_size - 1) * max(q_size / k_size, 1.0)
+        # Vectorized coordinate computation
+        if q_size == k_size:
+            # Hot path, common for square attention blocks
+            pos = torch.arange(q_size, device=device, dtype=dtype)
+            rel_coords = pos[:, None] - pos[None, :] + (k_size - 1)
+        else:
+            q_scale = max(k_size / q_size, 1.0)
+            k_scale = max(q_size / k_size, 1.0)
+            q_coords = torch.arange(q_size, device=device, dtype=dtype)[:, None] * q_scale
+            k_coords = torch.arange(k_size, device=device, dtype=dtype)[None, :] * k_scale
+            rel_coords = (q_coords - k_coords) + (k_size - 1) * k_scale
 
-        return rel_pos_resized[relative_coords.long()]
+        return rel_pos_resized[rel_coords.long()]
 
     def add_decomposed_rel_pos(
         self,
@@ -303,12 +319,16 @@ class SegGptAttention(nn.Module):
         relative_position_width = self.get_rel_pos(query_width, key_width, rel_pos_w)
 
         batch_size, _, dim = query.shape
-        reshaped_query = query.reshape(batch_size, query_height, query_width, dim)
+        # Use .view instead of .reshape for a fused layout if compatible
+        reshaped_query = query.view(batch_size, query_height, query_width, dim)
+
+        # Use einsum out-of-place but only compute the product once per axis
         rel_h = torch.einsum("bhwc,hkc->bhwk", reshaped_query, relative_position_height)
         rel_w = torch.einsum("bhwc,wkc->bhwk", reshaped_query, relative_position_width)
-        attn = attn.reshape(batch_size, query_height, query_width, key_height, key_width)
+
+        attn = attn.view(batch_size, query_height, query_width, key_height, key_width)
         attn = attn + rel_h[:, :, :, :, None] + rel_w[:, :, :, None, :]
-        attn = attn.reshape(batch_size, query_height * query_width, key_height * key_width)
+        attn = attn.view(batch_size, query_height * query_width, key_height * key_width)
         return attn
 
     def forward(self, hidden_states: torch.Tensor, output_attentions=False) -> torch.Tensor:
