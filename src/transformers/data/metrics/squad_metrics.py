@@ -281,12 +281,11 @@ def get_final_text(pred_text, orig_text, do_lower_case, verbose_logging=False):
 
     def _strip_spaces(text):
         ns_chars = []
-        ns_to_s_map = collections.OrderedDict()
+        ns_to_s_map = {}
         for i, c in enumerate(text):
-            if c == " ":
-                continue
-            ns_to_s_map[len(ns_chars)] = i
-            ns_chars.append(c)
+            if c != " ":
+                ns_to_s_map[len(ns_chars)] = i
+                ns_chars.append(c)
         ns_text = "".join(ns_chars)
         return (ns_text, ns_to_s_map)
 
@@ -305,19 +304,16 @@ def get_final_text(pred_text, orig_text, do_lower_case, verbose_logging=False):
         return orig_text
     end_position = start_position + len(pred_text) - 1
 
-    (orig_ns_text, orig_ns_to_s_map) = _strip_spaces(orig_text)
-    (tok_ns_text, tok_ns_to_s_map) = _strip_spaces(tok_text)
+    orig_ns_text, orig_ns_to_s_map = _strip_spaces(orig_text)
+    tok_ns_text, tok_ns_to_s_map = _strip_spaces(tok_text)
 
     if len(orig_ns_text) != len(tok_ns_text):
         if verbose_logging:
             logger.info(f"Length not equal after stripping spaces: '{orig_ns_text}' vs '{tok_ns_text}'")
         return orig_text
 
-    # We then project the characters in `pred_text` back to `orig_text` using
-    # the character-to-character alignment.
-    tok_s_to_ns_map = {}
-    for i, tok_index in tok_ns_to_s_map.items():
-        tok_s_to_ns_map[tok_index] = i
+    # Create mapping once with fast attribute lookup
+    tok_s_to_ns_map = {tok_index: i for i, tok_index in tok_ns_to_s_map.items()}
 
     orig_start_position = None
     if start_position in tok_s_to_ns_map:

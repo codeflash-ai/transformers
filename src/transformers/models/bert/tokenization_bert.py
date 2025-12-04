@@ -306,7 +306,10 @@ class BasicTokenizer:
                 [`PreTrainedTokenizer.tokenize`]) List of token not to split.
         """
         # union() returns a new set by concatenating the two sets.
-        never_split = self.never_split.union(set(never_split)) if never_split else self.never_split
+        never_split_set = self.never_split
+        if never_split:
+            never_split_set = never_split_set | set(never_split)
+
         text = self._clean_text(text)
 
         # This was added on November 1st, 2018 for the multilingual and Chinese
@@ -317,19 +320,23 @@ class BasicTokenizer:
         # words in the English Wikipedia.).
         if self.tokenize_chinese_chars:
             text = self._tokenize_chinese_chars(text)
-        # prevents treating the same character with different unicode codepoints as different characters
-        unicode_normalized_text = unicodedata.normalize("NFC", text)
-        orig_tokens = whitespace_tokenize(unicode_normalized_text)
+        # Unicode normalization (NFC) guarantees consistent codepoints
+        normalized_text = unicodedata.normalize("NFC", text)
+        orig_tokens = whitespace_tokenize(normalized_text)
         split_tokens = []
+        do_lower = self.do_lower_case
+        strip_accents = self.strip_accents
+        run_strip_accents = self._run_strip_accents
+
         for token in orig_tokens:
-            if token not in never_split:
-                if self.do_lower_case:
+            if token not in never_split_set:
+                if do_lower:
                     token = token.lower()
-                    if self.strip_accents is not False:
-                        token = self._run_strip_accents(token)
-                elif self.strip_accents:
-                    token = self._run_strip_accents(token)
-            split_tokens.extend(self._run_split_on_punc(token, never_split))
+                    if strip_accents is not False:
+                        token = run_strip_accents(token)
+                elif strip_accents:
+                    token = run_strip_accents(token)
+            split_tokens.extend(self._run_split_on_punc(token, never_split_set))
 
         output_tokens = whitespace_tokenize(" ".join(split_tokens))
         return output_tokens
