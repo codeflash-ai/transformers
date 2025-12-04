@@ -160,14 +160,17 @@ class ElectraTokenizer(PreTrainedTokenizer):
     def _tokenize(self, text, split_special_tokens=False):
         split_tokens = []
         if self.do_basic_tokenize:
-            for token in self.basic_tokenizer.tokenize(
-                text, never_split=self.all_special_tokens if not split_special_tokens else None
-            ):
+            never_split = self.all_special_tokens if not split_special_tokens else None
+            # Avoid attribute lookup in loop
+            basic_tokenizer_tokenize = self.basic_tokenizer.tokenize
+            btk_never_split = self.basic_tokenizer.never_split
+            wordpiece_tokenizer_tokenize = self.wordpiece_tokenizer.tokenize
+            for token in basic_tokenizer_tokenize(text, never_split=never_split):
                 # If the token is part of the never_split set
-                if token in self.basic_tokenizer.never_split:
+                if token in btk_never_split:
                     split_tokens.append(token)
                 else:
-                    split_tokens += self.wordpiece_tokenizer.tokenize(token)
+                    split_tokens += wordpiece_tokenizer_tokenize(token)
         else:
             split_tokens = self.wordpiece_tokenizer.tokenize(text)
         return split_tokens
@@ -312,27 +315,25 @@ class BasicTokenizer:
         never_split = self.never_split.union(set(never_split)) if never_split else self.never_split
         text = self._clean_text(text)
 
-        # This was added on November 1st, 2018 for the multilingual and Chinese
-        # models. This is also applied to the English models now, but it doesn't
-        # matter since the English models were not trained on any Chinese data
-        # and generally don't have any Chinese data in them (there are Chinese
-        # characters in the vocabulary because Wikipedia does have some Chinese
-        # words in the English Wikipedia.).
-        if self.tokenize_chinese_chars:
+        # Optimize the CJK check
+        if self.tokenize_chinese_chars and any("\u4e00" <= char <= "\u9fff" for char in text):
             text = self._tokenize_chinese_chars(text)
         # prevents treating the same character with different unicode codepoints as different characters
         unicode_normalized_text = unicodedata.normalize("NFC", text)
         orig_tokens = whitespace_tokenize(unicode_normalized_text)
         split_tokens = []
+        do_lower_case, strip_accents = self.do_lower_case, self.strip_accents
+        run_strip_accents = self._run_strip_accents
+        run_split_on_punc = self._run_split_on_punc
         for token in orig_tokens:
             if token not in never_split:
-                if self.do_lower_case:
+                if do_lower_case:
                     token = token.lower()
-                    if self.strip_accents is not False:
-                        token = self._run_strip_accents(token)
-                elif self.strip_accents:
-                    token = self._run_strip_accents(token)
-            split_tokens.extend(self._run_split_on_punc(token, never_split))
+                    if strip_accents is not False:
+                        token = run_strip_accents(token)
+                elif strip_accents:
+                    token = run_strip_accents(token)
+            split_tokens.extend(run_split_on_punc(token, never_split))
 
         output_tokens = whitespace_tokenize(" ".join(split_tokens))
         return output_tokens
@@ -446,10 +447,14 @@ class WordpieceTokenizer:
         """
 
         output_tokens = []
-        for token in whitespace_tokenize(text):
-            chars = list(token)
-            if len(chars) > self.max_input_chars_per_word:
-                output_tokens.append(self.unk_token)
+        vocab = self.vocab  # localize for speed
+        unk_token = self.unk_token
+        max_chars = self.max_input_chars_per_word
+        whitespace_tokens = whitespace_tokenize(text)
+        for token in whitespace_tokens:
+            chars = token
+            if len(chars) > max_chars:
+                output_tokens.append(unk_token)
                 continue
 
             is_bad = False
@@ -458,11 +463,11 @@ class WordpieceTokenizer:
             while start < len(chars):
                 end = len(chars)
                 cur_substr = None
-                while start < end:
-                    substr = "".join(chars[start:end])
+                while end > start:
+                    substr = chars[start:end]
                     if start > 0:
                         substr = "##" + substr
-                    if substr in self.vocab:
+                    if substr in vocab:
                         cur_substr = substr
                         break
                     end -= 1
@@ -473,7 +478,7 @@ class WordpieceTokenizer:
                 start = end
 
             if is_bad:
-                output_tokens.append(self.unk_token)
+                output_tokens.append(unk_token)
             else:
                 output_tokens.extend(sub_tokens)
         return output_tokens
