@@ -815,7 +815,7 @@ class RemoveColumnsCollator:
         description: Optional[str] = None,
     ):
         self.data_collator = data_collator
-        self.signature_columns = signature_columns
+        self.signature_columns = set(signature_columns)
         self.logger = logger
         self.description = description
         self.model_name = model_name
@@ -825,8 +825,9 @@ class RemoveColumnsCollator:
         if not isinstance(feature, dict):
             return feature
         if not self.message_logged and self.logger and self.model_name:
-            ignored_columns = list(set(feature.keys()) - set(self.signature_columns))
-            if len(ignored_columns) > 0:
+            # Use set difference directly, no conversion to list/set needed
+            ignored_columns = [k for k in feature if k not in self.signature_columns]
+            if ignored_columns:
                 dset_description = "" if self.description is None else f"in the {self.description} set"
                 self.logger.info(
                     f"The following columns {dset_description} don't have a corresponding argument in "
@@ -835,6 +836,7 @@ class RemoveColumnsCollator:
                     " you can safely ignore this message."
                 )
                 self.message_logged = True
+        # Efficient dict comprehension using set membership
         return {k: v for k, v in feature.items() if k in self.signature_columns}
 
     def __call__(self, features: list[dict]):
