@@ -1019,7 +1019,7 @@ def router_z_loss_func(router_logits: torch.Tensor) -> float:
 
 
 def load_balancing_loss_func(router_probs: torch.Tensor, expert_indices: torch.Tensor) -> float:
-    r"""
+    """
     Computes auxiliary load balancing loss as in Switch Transformer - implemented in Pytorch.
 
     See Switch Transformer (https://huggingface.co/papers/2101.03961) for more details. This function implements the loss
@@ -1039,22 +1039,42 @@ def load_balancing_loss_func(router_probs: torch.Tensor, expert_indices: torch.T
 
     # cast the expert indices to int64, otherwise one-hot encoding will fail
     if expert_indices.dtype != torch.int64:
-        expert_indices = expert_indices.to(torch.int64)
+        expert_indices = expert_indices.to(dtype=torch.int64, device=expert_indices.device, non_blocking=True)
 
-    if len(expert_indices.shape) == 2:
+    # Avoid repeated .shape/len calculation and realloc
+    # --- optimized: shape check via .ndim (performance: slightly faster than len(shape)) ---
+    if expert_indices.ndim == 2:
         expert_indices = expert_indices.unsqueeze(2)
 
-    expert_mask = torch.nn.functional.one_hot(expert_indices, num_experts)
+    # --- OPTIMIZED: fuse one_hot + expert_mask + float cast with advanced indexing to avoid several materializations ---
+    # NOTE: torch.nn.functional.one_hot returns a tensor with dtype matching expert_indices, but we need float32 for later.
+    # Instead of one-hot then max reduction, use scatter and avoid intermediate allocations.
 
-    # For a given token, determine if it was routed to a given expert.
-    expert_mask = torch.max(expert_mask, axis=-2).values
+    # expert_indices shape: [batch_size, sequence_length, 1], squeeze to [batch_size, sequence_length]
+    batch_size, sequence_length = expert_indices.shape[0], expert_indices.shape[1]
+    # Create mask: [batch_size, sequence_length, num_experts], filled with zeros
+    expert_mask = torch.zeros(
+        (batch_size, sequence_length, num_experts), dtype=torch.float32, device=expert_indices.device
+    )
+    # Scatter 1.0 at the correct expert index per token (no gradient required, costs nearly nothing)
+    expert_mask.scatter_(2, expert_indices, 1.0)
+    # Now expert_mask is [batch_size, sequence_length, num_experts] with floats, no longer need to call max or .to(). Just use it.
 
-    # cast to float32 otherwise mean will fail
-    expert_mask = expert_mask.to(torch.float32)
-    tokens_per_group_and_expert = torch.mean(expert_mask, axis=-2)
+    # --- optimized: mean reductions operate on last axis only, avoid repeated reduction on the same axis ---
+    # For a given token, determine if it was routed to a given expert; mask is already one-hot per expert
+    # tokens_per_group_and_expert: average mask per [batch, expert]
+    tokens_per_group_and_expert = expert_mask.mean(dim=1)
+    # router_prob_per_group_and_expert: average router_probs per [batch, expert]
+    # It is ok to compute mean along dimension 1
+    router_prob_per_group_and_expert = router_probs.mean(dim=1)
 
-    router_prob_per_group_and_expert = torch.mean(router_probs, axis=-2)
-    return torch.mean(tokens_per_group_and_expert * router_prob_per_group_and_expert) * (num_experts**2)
+    # --- optimized: fuse multiplication before mean to vectorize ---
+    # Final reduction and scaling
+    # torch.mean(..., axis=-2) is the same as .mean(dim=0) for default, but here, axis=-2 is sequence_length
+    # tokens_per_group_and_expert and router_prob_per_group_and_expert shape: [batch_size, num_experts]
+    # So elementwise multiply, then reduce mean over all elements
+    # This avoids shape mismatches and extra reduction operations.
+    return (tokens_per_group_and_expert * router_prob_per_group_and_expert).mean() * (num_experts**2)
 
 
 @auto_docstring(
