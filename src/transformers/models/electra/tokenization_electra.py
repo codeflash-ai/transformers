@@ -146,6 +146,9 @@ class ElectraTokenizer(PreTrainedTokenizer):
             **kwargs,
         )
 
+        # Cache unknown token id for faster lookup in _convert_token_to_id
+        self._unk_token_id = self.vocab.get(self.unk_token)
+
     @property
     def do_lower_case(self):
         return self.basic_tokenizer.do_lower_case
@@ -174,7 +177,10 @@ class ElectraTokenizer(PreTrainedTokenizer):
 
     def _convert_token_to_id(self, token):
         """Converts a token (str) in an id using the vocab."""
-        return self.vocab.get(token, self.vocab.get(self.unk_token))
+        id_ = self.vocab.get(token)
+        if id_ is not None:
+            return id_
+        return self._unk_token_id
 
     def _convert_id_to_token(self, index):
         """Converts an index (integer) in a token (str) using the vocab."""
