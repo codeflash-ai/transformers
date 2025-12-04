@@ -281,12 +281,18 @@ def get_final_text(pred_text, orig_text, do_lower_case, verbose_logging=False):
 
     def _strip_spaces(text):
         ns_chars = []
-        ns_to_s_map = collections.OrderedDict()
-        for i, c in enumerate(text):
+        ns_to_s_map = {}
+        length = len(text)
+        ns_chars_append = ns_chars.append  # Optimization: local binding
+        idx = 0
+        # Small optimization: tightly loop, no OrderedDict needed since order is guaranteed by insertion
+        for i in range(length):
+            c = text[i]
             if c == " ":
                 continue
-            ns_to_s_map[len(ns_chars)] = i
-            ns_chars.append(c)
+            ns_to_s_map[idx] = i
+            ns_chars_append(c)
+            idx += 1
         ns_text = "".join(ns_chars)
         return (ns_text, ns_to_s_map)
 
@@ -305,8 +311,9 @@ def get_final_text(pred_text, orig_text, do_lower_case, verbose_logging=False):
         return orig_text
     end_position = start_position + len(pred_text) - 1
 
-    (orig_ns_text, orig_ns_to_s_map) = _strip_spaces(orig_text)
-    (tok_ns_text, tok_ns_to_s_map) = _strip_spaces(tok_text)
+    # Hot _strip_spaces function, optimized above
+    orig_ns_text, orig_ns_to_s_map = _strip_spaces(orig_text)
+    tok_ns_text, tok_ns_to_s_map = _strip_spaces(tok_text)
 
     if len(orig_ns_text) != len(tok_ns_text):
         if verbose_logging:
@@ -315,15 +322,12 @@ def get_final_text(pred_text, orig_text, do_lower_case, verbose_logging=False):
 
     # We then project the characters in `pred_text` back to `orig_text` using
     # the character-to-character alignment.
-    tok_s_to_ns_map = {}
-    for i, tok_index in tok_ns_to_s_map.items():
-        tok_s_to_ns_map[tok_index] = i
+    tok_s_to_ns_map = {tok_index: i for i, tok_index in tok_ns_to_s_map.items()}
 
     orig_start_position = None
     if start_position in tok_s_to_ns_map:
         ns_start_position = tok_s_to_ns_map[start_position]
-        if ns_start_position in orig_ns_to_s_map:
-            orig_start_position = orig_ns_to_s_map[ns_start_position]
+        orig_start_position = orig_ns_to_s_map.get(ns_start_position, None)
 
     if orig_start_position is None:
         if verbose_logging:
@@ -333,8 +337,7 @@ def get_final_text(pred_text, orig_text, do_lower_case, verbose_logging=False):
     orig_end_position = None
     if end_position in tok_s_to_ns_map:
         ns_end_position = tok_s_to_ns_map[end_position]
-        if ns_end_position in orig_ns_to_s_map:
-            orig_end_position = orig_ns_to_s_map[ns_end_position]
+        orig_end_position = orig_ns_to_s_map.get(ns_end_position, None)
 
     if orig_end_position is None:
         if verbose_logging:
@@ -347,14 +350,15 @@ def get_final_text(pred_text, orig_text, do_lower_case, verbose_logging=False):
 
 def _get_best_indexes(logits, n_best_size):
     """Get the n-best logits from a list."""
-    index_and_score = sorted(enumerate(logits), key=lambda x: x[1], reverse=True)
+    # Optimize sort: use heapq if n_best_size is small and list is large
+    # n_best_size is typically <10, so heapq is much faster
+    # Use heapq.nlargest for efficiency
+    import heapq
 
-    best_indexes = []
-    for i in range(len(index_and_score)):
-        if i >= n_best_size:
-            break
-        best_indexes.append(index_and_score[i][0])
-    return best_indexes
+    if n_best_size >= len(logits):
+        return list(range(len(logits)))
+    best = heapq.nlargest(n_best_size, enumerate(logits), key=lambda x: x[1])
+    return [x[0] for x in best]
 
 
 def _compute_softmax(scores):
@@ -362,22 +366,13 @@ def _compute_softmax(scores):
     if not scores:
         return []
 
-    max_score = None
-    for score in scores:
-        if max_score is None or score > max_score:
-            max_score = score
-
-    exp_scores = []
-    total_sum = 0.0
-    for score in scores:
-        x = math.exp(score - max_score)
-        exp_scores.append(x)
-        total_sum += x
-
-    probs = []
-    for score in exp_scores:
-        probs.append(score / total_sum)
-    return probs
+    # Fast max
+    max_score = max(scores)
+    # Faster math.exp and sum
+    exp_scores = [math.exp(score - max_score) for score in scores]
+    total_sum = sum(exp_scores)
+    # Vectorized division
+    return [score / total_sum for score in exp_scores]
 
 
 def compute_predictions_logits(
@@ -407,13 +402,14 @@ def compute_predictions_logits(
     for feature in all_features:
         example_index_to_features[feature.example_index].append(feature)
 
-    unique_id_to_result = {}
-    for result in all_results:
-        unique_id_to_result[result.unique_id] = result
+    unique_id_to_result = {result.unique_id: result for result in all_results}
+
+    # Move namedtuple definitions outside hot loop for better perf
 
     _PrelimPrediction = collections.namedtuple(  # pylint: disable=invalid-name
         "PrelimPrediction", ["feature_index", "start_index", "end_index", "start_logit", "end_logit"]
     )
+    _NbestPrediction = collections.namedtuple("NbestPrediction", ["text", "start_logit", "end_logit"])
 
     all_predictions = collections.OrderedDict()
     all_nbest_json = collections.OrderedDict()
@@ -441,21 +437,19 @@ def compute_predictions_logits(
                     null_start_logit = result.start_logits[0]
                     null_end_logit = result.end_logits[0]
             for start_index in start_indexes:
+                if (
+                    start_index >= len(feature.tokens)
+                    or start_index not in feature.token_to_orig_map
+                    or not feature.token_is_max_context.get(start_index, False)
+                ):
+                    continue
                 for end_index in end_indexes:
-                    # We could hypothetically create invalid predictions, e.g., predict
-                    # that the start of the span is in the question. We throw out all
-                    # invalid predictions.
-                    if start_index >= len(feature.tokens):
-                        continue
-                    if end_index >= len(feature.tokens):
-                        continue
-                    if start_index not in feature.token_to_orig_map:
-                        continue
-                    if end_index not in feature.token_to_orig_map:
-                        continue
-                    if not feature.token_is_max_context.get(start_index, False):
-                        continue
-                    if end_index < start_index:
+                    # Inline and combine invalidation checks for speed
+                    if (
+                        end_index >= len(feature.tokens)
+                        or end_index not in feature.token_to_orig_map
+                        or end_index < start_index
+                    ):
                         continue
                     length = end_index - start_index + 1
                     if length > max_answer_length:
@@ -479,13 +473,14 @@ def compute_predictions_logits(
                     end_logit=null_end_logit,
                 )
             )
-        prelim_predictions = sorted(prelim_predictions, key=lambda x: (x.start_logit + x.end_logit), reverse=True)
 
-        _NbestPrediction = collections.namedtuple(  # pylint: disable=invalid-name
-            "NbestPrediction", ["text", "start_logit", "end_logit"]
-        )
+        # Use key function for sort instead of lambda, minor perf but clearer
+        def _prelim_key(x):
+            return x.start_logit + x.end_logit
 
-        seen_predictions = {}
+        prelim_predictions = sorted(prelim_predictions, key=_prelim_key, reverse=True)
+
+        seen_predictions = set()
         nbest = []
         for pred in prelim_predictions:
             if len(nbest) >= n_best_size:
@@ -513,11 +508,10 @@ def compute_predictions_logits(
                 final_text = get_final_text(tok_text, orig_text, do_lower_case, verbose_logging)
                 if final_text in seen_predictions:
                     continue
-
-                seen_predictions[final_text] = True
+                seen_predictions.add(final_text)
             else:
                 final_text = ""
-                seen_predictions[final_text] = True
+                seen_predictions.add(final_text)
 
             nbest.append(_NbestPrediction(text=final_text, start_logit=pred.start_logit, end_logit=pred.end_logit))
         # if we didn't include the empty option in the n-best, include it
@@ -538,13 +532,11 @@ def compute_predictions_logits(
         if len(nbest) < 1:
             raise ValueError("No valid predictions")
 
-        total_scores = []
+        total_scores = [entry.start_logit + entry.end_logit for entry in nbest]
         best_non_null_entry = None
         for entry in nbest:
-            total_scores.append(entry.start_logit + entry.end_logit)
-            if not best_non_null_entry:
-                if entry.text:
-                    best_non_null_entry = entry
+            if best_non_null_entry is None and entry.text:
+                best_non_null_entry = entry
 
         probs = _compute_softmax(total_scores)
 
