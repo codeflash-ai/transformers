@@ -1310,9 +1310,10 @@ class IndexMap:
         self.indices = torch.as_tensor(indices, device=indices.device)
         self.num_segments = torch.as_tensor(num_segments, device=indices.device)
         self.batch_dims = batch_dims
+        self._indices_size = self.indices.size()
 
     def batch_shape(self):
-        return self.indices.size()[: self.batch_dims]  # returns a torch.Size object
+        return self._indices_size[: self.batch_dims]  # returns a torch.Size object
 
 
 class ProductIndexMap(IndexMap):
