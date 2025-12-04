@@ -433,10 +433,14 @@ class HunYuanMoEV1RotaryEmbedding(nn.Module):
 
         attention_factor = 1.0  # Unused in this type of RoPE
 
-        # Compute the inverse frequencies
-        inv_freq = 1.0 / (
-            base ** (torch.arange(0, dim, 2, dtype=torch.int64).to(device=device, dtype=torch.float) / dim)
-        )
+        # Fast path: we can precalculate the float divisor before arange,
+        # directly create float tensor, avoid repeated dtype conversion.
+        # We avoid arange with int dtype and then to float,
+        # instead, arange produces float dtype directly, saving one cast.
+        indices = torch.arange(0, dim, 2, dtype=torch.float, device=device)
+        inv_freq = base ** (-indices / dim)
+        inv_freq = inv_freq.clone()  # ensure contiguous
+        inv_freq = inv_freq.contiguous()  # ensures memory layout for optimal access (may be used downstream)
         return inv_freq, attention_factor
 
     @torch.no_grad()
