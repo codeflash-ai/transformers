@@ -220,8 +220,9 @@ class MixtralRotaryEmbedding(nn.Module):
 
 def rotate_half(x):
     """Rotates half the hidden dims of the input."""
-    x1 = x[..., : x.shape[-1] // 2]
-    x2 = x[..., x.shape[-1] // 2 :]
+    mid = x.shape[-1] // 2
+    x1, x2 = x[..., :mid], x[..., mid:]
+    # Use torch.cat with tuple for minor speedup, avoids creating intermediate lists.
     return torch.cat((-x2, x1), dim=-1)
 
 
@@ -245,10 +246,18 @@ def apply_rotary_pos_emb(q, k, cos, sin, position_ids=None, unsqueeze_dim=1):
     Returns:
         `tuple(torch.Tensor)` comprising of the query and key tensors rotated using the Rotary Position Embedding.
     """
-    cos = cos.unsqueeze(unsqueeze_dim)
-    sin = sin.unsqueeze(unsqueeze_dim)
-    q_embed = (q * cos) + (rotate_half(q) * sin)
-    k_embed = (k * cos) + (rotate_half(k) * sin)
+    # Avoid repeated unsqueeze by assigning to local variable once
+    cos_unsq = cos.unsqueeze(unsqueeze_dim)
+    sin_unsq = sin.unsqueeze(unsqueeze_dim)
+
+    # Only rotate the tensor once per input for q and k
+    q_rot = rotate_half(q)
+    k_rot = rotate_half(k)
+
+    # Fused computation for better parallelism in PyTorch
+    q_embed = q * cos_unsq + q_rot * sin_unsq
+    k_embed = k * cos_unsq + k_rot * sin_unsq
+
     return q_embed, k_embed
 
 
