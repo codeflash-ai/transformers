@@ -44,11 +44,12 @@ KEYS_TO_MODIFY_MAPPING = {
 
 # Copied from transformers.models.llava.convert_llava_weights_to_hf.convert_state_dict_to_hf
 def convert_state_dict_to_hf(state_dict):
+    keys_to_modify_items = tuple(KEYS_TO_MODIFY_MAPPING.items())
     new_state_dict = {}
     for key, value in state_dict.items():
         if key.endswith(".inv_freq"):
             continue
-        for key_to_modify, new_key in KEYS_TO_MODIFY_MAPPING.items():
+        for key_to_modify, new_key in keys_to_modify_items:
             if key_to_modify in key:
                 key = key.replace(key_to_modify, new_key)
         new_state_dict[key] = value
