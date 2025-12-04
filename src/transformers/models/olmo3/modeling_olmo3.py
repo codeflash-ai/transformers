@@ -327,16 +327,31 @@ class Olmo3RotaryEmbedding(nn.Module):
     @torch.no_grad()
     @dynamic_rope_update  # power user: used with advanced RoPE types (e.g. dynamic rope)
     def forward(self, x, position_ids):
-        inv_freq_expanded = self.inv_freq[None, :, None].float().expand(position_ids.shape[0], -1, 1).to(x.device)
-        position_ids_expanded = position_ids[:, None, :].float()
+        # Precompute .float() and .to(x.device) once, outside loop.
+        inv_freq = self.inv_freq.float()
+        if inv_freq.device != x.device:
+            inv_freq = inv_freq.to(x.device)
+
+        # inv_freq shape: [head_dim/2]; position_ids shape: [batch, seq_len]
+        # Efficient broadcasting via outer product instead of expand + @
+        position_ids = position_ids.float()  # shape [batch, seq_len]
+        # Compute outer product for RoPE frequencies, shape: [batch, seq_len, head_dim/2]
+        # We'll want [batch, seq_len, head_dim/2]
+        freqs = position_ids[:, :, None] * inv_freq[None, None, :]
+        # Now, [batch, seq_len, head_dim/2]. We'll concat for rotary embedding
+
+        emb = torch.cat((freqs, freqs), dim=-1)  # shape [batch, seq_len, head_dim]
+        # Minor memory optimization: save intermediate tensors in-place as possible.
+
+        # device.type logic as in original
 
         device_type = x.device.type if isinstance(x.device.type, str) and x.device.type != "mps" else "cpu"
         with torch.autocast(device_type=device_type, enabled=False):  # Force float32
-            freqs = (inv_freq_expanded.float() @ position_ids_expanded.float()).transpose(1, 2)
-            emb = torch.cat((freqs, freqs), dim=-1)
-            cos = emb.cos() * self.attention_scaling
-            sin = emb.sin() * self.attention_scaling
+            # Use in-place math and avoid redundant .float() calls
+            cos = emb.cos().mul_(self.attention_scaling)
+            sin = emb.sin().mul_(self.attention_scaling)
 
+        # Cast once and return
         return cos.to(dtype=x.dtype), sin.to(dtype=x.dtype)
 
 
