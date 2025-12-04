@@ -383,14 +383,15 @@ class BasicTokenizer:
     def _tokenize_chinese_chars(self, text):
         """Adds whitespace around any CJK character."""
         output = []
+        append = output.append  # Localize for speed (tight loop)
+        is_chinese_char = self._is_chinese_char  # Local ref
         for char in text:
-            cp = ord(char)
-            if self._is_chinese_char(cp):
-                output.append(" ")
-                output.append(char)
-                output.append(" ")
+            if is_chinese_char(ord(char)):
+                append(" ")
+                append(char)
+                append(" ")
             else:
-                output.append(char)
+                append(char)
         return "".join(output)
 
     def _is_chinese_char(self, cp):
