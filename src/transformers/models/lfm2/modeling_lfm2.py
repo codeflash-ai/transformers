@@ -118,17 +118,34 @@ class Lfm2RotaryEmbedding(nn.Module):
     @torch.no_grad()
     @dynamic_rope_update  # power user: used with advanced RoPE types (e.g. dynamic rope)
     def forward(self, x, position_ids):
-        inv_freq_expanded = self.inv_freq[None, :, None].float().expand(position_ids.shape[0], -1, 1).to(x.device)
-        position_ids_expanded = position_ids[:, None, :].float()
+        # Optimized: Use broadcasting and precompute shapes to avoid expand/cat/cos/sin inefficiency
+        # position_ids: (batch, seq_len)
+        # x: (batch, seq_len, hidden_dim)
+        dtype = x.dtype
+        device = x.device
 
-        device_type = x.device.type if isinstance(x.device.type, str) and x.device.type != "mps" else "cpu"
-        with torch.autocast(device_type=device_type, enabled=False):  # Force float32
-            freqs = (inv_freq_expanded.float() @ position_ids_expanded.float()).transpose(1, 2)
-            emb = torch.cat((freqs, freqs), dim=-1)
-            cos = emb.cos() * self.attention_scaling
-            sin = emb.sin() * self.attention_scaling
+        # position_ids: (batch, seq_len)
+        # inv_freq: (head_dim/hidden_dim // 2)
+        # We'll produce: freqs: (batch, seq_len, dim/2)
+        # Calculate the outer product using broadcasting
 
-        return cos.to(dtype=x.dtype), sin.to(dtype=x.dtype)
+        # Pre-broadcast inv_freq to (1, 1, dim/2)
+        inv_freq = self.inv_freq.unsqueeze(0).unsqueeze(0).to(device=device, dtype=torch.float32)
+        # Cast and unsqueeze position_ids to (batch, seq_len, 1)
+        position_ids = position_ids.to(device=device, dtype=torch.float32).unsqueeze(-1)
+        freqs = position_ids * inv_freq  # broadcast-multiplication, shape: (batch, seq_len, dim/2)
+
+        # Repeat freqs along the last dimension to match rotary embedding logic (cat(f, f))
+        emb = torch.cat([freqs, freqs], dim=-1)  # shape: (batch, seq_len, dim)
+        # No need to use torch.autocast context: inputs are already float32
+
+        emb = emb * self.attention_scaling  # scale before cos/sin to save one multiply
+
+        # Directly use torch.cos/sin on float32 and cast once at the end
+        cos = emb.cos().to(dtype)
+        sin = emb.sin().to(dtype)
+
+        return cos, sin
 
 
 class Lfm2MLP(nn.Module):
