@@ -120,6 +120,14 @@ class DistilBertTokenizer(PreTrainedTokenizer):
                 " model use `tokenizer = DistilBertTokenizer.from_pretrained(PRETRAINED_MODEL_NAME)`"
             )
         self.vocab = load_vocab(vocab_file)
+        # Instead of OrderedDict, use a list for O(1) index to token conversion (memory-efficient for integer IDs)
+        # Only do this if index is always in [0, len(vocab))
+        max_id = max(self.vocab.values()) if self.vocab else -1
+        vocab_size = max_id + 1
+        ids_to_tokens_list = [None] * vocab_size
+        for token, idx in self.vocab.items():
+            ids_to_tokens_list[idx] = token
+        self._ids_to_tokens_list = ids_to_tokens_list
         self.ids_to_tokens = collections.OrderedDict([(ids, tok) for tok, ids in self.vocab.items()])
         self.do_basic_tokenize = do_basic_tokenize
         if do_basic_tokenize:
@@ -184,7 +192,15 @@ class DistilBertTokenizer(PreTrainedTokenizer):
     # Copied from transformers.models.bert.tokenization_bert.BertTokenizer._convert_id_to_token
     def _convert_id_to_token(self, index):
         """Converts an index (integer) in a token (str) using the vocab."""
-        return self.ids_to_tokens.get(index, self.unk_token)
+        # Fast O(1) lookup if index is valid, else fallback to unk_token
+        if (
+            isinstance(index, int)
+            and index >= 0
+            and index < len(self._ids_to_tokens_list)
+            and (token := self._ids_to_tokens_list[index]) is not None
+        ):
+            return token
+        return self.unk_token
 
     # Copied from transformers.models.bert.tokenization_bert.BertTokenizer.convert_tokens_to_string
     def convert_tokens_to_string(self, tokens):
