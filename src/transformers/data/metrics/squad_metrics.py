@@ -30,27 +30,23 @@ from ...models.bert import BasicTokenizer
 from ...utils import logging
 
 
+_ARTICLES_RE = re.compile(r"\b(a|an|the)\b", re.UNICODE)
+
+_PUNCTUATION_TRANS_TABLE = str.maketrans("", "", string.punctuation)
+
+
 logger = logging.get_logger(__name__)
 
 
 def normalize_answer(s):
     """Lower text and remove punctuation, articles and extra whitespace."""
 
-    def remove_articles(text):
-        regex = re.compile(r"\b(a|an|the)\b", re.UNICODE)
-        return re.sub(regex, " ", text)
-
-    def white_space_fix(text):
-        return " ".join(text.split())
-
-    def remove_punc(text):
-        exclude = set(string.punctuation)
-        return "".join(ch for ch in text if ch not in exclude)
-
-    def lower(text):
-        return text.lower()
-
-    return white_space_fix(remove_articles(remove_punc(lower(s))))
+    # Inline (do not define as local functions for each call, saves closure and repeated creation cost)
+    text = s.lower()
+    text = text.translate(_PUNCTUATION_TRANS_TABLE)
+    text = _ARTICLES_RE.sub(" ", text)
+    text = " ".join(text.split())
+    return text
 
 
 def get_tokens(s):
