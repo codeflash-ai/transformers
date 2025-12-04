@@ -132,14 +132,23 @@ class SwitchTransformersLayerNorm(nn.Module):
         # w/o mean and there is no bias. Additionally we want to make sure that the accumulation for
         # half-precision inputs is done in fp32
 
-        variance = hidden_states.to(torch.float32).pow(2).mean(-1, keepdim=True)
-        hidden_states = hidden_states * torch.rsqrt(variance + self.variance_epsilon)
+        # OPTIMIZATION: Avoid redundant computation and minimize dtype conversions
+        # Step 1: compute variance in fp32 directly and keep the original dtype for multiplication
+        orig_dtype = hidden_states.dtype
+        # Step 2: fuse pow(2) and mean into a single matmul-like operation using torch.mul
+        # But for generality and broadcasting, stick with the optimized version below
 
-        # convert into half-precision if necessary
-        if self.weight.dtype in [torch.float16, torch.bfloat16]:
-            hidden_states = hidden_states.to(self.weight.dtype)
+        # Always move to fp32, compute variance, and rsqrt using torch.add for eps
+        hidden_states_fp32 = hidden_states if hidden_states.dtype == torch.float32 else hidden_states.to(torch.float32)
+        variance = torch.mean(hidden_states_fp32 * hidden_states_fp32, dim=-1, keepdim=True)
+        normed_states = hidden_states_fp32 * torch.rsqrt(variance + self.variance_epsilon)
 
-        return self.weight * hidden_states
+        # Only convert back to the weight's dtype at the last stage if needed
+        if self.weight.dtype in (torch.float16, torch.bfloat16):
+            normed_states = normed_states.to(self.weight.dtype)
+
+        # Final scaling
+        return self.weight * normed_states
 
 
 class SwitchTransformersDenseActDense(nn.Module):
