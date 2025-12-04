@@ -130,6 +130,8 @@ class DistilBertTokenizer(PreTrainedTokenizer):
                 strip_accents=strip_accents,
             )
         self.wordpiece_tokenizer = WordpieceTokenizer(vocab=self.vocab, unk_token=str(unk_token))
+        # Cache unknown token id for faster lookup
+        self._unk_token_id = self.vocab.get(unk_token)
 
         super().__init__(
             do_lower_case=do_lower_case,
@@ -179,7 +181,10 @@ class DistilBertTokenizer(PreTrainedTokenizer):
     # Copied from transformers.models.bert.tokenization_bert.BertTokenizer._convert_token_to_id
     def _convert_token_to_id(self, token):
         """Converts a token (str) in an id using the vocab."""
-        return self.vocab.get(token, self.vocab.get(self.unk_token))
+        id_ = self.vocab.get(token)
+        if id_ is not None:
+            return id_
+        return self._unk_token_id
 
     # Copied from transformers.models.bert.tokenization_bert.BertTokenizer._convert_id_to_token
     def _convert_id_to_token(self, index):
