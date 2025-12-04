@@ -15,7 +15,6 @@
 PyTorch-independent utilities for the Trainer class.
 """
 
-import copy
 import functools
 import gc
 import inspect
@@ -271,14 +270,15 @@ def default_compute_objective(metrics: dict[str, float]) -> float:
     Return:
         `float`: The objective to minimize or maximize
     """
-    metrics = copy.deepcopy(metrics)
+    # Avoid deep copy, just create a shallow copy since we only remove keys from the dict
+    metrics = metrics.copy()
     loss = metrics.pop("eval_loss", None)
-    _ = metrics.pop("epoch", None)
-    # Remove speed metrics
-    speed_metrics = [m for m in metrics if m.endswith("_runtime") or m.endswith("_per_second")]
-    for sm in speed_metrics:
-        _ = metrics.pop(sm, None)
-    return loss if len(metrics) == 0 else sum(metrics.values())
+    metrics.pop("epoch", None)
+    # Remove speed metrics efficiently
+    keys_to_remove = [k for k in metrics if k.endswith("_runtime") or k.endswith("_per_second")]
+    for k in keys_to_remove:
+        metrics.pop(k, None)
+    return loss if not metrics else sum(metrics.values())
 
 
 def default_hp_space_optuna(trial) -> dict[str, float]:
