@@ -194,23 +194,25 @@ def convert_to_size_dict(
     size, max_size: Optional[int] = None, default_to_square: bool = True, height_width_order: bool = True
 ):
     # By default, if size is an int we assume it represents a tuple of (size, size).
-    if isinstance(size, int) and default_to_square:
-        if max_size is not None:
-            raise ValueError("Cannot specify both size as an int, with default_to_square=True and max_size")
-        return {"height": size, "width": size}
-    # In other configs, if size is an int and default_to_square is False, size represents the length of
-    # the shortest edge after resizing.
-    elif isinstance(size, int) and not default_to_square:
-        size_dict = {"shortest_edge": size}
-        if max_size is not None:
-            size_dict["longest_edge"] = max_size
-        return size_dict
+    if isinstance(size, int):
+        if default_to_square:
+            if max_size is not None:
+                raise ValueError("Cannot specify both size as an int, with default_to_square=True and max_size")
+            return {"height": size, "width": size}
+        else:
+            size_dict = {"shortest_edge": size}
+            if max_size is not None:
+                size_dict["longest_edge"] = max_size
+            return size_dict
+
     # Otherwise, if size is a tuple it's either (height, width) or (width, height)
-    elif isinstance(size, (tuple, list)) and height_width_order:
-        return {"height": size[0], "width": size[1]}
-    elif isinstance(size, (tuple, list)) and not height_width_order:
-        return {"height": size[1], "width": size[0]}
-    elif size is None and max_size is not None:
+    if isinstance(size, (tuple, list)):
+        if height_width_order:
+            return {"height": size[0], "width": size[1]}
+        else:
+            return {"height": size[1], "width": size[0]}
+
+    if size is None and max_size is not None:
         if default_to_square:
             raise ValueError("Cannot specify both default_to_square=True and max_size")
         return {"longest_edge": max_size}
@@ -246,14 +248,19 @@ def get_size_dict(
         default_to_square (`bool`, *optional*, defaults to `True`):
             If `size` is an int, whether to default to a square image or not.
     """
-    if not isinstance(size, dict):
-        size_dict = convert_to_size_dict(size, max_size, default_to_square, height_width_order)
-        logger.info(
-            f"{param_name} should be a dictionary on of the following set of keys: {VALID_SIZE_DICT_KEYS}, got {size}."
-            f" Converted to {size_dict}.",
-        )
-    else:
-        size_dict = size
+    # Fast path: dict type
+    if isinstance(size, dict):
+        if not is_valid_size_dict(size):
+            raise ValueError(
+                f"{param_name} must have one of the following set of keys: {VALID_SIZE_DICT_KEYS}, got {size.keys()}"
+            )
+        return size
+
+    size_dict = convert_to_size_dict(size, max_size, default_to_square, height_width_order)
+    logger.info(
+        f"{param_name} should be a dictionary on of the following set of keys: {VALID_SIZE_DICT_KEYS}, got {size}."
+        f" Converted to {size_dict}.",
+    )
 
     if not is_valid_size_dict(size_dict):
         raise ValueError(
