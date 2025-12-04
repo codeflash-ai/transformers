@@ -28,6 +28,7 @@ import sys
 import tempfile
 from dataclasses import fields
 from enum import Enum
+from functools import lru_cache
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, Optional, Union
 
@@ -159,6 +160,7 @@ def is_ray_available():
     return importlib.util.find_spec("ray") is not None
 
 
+@lru_cache(maxsize=2)
 def is_ray_tune_available():
     if not is_ray_available():
         return False
