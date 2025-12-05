@@ -393,14 +393,25 @@ class ConditionalDetrLearnedPositionEmbedding(nn.Module):
 
     def forward(self, pixel_values, pixel_mask=None):
         height, width = pixel_values.shape[-2:]
-        width_values = torch.arange(width, device=pixel_values.device)
-        height_values = torch.arange(height, device=pixel_values.device)
+        batch_size = pixel_values.shape[0]
+        device = pixel_values.device
+
+        # Precompute arange values and embeddings
+        width_values = torch.arange(width, device=device)
+        height_values = torch.arange(height, device=device)
         x_emb = self.column_embeddings(width_values)
         y_emb = self.row_embeddings(height_values)
-        pos = torch.cat([x_emb.unsqueeze(0).repeat(height, 1, 1), y_emb.unsqueeze(1).repeat(1, width, 1)], dim=-1)
-        pos = pos.permute(2, 0, 1)
-        pos = pos.unsqueeze(0)
-        pos = pos.repeat(pixel_values.shape[0], 1, 1, 1)
+
+        # Efficiently construct position embedding tensor with broadcasting (no .repeat)
+        pos_x = x_emb.unsqueeze(0).expand(height, width, -1)
+        pos_y = y_emb.unsqueeze(1).expand(height, width, -1)
+        pos = torch.cat([pos_x, pos_y], dim=-1)  # [height, width, 2*embedding_dim]
+
+        # move the channel to front and add batch dimension
+        pos = pos.permute(2, 0, 1).unsqueeze(0)  # [1, 2*embedding_dim, height, width]
+
+        # Repeat for batch dimension, more efficiently with expand rather than .repeat
+        pos = pos.expand(batch_size, -1, -1, -1)  # [batch_size, 2*embedding_dim, height, width]
         return pos
 
 
