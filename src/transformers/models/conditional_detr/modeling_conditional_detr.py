@@ -613,7 +613,7 @@ class ConditionalDetrAttention(nn.Module):
         self.out_proj = nn.Linear(out_dim, out_dim, bias=bias)
 
     def _qk_shape(self, tensor: torch.Tensor, seq_len: int, batch_size: int):
-        return tensor.view(batch_size, seq_len, self.num_heads, self.head_dim).transpose(1, 2).contiguous()
+        return tensor.reshape(batch_size, seq_len, self.num_heads, self.head_dim).permute(0, 2, 1, 3)
 
     def _v_shape(self, tensor: torch.Tensor, seq_len: int, batch_size: int):
         return tensor.view(batch_size, seq_len, self.num_heads, self.v_head_dim).transpose(1, 2).contiguous()
