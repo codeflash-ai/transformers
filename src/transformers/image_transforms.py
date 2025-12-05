@@ -19,20 +19,12 @@ from typing import Optional, Union
 
 import numpy as np
 
-from .image_utils import (
-    ChannelDimension,
-    ImageInput,
-    get_channel_dimension_axis,
-    get_image_size,
-    infer_channel_dimension_format,
-)
+from .image_utils import (ChannelDimension, ImageInput,
+                          get_channel_dimension_axis, get_image_size,
+                          infer_channel_dimension_format)
 from .utils import ExplicitEnum, TensorType, is_torch_tensor
-from .utils.import_utils import (
-    is_torch_available,
-    is_vision_available,
-    requires_backends,
-)
-
+from .utils.import_utils import (is_torch_available, is_vision_available,
+                                 requires_backends)
 
 if is_vision_available():
     import PIL
@@ -698,39 +690,64 @@ def pad(
     if input_data_format is None:
         input_data_format = infer_channel_dimension_format(image)
 
+    # Fast path: If padding is 0, return image unchanged for performance
+    def is_zero_pad(padval):
+        if isinstance(padval, int) or isinstance(padval, float):
+            return padval == 0
+        elif isinstance(padval, tuple) or isinstance(padval, list):
+            return all(is_zero_pad(p) for p in padval)
+        elif isinstance(padval, Iterable):
+            return all(is_zero_pad(p) for p in padval)
+        return False
+
+    if is_zero_pad(padding):
+        if (mode == PaddingMode.CONSTANT and is_zero_pad(constant_values)) or mode != PaddingMode.CONSTANT:
+            # No actual padding will be applied
+            return (
+                image
+                if (data_format is None or input_data_format == data_format)
+                else to_channel_dimension_format(image, data_format, input_data_format)
+            )
+
     def _expand_for_data_format(values):
         """
         Convert values to be in the format expected by np.pad based on the data format.
         """
         if isinstance(values, (int, float)):
-            values = ((values, values), (values, values))
-        elif isinstance(values, tuple) and len(values) == 1:
-            values = ((values[0], values[0]), (values[0], values[0]))
-        elif isinstance(values, tuple) and len(values) == 2 and isinstance(values[0], int):
-            values = (values, values)
-        elif isinstance(values, tuple) and len(values) == 2 and isinstance(values[0], tuple):
-            pass
+            pad_tuple = ((values, values), (values, values))
+        elif isinstance(values, tuple):
+            if len(values) == 1:
+                pad_tuple = ((values[0], values[0]), (values[0], values[0]))
+            elif len(values) == 2 and isinstance(values[0], int):
+                pad_tuple = (values, values)
+            elif len(values) == 2 and isinstance(values[0], tuple):
+                pad_tuple = values
+            else:
+                raise ValueError(f"Unsupported format: {values}")
         else:
             raise ValueError(f"Unsupported format: {values}")
 
-        # add 0 for channel dimension
-        values = ((0, 0), *values) if input_data_format == ChannelDimension.FIRST else (*values, (0, 0))
+        if input_data_format == ChannelDimension.FIRST:
+            pad_tuple = ((0, 0),) + pad_tuple
+        else:
+            pad_tuple = pad_tuple + ((0, 0),)
 
         # Add additional padding if there's a batch dimension
-        values = ((0, 0), *values) if image.ndim == 4 else values
-        return values
+        if image.ndim == 4:
+            pad_tuple = ((0, 0),) + pad_tuple
+        return pad_tuple
 
-    padding = _expand_for_data_format(padding)
+    padding_tuple = _expand_for_data_format(padding)
 
     if mode == PaddingMode.CONSTANT:
-        constant_values = _expand_for_data_format(constant_values)
-        image = np.pad(image, padding, mode="constant", constant_values=constant_values)
+        constant_values_tuple = _expand_for_data_format(constant_values)
+        image = np.pad(image, padding_tuple, mode="constant", constant_values=constant_values_tuple)
     elif mode == PaddingMode.REFLECT:
-        image = np.pad(image, padding, mode="reflect")
+        image = np.pad(image, padding_tuple, mode="reflect")
     elif mode == PaddingMode.REPLICATE:
-        image = np.pad(image, padding, mode="edge")
+        image = np.pad(image, padding_tuple, mode="edge")
     elif mode == PaddingMode.SYMMETRIC:
-        image = np.pad(image, padding, mode="symmetric")
+        image = np.pad(image, padding_tuple, mode="symmetric")
     else:
         raise ValueError(f"Invalid padding mode: {mode}")
 

@@ -14,6 +14,7 @@
 
 import base64
 import os
+from collections import deque
 from collections.abc import Iterable
 from dataclasses import dataclass
 from io import BytesIO
@@ -22,26 +23,13 @@ from typing import Optional, Union
 import httpx
 import numpy as np
 
-from .utils import (
-    ExplicitEnum,
-    is_numpy_array,
-    is_torch_available,
-    is_torch_tensor,
-    is_torchvision_available,
-    is_vision_available,
-    logging,
-    requires_backends,
-    to_numpy,
-)
-from .utils.constants import (  # noqa: F401
-    IMAGENET_DEFAULT_MEAN,
-    IMAGENET_DEFAULT_STD,
-    IMAGENET_STANDARD_MEAN,
-    IMAGENET_STANDARD_STD,
-    OPENAI_CLIP_MEAN,
-    OPENAI_CLIP_STD,
-)
-
+from .utils import (ExplicitEnum, is_numpy_array, is_torch_available,
+                    is_torch_tensor, is_torchvision_available,
+                    is_vision_available, logging, requires_backends, to_numpy)
+from .utils.constants import (IMAGENET_DEFAULT_MEAN,  # noqa: F401
+                              IMAGENET_DEFAULT_STD, IMAGENET_STANDARD_MEAN,
+                              IMAGENET_STANDARD_STD, OPENAI_CLIP_MEAN,
+                              OPENAI_CLIP_STD)
 
 if is_vision_available():
     import PIL.Image
@@ -132,14 +120,14 @@ def concatenate_list(input_list):
 
 
 def valid_images(imgs):
-    # If we have an list of images, make sure every image is valid
-    if isinstance(imgs, (list, tuple)):
-        for img in imgs:
-            if not valid_images(img):
-                return False
-    # If not a list of tuple, we have been given a single image or batched tensor of images
-    elif not is_valid_image(imgs):
-        return False
+    # Iteratively validate images/batches/lists for improved performance (no recursion)
+    queue = deque([imgs])
+    while queue:
+        img = queue.pop()
+        if isinstance(img, (list, tuple)):
+            queue.extend(img)
+        elif not is_valid_image(img):
+            return False
     return True
 
 
@@ -214,6 +202,11 @@ def make_flat_list_of_images(
         list: A list of images or a 4d array of images.
     """
     # If the input is a nested list of images, we flatten it
+    # Fast path for None or empty input
+    if not images or (isinstance(images, (list, tuple)) and len(images) == 0):
+        raise ValueError(f"Could not make a flat list of images from {images}")
+
+    # If the input is a nested list of images, we flatten it
     if (
         isinstance(images, (list, tuple))
         and all(isinstance(images_i, (list, tuple)) for images_i in images)
@@ -222,15 +215,16 @@ def make_flat_list_of_images(
         return [img for img_list in images for img in img_list]
 
     if isinstance(images, (list, tuple)) and is_valid_list_of_images(images):
-        if is_pil_image(images[0]) or images[0].ndim == expected_ndims:
+        first_img = images[0]
+        if is_pil_image(first_img) or getattr(first_img, "ndim", None) == expected_ndims:
             return images
-        if images[0].ndim == expected_ndims + 1:
+        if getattr(first_img, "ndim", None) == expected_ndims + 1:
             return [img for img_list in images for img in img_list]
 
     if is_valid_image(images):
-        if is_pil_image(images) or images.ndim == expected_ndims:
+        if is_pil_image(images) or getattr(images, "ndim", None) == expected_ndims:
             return [images]
-        if images.ndim == expected_ndims + 1:
+        if getattr(images, "ndim", None) == expected_ndims + 1:
             return list(images)
 
     raise ValueError(f"Could not make a flat list of images from {images}")
@@ -299,26 +293,32 @@ def infer_channel_dimension_format(
     Returns:
         The channel dimension of the image.
     """
-    num_channels = num_channels if num_channels is not None else (1, 3)
-    num_channels = (num_channels,) if isinstance(num_channels, int) else num_channels
+    num_channels = (
+        (num_channels,) if isinstance(num_channels, int) else (1, 3) if num_channels is None else num_channels
+    )
 
-    if image.ndim == 3:
+    ndim = image.ndim
+    if ndim == 3:
         first_dim, last_dim = 0, 2
-    elif image.ndim == 4:
+    elif ndim == 4:
         first_dim, last_dim = 1, 3
-    elif image.ndim == 5:
+    elif ndim == 5:
         first_dim, last_dim = 2, 4
     else:
-        raise ValueError(f"Unsupported number of image dimensions: {image.ndim}")
+        raise ValueError(f"Unsupported number of image dimensions: {ndim}")
 
-    if image.shape[first_dim] in num_channels and image.shape[last_dim] in num_channels:
+    shape = image.shape
+    first_in_channels = shape[first_dim] in num_channels
+    last_in_channels = shape[last_dim] in num_channels
+
+    if first_in_channels and last_in_channels:
         logger.warning(
-            f"The channel dimension is ambiguous. Got image shape {image.shape}. Assuming channels are the first dimension. Use the [input_data_format](https://huggingface.co/docs/transformers/main/internal/image_processing_utils#transformers.image_transforms.rescale.input_data_format) parameter to assign the channel dimension."
+            f"The channel dimension is ambiguous. Got image shape {shape}. Assuming channels are the first dimension. Use the [input_data_format](https://huggingface.co/docs/transformers/main/internal/image_processing_utils#transformers.image_transforms.rescale.input_data_format) parameter to assign the channel dimension."
         )
         return ChannelDimension.FIRST
-    elif image.shape[first_dim] in num_channels:
+    elif first_in_channels:
         return ChannelDimension.FIRST
-    elif image.shape[last_dim] in num_channels:
+    elif last_in_channels:
         return ChannelDimension.LAST
     raise ValueError("Unable to infer channel dimension format")
 
