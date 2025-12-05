@@ -343,6 +343,13 @@ class ProphetNetTokenizer(PreTrainedTokenizer):
                 " model use `tokenizer = AutoTokenizer.from_pretrained(PRETRAINED_MODEL_NAME)`"
             )
         self.vocab = load_vocab(vocab_file)
+
+        # Optimize: Use a list for ids_to_tokens for O(1) index lookup
+        max_id = max(self.vocab.values()) if self.vocab else -1
+        ids_to_tokens_list = [None] * (max_id + 1) if max_id >= 0 else []
+        for tok, idx in self.vocab.items():
+            ids_to_tokens_list[idx] = tok
+        self._ids_to_tokens_list = ids_to_tokens_list
         self.ids_to_tokens = collections.OrderedDict([(ids, tok) for tok, ids in self.vocab.items()])
         self.do_basic_tokenize = do_basic_tokenize
         if do_basic_tokenize:
@@ -395,6 +402,13 @@ class ProphetNetTokenizer(PreTrainedTokenizer):
 
     def _convert_id_to_token(self, index: int):
         """Converts an index (integer) in a token (str) using the vocab."""
+        # Fast path for integer indices within bounds
+        ids_to_tokens_list = self._ids_to_tokens_list
+        if isinstance(index, int) and 0 <= index < len(ids_to_tokens_list):
+            tok = ids_to_tokens_list[index]
+            if tok is not None:
+                return tok
+        # Fallback path preserves exact original behavior
         return self.ids_to_tokens.get(index, self.unk_token)
 
     def convert_tokens_to_string(self, tokens: str):
