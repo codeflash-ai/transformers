@@ -198,11 +198,18 @@ def is_layer_block(node):
     Returns:
         `bool`: Whether the node is a layer block.
     """
-    match = LAYER_SUFFIX_RE.match(node.get("module_path", ""))
-    if not match or not node.get("children"):
+    module_path = node.get("module_path", "")
+    children = node.get("children")
+    match = LAYER_SUFFIX_RE.match(module_path)
+    if not match or not children:
         return False
     number = match.group(2)
-    return any(f".{number}." in child.get("module_path", "") for child in node["children"])
+    # Optimize: Use generator expression, avoids unnecessary list creation
+    for child in children:
+        child_module_path = child.get("module_path", "")
+        if f".{number}." in child_module_path:
+            return True
+    return False
 
 
 def prune_intermediate_layers(node):
@@ -213,13 +220,25 @@ def prune_intermediate_layers(node):
     Args:
         node (`dict`): The root or subnode to prune recursively.
     """
-    if not node.get("children"):
+    children = node.get("children")
+    if not children:
         return
-    layer_blocks = [(i, child) for i, child in enumerate(node["children"]) if is_layer_block(child)]
 
-    if len(layer_blocks) > 2:
-        to_remove = [i for i, _ in layer_blocks[1:-1]]
-        node["children"] = [child for i, child in enumerate(node["children"]) if i not in to_remove]
+    # Cache children to local variable, enumerate once for memory efficiency
+    layer_blocks_indices = []
+    for i, child in enumerate(children):
+        if is_layer_block(child):
+            layer_blocks_indices.append(i)
+
+    if len(layer_blocks_indices) > 2:
+        # Only keep first and last layer_block, remove others
+        # Instead of creating another list with [i for i, _ in layer_blocks[1:-1]], just slice
+        to_remove_set = set(layer_blocks_indices[1:-1])  # Use set for faster lookup
+        # Use single pass to reconstruct children
+        node["children"] = [child for i, child in enumerate(children) if i not in to_remove_set]
+
+    # Recursion: Do not re-fetch node['children'] per call
+    # Avoid repeated dict calls; iterate directly
 
     for child in node["children"]:
         prune_intermediate_layers(child)
