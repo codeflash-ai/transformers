@@ -47,16 +47,21 @@ class Dictionary:
         extra_special_symbols=None,
     ):
         self.bos_word, self.unk_word, self.pad_word, self.eos_word = bos, unk, pad, eos
-        self.symbols = []
-        self.count = []
-        self.indices = {}
-        self.bos_index = self.add_symbol(bos)
-        self.pad_index = self.add_symbol(pad)
-        self.eos_index = self.add_symbol(eos)
-        self.unk_index = self.add_symbol(unk)
+        # Preallocate symbols and count for special tokens for faster startup and order preservation
+        self.symbols = [bos, pad, eos, unk]
+        self.count = [1, 1, 1, 1]
+        self.indices = {bos: 0, pad: 1, eos: 2, unk: 3}
+        self.bos_index = 0
+        self.pad_index = 1
+        self.eos_index = 2
+        self.unk_index = 3
         if extra_special_symbols:
-            for s in extra_special_symbols:
-                self.add_symbol(s)
+            # Optimize special symbols addition by avoiding function call overhead in add_symbol
+            offset = len(self.symbols)
+            for i, s in enumerate(extra_special_symbols):
+                self.indices[s] = offset + i
+                self.symbols.append(s)
+                self.count.append(1)
         self.nspecial = len(self.symbols)
 
     def __eq__(self, other):
