@@ -17,7 +17,6 @@
 import argparse
 import json
 import os
-import re
 import shutil
 
 import torch
@@ -147,7 +146,12 @@ class Dictionary:
 def rewrite_dict_keys(d):
     # (1) remove word breaking symbol, (2) add word ending symbol where the word is not broken up,
     # e.g.: d = {'le@@': 5, 'tt@@': 6, 'er': 7} => {'le': 5, 'tt': 6, 'er</w>': 7}
-    d2 = dict((re.sub(r"@@$", "", k), v) if k.endswith("@@") else (re.sub(r"$", "</w>", k), v) for k, v in d.items())
+    d2 = {}
+    for k, v in d.items():
+        if k.endswith("@@"):
+            d2[k[:-2]] = v
+        else:
+            d2[f"{k}</w>"] = v
     keep_keys = ["<s>", "<pad>", "</s>", "<unk>"]
     # restore the special tokens
     for k in keep_keys:
