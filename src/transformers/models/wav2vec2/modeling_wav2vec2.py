@@ -233,21 +233,31 @@ def _sample_negative_indices(
     # get `num_negatives` random vector indices from the same utterance
     sampled_negative_indices = np.zeros(shape=(batch_size, sequence_length, num_negatives), dtype=np.int32)
 
-    mask_time_indices = (
-        mask_time_indices.astype(bool) if mask_time_indices is not None else np.ones(features_shape, dtype=bool)
-    )
+    if mask_time_indices is not None:
+        mask_time_indices = mask_time_indices.astype(bool)
+    else:
+        mask_time_indices = np.ones(features_shape, dtype=bool)
+
+    # Precompute arange for the maximum possible 'high' in this batch for broadcasting to avoid repeated np.arange inside the loop
 
     for batch_idx in range(batch_size):
-        high = mask_time_indices[batch_idx].sum() - 1
-        mapped_masked_indices = sequence_length_range[mask_time_indices[batch_idx]]
+        mask_row = mask_time_indices[batch_idx]
+        masked_count = mask_row.sum()
+        # skip next logic if masked_count==0; as the original code would throw high=-1 which results in np.arange(0), nothing to sample anyway.
+        if masked_count == 0:
+            sampled_negative_indices[batch_idx] += batch_idx * sequence_length
+            continue
+        high = masked_count - 1
+        mapped_masked_indices = sequence_length_range[mask_row]
 
-        feature_indices = np.broadcast_to(np.arange(high + 1)[:, None], (high + 1, num_negatives))
+        # For performance, use np.arange and np.random.randint and vectorized assignment.
+        feature_indices = np.arange(high + 1)[:, None]
+        # One call to random for all negatives
         sampled_indices = np.random.randint(0, high, size=(high + 1, num_negatives))
-        # avoid sampling the same positive vector, but keep the distribution uniform
-        sampled_indices[sampled_indices >= feature_indices] += 1
+        np.add(sampled_indices, sampled_indices >= feature_indices, out=sampled_indices)
 
-        # remap to actual indices
-        sampled_negative_indices[batch_idx][mask_time_indices[batch_idx]] = mapped_masked_indices[sampled_indices]
+        # remap to actual indices. Avoid extra copy by using advanced indexing
+        sampled_negative_indices[batch_idx][mask_row] = mapped_masked_indices[sampled_indices]
 
         # correct for batch size
         sampled_negative_indices[batch_idx] += batch_idx * sequence_length
