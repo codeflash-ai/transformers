@@ -52,7 +52,7 @@ come in several checkpoints they each contain a part of each weight of the model
 
 
 def compute_intermediate_size(n, ffn_dim_multiplier=1, multiple_of=256):
-    return multiple_of * ((int(ffn_dim_multiplier * int(8 * n / 3)) + multiple_of - 1) // multiple_of)
+    return multiple_of * ((int(ffn_dim_multiplier * (8 * n // 3)) + multiple_of - 1) // multiple_of)
 
 
 def read_json(path):
