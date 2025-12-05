@@ -953,11 +953,12 @@ class ClapTextEmbeddings(nn.Module):
         self.LayerNorm = nn.LayerNorm(config.hidden_size, eps=config.layer_norm_eps)
         self.dropout = nn.Dropout(config.hidden_dropout_prob)
         # position_ids (1, len position emb) is contiguous in memory and exported when serialized
+        # position_ids (1, len position emb) is contiguous in memory and exported when serialized
+        # Preallocate position_ids tensor directly on CPU for faster initialization if device not specified
+        position_ids = torch.arange(config.max_position_embeddings)
+        self.register_buffer("position_ids", position_ids.expand((1, -1)), persistent=True)
         self.register_buffer(
-            "position_ids", torch.arange(config.max_position_embeddings).expand((1, -1)), persistent=True
-        )
-        self.register_buffer(
-            "token_type_ids", torch.zeros(self.position_ids.size(), dtype=torch.long), persistent=True
+            "token_type_ids", torch.zeros((1, config.max_position_embeddings), dtype=torch.long), persistent=True
         )
 
         self.padding_idx = config.pad_token_id
@@ -1029,7 +1030,8 @@ class ClapTextEmbeddings(nn.Module):
         position_ids = torch.arange(
             padding_idx + 1, sequence_length + padding_idx + 1, dtype=torch.long, device=inputs_embeds.device
         )
-        return position_ids.unsqueeze(0).expand(input_shape)
+        # Use .expand for broadcast, avoiding .unsqueeze and .expand chains where possible
+        return position_ids.expand(input_shape)
 
     @staticmethod
     def create_position_ids_from_input_ids(input_ids, padding_idx, past_key_values_length=0):
