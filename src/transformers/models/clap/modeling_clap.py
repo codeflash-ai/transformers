@@ -199,9 +199,11 @@ class ClapDropPath(nn.Module):
         # work with diff dim tensors, not just 2D ConvNets
         shape = (hidden_states.shape[0],) + (1,) * (hidden_states.ndim - 1)
 
-        random_tensor = keep_prob + torch.rand(shape, dtype=hidden_states.dtype, device=hidden_states.device)
-        random_tensor.floor_()  # binarize
-        output = hidden_states.div(keep_prob) * random_tensor
+        random_tensor = torch.empty(shape, dtype=hidden_states.dtype, device=hidden_states.device)
+        random_tensor.uniform_()
+        random_tensor.add_(keep_prob).floor_()  # binarize
+        output = hidden_states.div(keep_prob)
+        output.mul_(random_tensor)
         return output
 
 
