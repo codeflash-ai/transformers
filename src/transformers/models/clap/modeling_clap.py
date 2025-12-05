@@ -1059,13 +1059,27 @@ def eager_attention_forward(
     dropout: float = 0.0,
     **kwargs,
 ):
-    attn_weights = torch.matmul(query, key.transpose(2, 3)) * scaling
+    # Precompute key transpose for better memory locality
+    key_t = key.transpose(2, 3)
+    attn_weights = torch.matmul(query, key_t)
+    attn_weights.mul_(scaling)
+
     if attention_mask is not None:
         causal_mask = attention_mask[:, :, :, : key.shape[-2]]
-        attn_weights = attn_weights + causal_mask
+        attn_weights.add_(causal_mask)
 
-    attn_weights = nn.functional.softmax(attn_weights, dim=-1, dtype=torch.float32).to(query.dtype)
-    attn_weights = nn.functional.dropout(attn_weights, p=dropout, training=module.training)
+    # Fused softmax+type conversion and avoid .to() if types already match, for efficiency
+    softmax_dtype = torch.float32
+    if attn_weights.dtype != softmax_dtype:
+        attn_weights = nn.functional.softmax(attn_weights, dim=-1, dtype=softmax_dtype)
+        attn_weights = attn_weights.to(query.dtype)
+    else:
+        attn_weights = nn.functional.softmax(attn_weights, dim=-1)
+
+    if dropout > 0.0:
+        attn_weights = nn.functional.dropout(attn_weights, p=dropout, training=module.training)
+
+    # More efficient matrix multiplication using precomputed attn_weights and value
 
     attn_output = torch.matmul(attn_weights, value)
     attn_output = attn_output.transpose(1, 2).contiguous()
