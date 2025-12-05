@@ -473,8 +473,10 @@ class ProphetNetTokenizer(PreTrainedTokenizer):
         """
         if token_ids_1 is None:
             return token_ids_0 + [self.sep_token_id]
-        sep = [self.sep_token_id]
-        return token_ids_0 + sep + token_ids_1 + sep
+        sep_id = self.sep_token_id
+        # Preallocate list for in-place concatenation (for larger input this helps avoid chained allocations)
+        result = [*token_ids_0, sep_id, *token_ids_1, sep_id]
+        return result
 
 
 __all__ = ["ProphetNetTokenizer"]
