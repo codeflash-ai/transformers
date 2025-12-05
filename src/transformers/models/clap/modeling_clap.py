@@ -52,8 +52,7 @@ def interpolate(hidden_states, ratio):
             The ratio of the length of the output to the length of the input.
     """
     (batch_size, time_length, classes_num) = hidden_states.shape
-    upsampled = hidden_states[:, :, None, :].repeat(1, 1, ratio, 1)
-    upsampled = upsampled.reshape(batch_size, time_length * ratio, classes_num)
+    upsampled = hidden_states.repeat_interleave(ratio, dim=1)
     return upsampled
 
 
