@@ -963,7 +963,7 @@ class Wav2Vec2AttnAdapterLayer(nn.Module):
         hidden_states = self.norm(hidden_states)
 
         hidden_states = self.linear_1(hidden_states)
-        hidden_states = self.act_fn(hidden_states)
+        torch.relu_(hidden_states)
         hidden_states = self.linear_2(hidden_states)
 
         return hidden_states
