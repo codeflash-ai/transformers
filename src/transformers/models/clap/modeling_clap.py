@@ -698,12 +698,15 @@ class ClapAudioPatchMerging(nn.Module):
         self.norm = norm_layer(4 * dim)
 
     def maybe_pad(self, input_feature, height, width):
-        should_pad = (height % 2 == 1) or (width % 2 == 1)
-        if should_pad:
-            pad_values = (0, 0, 0, width % 2, 0, height % 2)
-            input_feature = nn.functional.pad(input_feature, pad_values)
-
-        return input_feature
+        # Optimize pad calculation by early exit if height and width are both even
+        if height % 2 == 0 and width % 2 == 0:
+            return input_feature
+        # Only pad if needed
+        pad_w = width % 2
+        pad_h = height % 2
+        # Direct tuple instead of recalculation
+        pad_values = (0, 0, 0, pad_w, 0, pad_h)
+        return nn.functional.pad(input_feature, pad_values)
 
     def forward(self, input_feature: torch.Tensor, input_dimensions: tuple[int, int]) -> torch.Tensor:
         height, width = input_dimensions
