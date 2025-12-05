@@ -343,7 +343,10 @@ class ProphetNetTokenizer(PreTrainedTokenizer):
                 " model use `tokenizer = AutoTokenizer.from_pretrained(PRETRAINED_MODEL_NAME)`"
             )
         self.vocab = load_vocab(vocab_file)
-        self.ids_to_tokens = collections.OrderedDict([(ids, tok) for tok, ids in self.vocab.items()])
+        # Avoid unnecessary generator overhead: use .items() directly for clarity
+        self.ids_to_tokens = collections.OrderedDict()
+        for tok, ids in self.vocab.items():
+            self.ids_to_tokens[ids] = tok
         self.do_basic_tokenize = do_basic_tokenize
         if do_basic_tokenize:
             self.basic_tokenizer = BasicTokenizer(
@@ -374,7 +377,9 @@ class ProphetNetTokenizer(PreTrainedTokenizer):
         return len(self.vocab)
 
     def get_vocab(self):
-        return dict(self.vocab, **self.added_tokens_encoder)
+        # Use dict unpacking instead of dict() for slightly better performance and clarity
+        # (self.vocab already an OrderedDict)
+        return {**self.vocab, **self.added_tokens_encoder}
 
     def _tokenize(self, text):
         split_tokens = []
