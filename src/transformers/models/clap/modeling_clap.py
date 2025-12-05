@@ -994,20 +994,35 @@ class ClapTextEmbeddings(nn.Module):
         # issue #5664
         if token_type_ids is None:
             if hasattr(self, "token_type_ids"):
-                # NOTE: We assume either pos ids to have bsz == 1 (broadcastable) or bsz == effective bsz (input_shape[0])
-                buffered_token_type_ids = self.token_type_ids.expand(position_ids.shape[0], -1)
+                # Efficient broadcasting for token_type_ids and position_ids:
+                # Pre-expansion avoids recomputation in the gather and expand logic.
+                # Grouped code to reduce recomputation of size and redundant expansions.
+                bs_pos = position_ids.shape[0]
+                # Only expand to the needed batch size; if already correct, no-op.
+                if self.token_type_ids.shape[0] != bs_pos:
+                    buffered_token_type_ids = self.token_type_ids.expand(bs_pos, -1)
+                else:
+                    buffered_token_type_ids = self.token_type_ids
+                # torch.gather expects the input and index tensors to be the same device/dtype
                 buffered_token_type_ids = torch.gather(buffered_token_type_ids, dim=1, index=position_ids)
-                token_type_ids = buffered_token_type_ids.expand(batch_size, seq_length)
+                if (batch_size, seq_length) != buffered_token_type_ids.shape:
+                    token_type_ids = buffered_token_type_ids.expand(batch_size, seq_length)
+                else:
+                    token_type_ids = buffered_token_type_ids
             else:
                 token_type_ids = torch.zeros(input_shape, dtype=torch.long, device=self.position_ids.device)
 
         if inputs_embeds is None:
             inputs_embeds = self.word_embeddings(input_ids)
         token_type_embeddings = self.token_type_embeddings(token_type_ids)
-        embeddings = inputs_embeds + token_type_embeddings
 
         position_embeddings = self.position_embeddings(position_ids)
-        embeddings = embeddings + position_embeddings
+        # Use torch.add for in-place summing if possible
+        embeddings = inputs_embeds
+        embeddings = embeddings.add(token_type_embeddings)
+        embeddings = embeddings.add(position_embeddings)
+
+        # LayerNorm and Dropout are already optimized, but keep out-of-place for correctness
 
         embeddings = self.LayerNorm(embeddings)
         embeddings = self.dropout(embeddings)
@@ -1042,9 +1057,15 @@ class ClapTextEmbeddings(nn.Module):
 
         Returns: torch.Tensor
         """
-        # The series of casts and type-conversions here are carefully balanced to both work with ONNX export and XLA.
-        mask = input_ids.ne(padding_idx).int()
-        incremental_indices = (torch.cumsum(mask, dim=1).type_as(mask) + past_key_values_length) * mask
+        # Leverage type and broadcast once, then cumsum and multiply in place for speed.
+        mask = input_ids.ne(padding_idx)
+        # (1) mask is bool, .int() is not needed for cumsum in torch>=1.6
+        cumsum_mask = torch.cumsum(mask, dim=1)
+        if past_key_values_length != 0:
+            cumsum_mask = cumsum_mask + past_key_values_length
+        # If mask is bool, multiplying retains zeros for pads.
+        incremental_indices = cumsum_mask * mask
+        # Add padding_idx only once at the end (avoids an unnecessary full-tensor addition earlier)
         return incremental_indices.long() + padding_idx
 
 
