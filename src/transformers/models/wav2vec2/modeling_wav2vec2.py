@@ -461,20 +461,31 @@ def eager_attention_forward(
     **kwargs: Unpack[TransformersKwargs],
 ):
     if scaling is None:
-        scaling = query.size(-1) ** -0.5
+        # Use division to avoid ** -0.5 which may be slightly slower/less clear to JIT
+        scaling = 1.0 / query.size(-1) ** 0.5
 
-    # Take the dot product between "query" and "key" to get the raw attention scores.
-    attn_weights = torch.matmul(query, key.transpose(2, 3)) * scaling
+    # Pre-transpose key to avoid repeated view ops in matmul
+    key_t = key.transpose(2, 3)
+    # Use out argument to save allocations if possible
+    attn_weights = torch.matmul(query, key_t)
+    attn_weights.mul_(scaling)  # In-place scaling
 
     if attention_mask is not None:
-        attention_mask = attention_mask[:, :, :, : key.shape[-2]]
+        # Slicing only if mask shape != key sequence length
+        if attention_mask.shape[-1] != key.shape[-2]:
+            attention_mask = attention_mask[:, :, :, : key.shape[-2]]
         attn_weights = attn_weights + attention_mask
 
     attn_weights = nn.functional.softmax(attn_weights, dim=-1)
-    attn_weights = nn.functional.dropout(attn_weights, p=dropout, training=module.training)
+    # Skip dropout if not training or p=0 for performance
+    if dropout > 0.0 and module.training:
+        attn_weights = nn.functional.dropout(attn_weights, p=dropout, training=True)
 
     attn_output = torch.matmul(attn_weights, value)
-    attn_output = attn_output.transpose(1, 2).contiguous()
+    # If already contiguous, skip .contiguous() for perf
+    attn_output = attn_output.transpose(1, 2)
+    if not attn_output.is_contiguous():
+        attn_output = attn_output.contiguous()
 
     return attn_output, attn_weights
 
