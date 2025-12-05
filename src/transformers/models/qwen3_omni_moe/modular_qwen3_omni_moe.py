@@ -1987,8 +1987,15 @@ class Qwen3OmniMoeCausalConvNet(nn.Module):
 
     def _get_extra_padding_for_conv1d(self, hidden_state: torch.Tensor) -> int:
         length = hidden_state.shape[-1]
-        n_frames = (length - self.kernel_size + self.padding) / self.stride + 1
-        ideal_length = (math.ceil(n_frames) - 1) * self.stride + (self.kernel_size - self.padding)
+        # Avoid repeated calculations and float divisions by unrolling math.
+        k = self.kernel_size
+        p = self.padding
+        s = self.stride
+        # Compute numerator as integer for ceil division later
+        numer = length - k + p
+        # Use integer math for ceil division to avoid float math.ceil
+        n_frames = (numer + s - 1) // s + 1
+        ideal_length = (n_frames - 1) * s + (k - p)
         return ideal_length - length
 
     def forward(self, hidden_state):
