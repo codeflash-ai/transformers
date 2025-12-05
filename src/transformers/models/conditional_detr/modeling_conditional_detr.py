@@ -616,7 +616,7 @@ class ConditionalDetrAttention(nn.Module):
         return tensor.view(batch_size, seq_len, self.num_heads, self.head_dim).transpose(1, 2).contiguous()
 
     def _v_shape(self, tensor: torch.Tensor, seq_len: int, batch_size: int):
-        return tensor.view(batch_size, seq_len, self.num_heads, self.v_head_dim).transpose(1, 2).contiguous()
+        return tensor.reshape(batch_size, seq_len, self.num_heads, self.v_head_dim).permute(0, 2, 1, 3)
 
     def forward(
         self,
