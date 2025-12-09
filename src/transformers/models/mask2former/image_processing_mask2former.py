@@ -141,9 +141,12 @@ def binary_mask_to_rle(mask):
     if is_torch_tensor(mask):
         mask = mask.numpy()
 
-    pixels = mask.flatten()
-    pixels = np.concatenate([[0], pixels, [0]])
-    runs = np.where(pixels[1:] != pixels[:-1])[0] + 1
+    # Use ravel() to return a flattened view when possible (avoiding a copy)
+    pixels = mask.ravel()
+    # Use np.concatenate in one go, reducing intermediate arrays
+    pixels_ext = np.concatenate(([0], pixels, [0]))
+    # Vectorized run detection and RLE as before
+    runs = np.where(pixels_ext[1:] != pixels_ext[:-1])[0] + 1
     runs[1::2] -= runs[::2]
     return list(runs)
 
