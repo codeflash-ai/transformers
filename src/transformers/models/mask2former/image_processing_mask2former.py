@@ -298,28 +298,44 @@ def convert_segmentation_map_to_binary_masks(
 
     # Drop background label if applicable
     if ignore_index is not None:
-        all_labels = all_labels[all_labels != ignore_index]
+        # It's faster to use boolean indexing with numpy arrays
+        mask = all_labels != ignore_index
+        all_labels = all_labels[mask]
 
-    # Generate a binary mask for each object instance
-    binary_masks = [(segmentation_map == i) for i in all_labels]
+    # Early exit for no labels, avoids stack overhead
+    if all_labels.size == 0:
+        binary_masks = np.zeros((0, *segmentation_map.shape), dtype=np.float32)
+        labels = all_labels.astype(np.int64)
+        return binary_masks, labels
 
-    # Stack the binary masks
-    if binary_masks:
-        binary_masks = np.stack(binary_masks, axis=0)
-    else:
-        binary_masks = np.zeros((0, *segmentation_map.shape))
+    # Generate binary masks efficiently using broadcasting
+    # shape: (num_labels, H, W, ...)
+    # segmentation_map shape is (H, W, ...) and all_labels shape is (num_labels,)
+    binary_masks = segmentation_map == all_labels[:, None, None]
+    # If segmentation_map has more than 2 dimensions, handle that
+    if segmentation_map.ndim > 2:
+        extra_dims = segmentation_map.shape[2:]
+        # add enough None for broadcasting
+        shape = (all_labels.shape[0],) + tuple(None for _ in segmentation_map.shape)
+        # Re-broadcast appropriately with ellipsis
+        binary_masks = segmentation_map == all_labels[(slice(None),) + (None,) * segmentation_map.ndim]
+    # This is guaranteed to work for 2D and higher, but to ensure consistency with previous code:
+    binary_masks = binary_masks.astype(np.float32)
 
-    # Convert instance ids to class ids
+    # Convert instance ids to class ids efficiently
     if instance_id_to_semantic_id is not None:
-        labels = np.zeros(all_labels.shape[0])
-
-        for label in all_labels:
-            class_id = instance_id_to_semantic_id[label + 1 if do_reduce_labels else label]
-            labels[all_labels == label] = class_id - 1 if do_reduce_labels else class_id
+        # Vectorized mapping of instance/class ids
+        # Get mapping array: for each label, fetch corresponding class id and (optionally) do -1
+        # All lookups can be done with list comprehension then np.array for speed
+        if do_reduce_labels:
+            mapped_ids = np.array([instance_id_to_semantic_id[label + 1] - 1 for label in all_labels], dtype=np.int64)
+        else:
+            mapped_ids = np.array([instance_id_to_semantic_id[label] for label in all_labels], dtype=np.int64)
+        labels = mapped_ids
     else:
-        labels = all_labels
+        labels = all_labels.astype(np.int64)
 
-    return binary_masks.astype(np.float32), labels.astype(np.int64)
+    return binary_masks, labels
 
 
 # Copied from transformers.models.maskformer.image_processing_maskformer.get_maskformer_resize_output_image_size with maskformer->mask2former
