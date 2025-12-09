@@ -261,6 +261,10 @@ class DeformableDetrFrozenBatchNorm2d(nn.Module):
         self.register_buffer("running_mean", torch.zeros(n))
         self.register_buffer("running_var", torch.ones(n))
 
+        # Precompute shapes for all buffers, used for reshaping in forward
+        # This is safe since the shapes needed are always [1, n, 1, 1]
+        self._shape = (1, n, 1, 1)
+
     def _load_from_state_dict(
         self, state_dict, prefix, local_metadata, strict, missing_keys, unexpected_keys, error_msgs
     ):
@@ -273,16 +277,14 @@ class DeformableDetrFrozenBatchNorm2d(nn.Module):
         )
 
     def forward(self, x):
-        # move reshapes to the beginning
-        # to make it user-friendly
-        weight = self.weight.reshape(1, -1, 1, 1)
-        bias = self.bias.reshape(1, -1, 1, 1)
-        running_var = self.running_var.reshape(1, -1, 1, 1)
-        running_mean = self.running_mean.reshape(1, -1, 1, 1)
         epsilon = 1e-5
-        scale = weight * (running_var + epsilon).rsqrt()
-        bias = bias - running_mean * scale
-        return x * scale + bias
+        weight = self.weight.view(self._shape)
+        running_var = self.running_var.view(self._shape)
+        scale = torch.mul(weight, torch.rsqrt(torch.add(running_var, epsilon)))
+        # Combine bias and mean computations
+        bias_adj = torch.sub(self.bias.view(self._shape), torch.mul(self.running_mean.view(self._shape), scale))
+        # Fused operation using torch.add for possible backend optimizations
+        return torch.add(torch.mul(x, scale), bias_adj)
 
 
 # Copied from transformers.models.detr.modeling_detr.replace_batch_norm with Detr->DeformableDetr
