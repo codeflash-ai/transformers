@@ -655,15 +655,16 @@ class Mask2FormerImageProcessor(BaseImageProcessor):
     ) -> np.ndarray:
         """Preprocesses a single mask."""
         segmentation_map = to_numpy_array(segmentation_map)
-        # Add channel dimension if missing - needed for certain transformations
-        if segmentation_map.ndim == 2:
-            added_channel_dim = True
+        added_channel_dim = False
+        segmap_ndim = segmentation_map.ndim
+
+        if segmap_ndim == 2:
             segmentation_map = segmentation_map[None, ...]
             input_data_format = ChannelDimension.FIRST
-        else:
-            added_channel_dim = False
-            if input_data_format is None:
-                input_data_format = infer_channel_dimension_format(segmentation_map)
+            added_channel_dim = True
+        elif input_data_format is None:
+            input_data_format = infer_channel_dimension_format(segmentation_map)
+
         # TODO: (Amy)
         # Remork segmentation map processing to include reducing labels and resizing which doesn't
         # drop segment IDs > 255.

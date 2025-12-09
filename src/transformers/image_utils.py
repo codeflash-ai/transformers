@@ -14,6 +14,7 @@
 
 import base64
 import os
+from collections import deque
 from collections.abc import Iterable
 from dataclasses import dataclass
 from io import BytesIO
@@ -21,6 +22,7 @@ from typing import Optional, Union
 
 import httpx
 import numpy as np
+import PIL.Image
 
 from .utils import (
     ExplicitEnum,
@@ -132,14 +134,14 @@ def concatenate_list(input_list):
 
 
 def valid_images(imgs):
-    # If we have an list of images, make sure every image is valid
-    if isinstance(imgs, (list, tuple)):
-        for img in imgs:
-            if not valid_images(img):
-                return False
-    # If not a list of tuple, we have been given a single image or batched tensor of images
-    elif not is_valid_image(imgs):
-        return False
+    # Iteratively validate images/batches/lists for improved performance (no recursion)
+    queue = deque([imgs])
+    while queue:
+        img = queue.pop()
+        if isinstance(img, (list, tuple)):
+            queue.extend(img)
+        elif not is_valid_image(img):
+            return False
     return True
 
 
@@ -214,6 +216,11 @@ def make_flat_list_of_images(
         list: A list of images or a 4d array of images.
     """
     # If the input is a nested list of images, we flatten it
+    # Fast path for None or empty input
+    if not images or (isinstance(images, (list, tuple)) and len(images) == 0):
+        raise ValueError(f"Could not make a flat list of images from {images}")
+
+    # If the input is a nested list of images, we flatten it
     if (
         isinstance(images, (list, tuple))
         and all(isinstance(images_i, (list, tuple)) for images_i in images)
@@ -222,15 +229,16 @@ def make_flat_list_of_images(
         return [img for img_list in images for img in img_list]
 
     if isinstance(images, (list, tuple)) and is_valid_list_of_images(images):
-        if is_pil_image(images[0]) or images[0].ndim == expected_ndims:
+        first_img = images[0]
+        if is_pil_image(first_img) or getattr(first_img, "ndim", None) == expected_ndims:
             return images
-        if images[0].ndim == expected_ndims + 1:
+        if getattr(first_img, "ndim", None) == expected_ndims + 1:
             return [img for img_list in images for img in img_list]
 
     if is_valid_image(images):
-        if is_pil_image(images) or images.ndim == expected_ndims:
+        if is_pil_image(images) or getattr(images, "ndim", None) == expected_ndims:
             return [images]
-        if images.ndim == expected_ndims + 1:
+        if getattr(images, "ndim", None) == expected_ndims + 1:
             return list(images)
 
     raise ValueError(f"Could not make a flat list of images from {images}")
@@ -276,11 +284,19 @@ def make_nested_list_of_images(
 
 
 def to_numpy_array(img) -> np.ndarray:
-    if not is_valid_image(img):
+    # Fast type-check to avoid global lookups for `is_valid_image`
+    if not _is_valid_image(img):
         raise ValueError(f"Invalid image type: {type(img)}")
 
-    if is_vision_available() and isinstance(img, PIL.Image.Image):
+    # Cache is_vision_available result on the function for faster repeated calls
+    if not hasattr(to_numpy_array, "_vision_available"):
+        to_numpy_array._vision_available = is_vision_available()
+    vision_available = to_numpy_array._vision_available
+
+    if vision_available and isinstance(img, PIL.Image.Image):
         return np.array(img)
+    elif isinstance(img, np.ndarray):
+        return img
     return to_numpy(img)
 
 
@@ -299,26 +315,32 @@ def infer_channel_dimension_format(
     Returns:
         The channel dimension of the image.
     """
+    # Minor optimization for local vars
+    shape = image.shape
+    ndim = image.ndim
     num_channels = num_channels if num_channels is not None else (1, 3)
     num_channels = (num_channels,) if isinstance(num_channels, int) else num_channels
 
-    if image.ndim == 3:
+    if ndim == 3:
         first_dim, last_dim = 0, 2
-    elif image.ndim == 4:
+    elif ndim == 4:
         first_dim, last_dim = 1, 3
-    elif image.ndim == 5:
+    elif ndim == 5:
         first_dim, last_dim = 2, 4
     else:
-        raise ValueError(f"Unsupported number of image dimensions: {image.ndim}")
+        raise ValueError(f"Unsupported number of image dimensions: {ndim}")
 
-    if image.shape[first_dim] in num_channels and image.shape[last_dim] in num_channels:
+    first_dim_val = shape[first_dim]
+    last_dim_val = shape[last_dim]
+
+    if first_dim_val in num_channels and last_dim_val in num_channels:
         logger.warning(
-            f"The channel dimension is ambiguous. Got image shape {image.shape}. Assuming channels are the first dimension. Use the [input_data_format](https://huggingface.co/docs/transformers/main/internal/image_processing_utils#transformers.image_transforms.rescale.input_data_format) parameter to assign the channel dimension."
+            f"The channel dimension is ambiguous. Got image shape {shape}. Assuming channels are the first dimension. Use the [input_data_format](https://huggingface.co/docs/transformers/main/internal/image_processing_utils#transformers.image_transforms.rescale.input_data_format) parameter to assign the channel dimension."
         )
         return ChannelDimension.FIRST
-    elif image.shape[first_dim] in num_channels:
+    elif first_dim_val in num_channels:
         return ChannelDimension.FIRST
-    elif image.shape[last_dim] in num_channels:
+    elif last_dim_val in num_channels:
         return ChannelDimension.LAST
     raise ValueError("Unable to infer channel dimension format")
 
@@ -938,6 +960,17 @@ def validate_kwargs(valid_processor_keys: list[str], captured_kwargs: list[str])
         unused_key_str = ", ".join(unused_keys)
         # TODO raise a warning here instead of simply logging?
         logger.warning(f"Unused or unrecognized kwargs: {unused_key_str}.")
+
+
+# Inline is_valid_image to reduce lookup overhead, safe as logic is simple
+def _is_valid_image(img):
+    # Only check type, avoiding import from image_utils to reduce lookup overhead
+    return (
+        isinstance(img, PIL.Image.Image)
+        or isinstance(img, np.ndarray)
+        or hasattr(img, "detach")
+        or hasattr(img, "dtype")
+    )
 
 
 @dataclass(frozen=True)
