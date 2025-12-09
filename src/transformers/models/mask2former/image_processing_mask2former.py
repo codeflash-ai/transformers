@@ -141,8 +141,15 @@ def binary_mask_to_rle(mask):
     if is_torch_tensor(mask):
         mask = mask.numpy()
 
-    pixels = mask.flatten()
-    pixels = np.concatenate([[0], pixels, [0]])
+    # Ensure mask is contiguous uint8 for faster flattening and concatenation
+    mask = np.ascontiguousarray(mask, dtype=np.uint8)
+    pixels = mask.ravel()
+    # Pre-allocate array for concatenation
+    runs = np.empty(pixels.size + 2, dtype=np.uint8)
+    runs[0] = 0
+    runs[1:-1] = pixels
+    runs[-1] = 0
+    pixels = runs
     runs = np.where(pixels[1:] != pixels[:-1])[0] + 1
     runs[1::2] -= runs[::2]
     return list(runs)
@@ -159,14 +166,13 @@ def convert_segmentation_to_rle(segmentation):
     Returns:
         `list[List]`: A list of lists, where each list is the run-length encoding of a segment / class id.
     """
-    segment_ids = torch.unique(segmentation)
-
-    run_length_encodings = []
-    for idx in segment_ids:
-        mask = torch.where(segmentation == idx, 1, 0)
-        rle = binary_mask_to_rle(mask)
-        run_length_encodings.append(rle)
-
+    if is_torch_tensor(segmentation):
+        segment_ids = torch.unique(segmentation)
+        # Use boolean mask and avoid explicit torch.where
+        run_length_encodings = [binary_mask_to_rle(segmentation == idx) for idx in segment_ids]
+    else:
+        segment_ids = np.unique(segmentation)
+        run_length_encodings = [binary_mask_to_rle(segmentation == idx) for idx in segment_ids]
     return run_length_encodings
 
 
