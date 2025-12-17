@@ -84,7 +84,11 @@ class Wav2Vec2ConformerRotaryPositionalEmbedding(nn.Module):
         dim = config.hidden_size // config.num_attention_heads
         base = config.rotary_embedding_base
 
-        inv_freq = 1.0 / (base ** (torch.arange(0, dim, 2, dtype=torch.int64).float() / dim))
+        # Calculate inverse frequencies only once at init time (as before).
+        inv_idx = torch.arange(0, dim, 2, dtype=torch.float32)
+        # Precompute float division instead of converting int -> float
+        inv_freq = 1.0 / (base ** (inv_idx / dim))
+        # Store as float for efficiency with torch type promotion during forward
         self.register_buffer("inv_freq", inv_freq)
         self.cached_sequence_length = None
         self.cached_rotary_positional_embedding = None
@@ -92,20 +96,31 @@ class Wav2Vec2ConformerRotaryPositionalEmbedding(nn.Module):
     def forward(self, hidden_states):
         sequence_length = hidden_states.shape[1]
 
+        # Early return if cache valid
         if sequence_length == self.cached_sequence_length and self.cached_rotary_positional_embedding is not None:
             return self.cached_rotary_positional_embedding
 
         self.cached_sequence_length = sequence_length
-        # Embeddings are computed in the dtype of the inv_freq constant
-        time_stamps = torch.arange(sequence_length).type_as(self.inv_freq)
-        freqs = torch.einsum("i,j->ij", time_stamps, self.inv_freq)
+
+        # Compute in inv_freq dtype and shape, avoid extra copies
+        time_stamps = torch.arange(sequence_length, device=self.inv_freq.device, dtype=self.inv_freq.dtype)
+        # Einsum is memory efficient for this use case.
+        freqs = torch.outer(time_stamps, self.inv_freq)
+        # Concatenate along last dimension (double the size)
         embeddings = torch.cat((freqs, freqs), dim=-1)
 
-        cos_embeddings = embeddings.cos()[:, None, None, :]
-        sin_embeddings = embeddings.sin()[:, None, None, :]
-        # Computed embeddings are cast to the dtype of the hidden state inputs
-        self.cached_rotary_positional_embedding = torch.stack([cos_embeddings, sin_embeddings]).type_as(hidden_states)
-        return self.cached_rotary_positional_embedding
+        # Use unsqueeze for clarity and efficiency over [None, None]
+        embeddings = embeddings.unsqueeze(1).unsqueeze(1)
+        cos_embeddings = embeddings.cos()
+        sin_embeddings = embeddings.sin()
+        # Stack as [2, seq_len, 1, 1, dim]
+        rotary_pos_emb = torch.stack([cos_embeddings, sin_embeddings], dim=0)
+        # Cast to input dtype only once
+        rotary_pos_emb = rotary_pos_emb.type_as(hidden_states)
+
+        # Cache result for future use
+        self.cached_rotary_positional_embedding = rotary_pos_emb
+        return rotary_pos_emb
 
 
 class Wav2Vec2ConformerRelPositionalEmbedding(nn.Module):
