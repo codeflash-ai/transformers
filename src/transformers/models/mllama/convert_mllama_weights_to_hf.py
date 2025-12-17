@@ -113,8 +113,7 @@ def permute_for_rope(input_tensor, n_heads, dim1, dim2):
     When you go from the complex ROPE formulation to sin and cos one, you need
     to permute the query and key weights (to avoid doing it on the fly)
     """
-    input_tensor = input_tensor.reshape(dim1, dim2)
-    input_tensor = input_tensor.view(n_heads, dim1 // n_heads // 2, 2, dim2)
+    input_tensor = input_tensor.reshape(n_heads, dim1 // n_heads // 2, 2, dim2)
     input_tensor = input_tensor.transpose(1, 2).reshape(dim1, dim2)
     return input_tensor
 
