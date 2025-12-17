@@ -186,13 +186,18 @@ def apply_rotary_pos_emb(q, k, cos, sin, position_ids=None, unsqueeze_dim=1):
     q_rot, q_pass = q[..., :rotary_dim], q[..., rotary_dim:]
     k_rot, k_pass = k[..., :rotary_dim], k[..., rotary_dim:]
 
-    # Apply rotary embeddings on the first half or full tensor
-    q_embed = (q_rot * cos) + (rotate_half(q_rot) * sin)
-    k_embed = (k_rot * cos) + (rotate_half(k_rot) * sin)
-
-    # Concatenate back to full shape
-    q_embed = torch.cat([q_embed, q_pass], dim=-1)
-    k_embed = torch.cat([k_embed, k_pass], dim=-1)
+    # Apply rotary embeddings on the first half or full tensor, and concatenate in one step for better memory performance
+    # Avoid storing intermediate concatenated tensors
+    q_embed = (
+        torch.cat([(q_rot * cos) + (rotate_half(q_rot) * sin), q_pass], dim=-1)
+        if q_pass.numel() != 0
+        else (q_rot * cos) + (rotate_half(q_rot) * sin)
+    )
+    k_embed = (
+        torch.cat([(k_rot * cos) + (rotate_half(k_rot) * sin), k_pass], dim=-1)
+        if k_pass.numel() != 0
+        else (k_rot * cos) + (rotate_half(k_rot) * sin)
+    )
     return q_embed, k_embed
 
 
