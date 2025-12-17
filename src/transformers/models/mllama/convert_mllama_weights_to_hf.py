@@ -35,6 +35,23 @@ from transformers.models.mllama.configuration_mllama import MllamaTextConfig, Ml
 from transformers.models.mllama.image_processing_mllama import get_all_supported_aspect_ratios
 
 
+_PATTERN = (
+    r"vision_model\.patch_embedding\.weight"
+    r"|vision_model\.(transformer|global_transformer)\.layers\.(\d+)\.self_attn\.(q|k|v|o)_proj\.weight"
+    r"|vision_model\.(transformer|global_transformer)\.layers\.(\d+)\.mlp\.fc1\.(weight|bias)"
+    r"|vision_model\.(transformer|global_transformer)\.layers\.(\d+)\.mlp\.fc2\.weight"
+    r"|multi_modal_projector\.(weight|bias)"
+    r"|language_model\.model\.embed_tokens\.weight"
+    r"|language_model\.lm_head\.weight"
+    r"|language_model\.model\.layers\.(\d+)\.self_attn\.(q|k|v|o)_proj\.weight"
+    r"|language_model\.model\.layers\.(\d+)\.cross_attn\.(q|k|v|o)_proj\.weight"
+    r"|language_model\.model\.layers\.(\d+)\.mlp\.(up|down|gate)_proj\.weight"
+    r"|language_model\.model\.learnable_embedding\.weight"
+)
+
+_COMPILED_PATTERN = re.compile(_PATTERN)
+
+
 # fmt: off
 # If a weight needs to be split in two or more keys, use `|` to indicate it. ex:
 # r"text_model.layers.(\d+).attention.wqkv.weight": r"language_model.model.layers.\1.self_attn.q|k|v|_proj.weight"
@@ -153,8 +170,7 @@ def is_param_different_across_shards(key):
     Return `True` if the parameter is different across checkpoint shards
     and needs to be concatenated.
     """
-    patterns = [r"vision_model.patch_embedding.weight",r"vision_model.(transformer|global_transformer).layers.(\d+).self_attn.(q|k|v|o)_proj.weight",r"vision_model.(transformer|global_transformer).layers.(\d+).mlp.fc1.(weight|bias)",r"vision_model.(transformer|global_transformer).layers.(\d+).mlp.fc2.weight",  r"multi_modal_projector.(weight|bias)",r"language_model.model.embed_tokens.weight",r"language_model.lm_head.weight",r"language_model.model.layers.(\d+).self_attn.(q|k|v|o)_proj.weight",r"language_model.model.layers.(\d+).cross_attn.(q|k|v|o)_proj.weight",r"language_model.model.layers.(\d+).mlp.(up|down|gate)_proj.weight",r"language_model.model.learnable_embedding.weight"]  # fmt: skip
-    return any(re.search(pattern, key) for pattern in patterns)
+    return _COMPILED_PATTERN.search(key) is not None
 
 
 def get_concat_dim(key):
